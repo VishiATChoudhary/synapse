@@ -1,47 +1,62 @@
 #!/usr/bin/env bash
-# B-roll + soundtrack for the "Intelligence is collaborative" cut (Collab.tsx).
-# Pulls the YouTube sources, then cuts each shot to a 1080x1080, 30 fps clip in public/broll/cuts.
-# Everything it writes is git-ignored (third-party footage): never commit it.
+# Archive B-roll, voices and instrumental for the "Intelligence is collaborative" cut (Collab.tsx).
+# Pulls the YouTube sources, cuts each shot to a 1080x1080, 30 fps, black-and-white clip in
+# public/broll/cuts and each voice line to a loudness-matched wav in public/broll/vo.
+# Everything it writes is git-ignored (third-party footage and music): never commit it.
 #   ./broll.sh
 set -euo pipefail
 cd "$(dirname "$0")/public"
-mkdir -p broll/cuts music
+mkdir -p broll/cuts broll/vo music
 
 YT=(yt-dlp --cookies-from-browser chrome -q --no-warnings)
 get() { [ -f "broll/$1.mp4" ] || "${YT[@]}" -f "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720]/b" --merge-output-format mp4 -o "broll/$1.%(ext)s" "https://youtu.be/$1"; }
 
-[ -f music/soundtrack.mp3 ] || "${YT[@]}" -x --audio-format mp3 --audio-quality 0 -o "music/soundtrack.%(ext)s" "https://youtu.be/ck6MUSns63o"
+# "Wild", Kanye West type beat by Encore: 95.7 BPM, drop at 20.50 s
+[ -f music/instrumental.mp3 ] || "${YT[@]}" -x --audio-format mp3 --audio-quality 0 -o "music/instrumental.%(ext)s" "https://youtu.be/dEwR9MabFr8"
 
-get aygSMgK3BEM   # The Thinking Machine (1961): Oliver Selfridge
+get aygSMgK3BEM   # The Thinking Machine (1961): Selfridge, Wiesner, Shannon
+get _9_AEVQ_p74   # Claude Shannon demonstrates Theseus, Bell Labs (1952)
+get IOHayh06LJ4   # Hubel and Wiesel, cat visual cortex
+get bCoe7fLROlg   # The Human Brain, Encyclopaedia Britannica Films (1955)
+get vfl3M-_5xUk   # The Human Body: The Brain, Coronet (1968)
+get 2BzRjfOoiVQ   # Bell switchboard operators (1940s)
 get A1Xa_FCsDNk   # neurons growing, two-photon fly-through
-get Cdx-hxqCGqY   # Argentina v Serbia 2006, Cambiasso's 26-pass goal
-get h65f8CR7AmA   # BET Cypher 2013, Kendrick Lamar
-get S3wsCRJVUyg   # SpongeBob time card, "A few moments later"
-get djm4h7nv2oI   # Phineas and Ferb, "I know what we're gonna do today"
-get MtKSbYJFxMc   # Cars, ka-chow compilation
 
-BW="hue=s=0,eq=contrast=1.25:brightness=-0.02"
-# cut <name> <source id> <start s> <duration s> <speed> <extra filters> [crop x offset 0..1]
-cut() {
-  local name=$1 id=$2 ss=$3 t=$4 speed=$5 vf=$6 cx=${7:-0.5}
-  local crop="crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))*$cx':0,scale=1080:1080:flags=lanczos,setsar=1"
-  ffmpeg -v error -y -ss "$ss" -t "$t" -i "broll/$id.mp4" \
-    -vf "setpts=PTS/$speed,$crop,fps=30${vf:+,$vf}" \
-    -af "atempo=$speed" -c:v libx264 -crf 16 -preset fast -c:a aac -b:a 192k "broll/cuts/$name.mp4"
-  echo "cut $name"
+BW="hue=s=0,eq=contrast=1.22:brightness=-0.02"
+# shot <name> <source id> <start s> <duration s> [filters before the square crop]
+shot() {
+  local name=$1 id=$2 ss=$3 t=$4 pre=${5:-}
+  ffmpeg -v error -y -ss "$ss" -t "$t" -i "broll/$id.mp4" -an \
+    -vf "${pre:+$pre,}crop='min(iw,ih)':'min(iw,ih)',scale=1080:1080:flags=lanczos,setsar=1,fps=30,$BW" \
+    -c:v libx264 -crf 16 -preset fast "broll/cuts/$name.mp4"
+  echo "shot $name"
+}
+# vo <name> <source id> <start s> <end s>: voice line, loudness matched, with tiny fades
+vo() {
+  ffmpeg -v error -y -ss "$3" -to "$4" -i "broll/$2.mp4" -vn -ac 2 -ar 48000 \
+    -af "highpass=f=90,loudnorm=I=-16:TP=-2,afade=t=in:d=0.02,areverse,afade=t=in:d=0.06,areverse" "broll/vo/$1.wav"
+  echo "vo $1"
 }
 
-cut selfridge  aygSMgK3BEM 108.95 3.2  1   "crop=1080:1050:0:30,scale=1080:1080,$BW"
-cut neurons    A1Xa_FCsDNk 11.6   1.5  1   "$BW"
-cut ball-a     Cdx-hxqCGqY 44.0   2.1  3   "eq=saturation=0.55:contrast=1.15"
-cut ball-b     Cdx-hxqCGqY 61.0   1.4  2   "eq=saturation=0.55:contrast=1.15"
-cut ball-c     Cdx-hxqCGqY 63.85  1.6  1.3 "eq=saturation=0.55:contrast=1.15"
-cut cypher     h65f8CR7AmA 30.0   1.5  1   "crop=800:800:170:30,scale=1080:1080,$BW" 0.5
-cut phineas    djm4h7nv2oI 0.85   1.8  1   "crop=880:880:200:60,scale=1080:1080" 0.62
-cut kachow     MtKSbYJFxMc 1.08   0.95 1   "crop=760:760:160:150,scale=1080:1080" 0.5
+shot selfridge  aygSMgK3BEM 108.95 3.3 "crop=iw:ih-24:0:24"
+shot checkers   aygSMgK3BEM 54.0   1.6
+shot tapes      aygSMgK3BEM 142.5  1.6
+shot wiesner    aygSMgK3BEM 30.6   2.0
+shot shannon    _9_AEVQ_p74 401.0  2.6 "crop=iw*0.75:ih:0:0"
+shot maze       _9_AEVQ_p74 394.0  2.7
+shot cat        IOHayh06LJ4 5.8    1.5
+shot dot        IOHayh06LJ4 54.8   2.2
+shot diagram    bCoe7fLROlg 180.0  5.2
+shot neurons    A1Xa_FCsDNk 11.0   2.0
+shot operators  2BzRjfOoiVQ 12.0   1.4
+shot plugs      2BzRjfOoiVQ 27.3   2.0
 
-# the time card keeps its full width: fitted over a blurred, enlarged copy of itself
-ffmpeg -v error -y -t 1.9 -i broll/S3wsCRJVUyg.mp4 -filter_complex \
-  "[0:v]split[a][b];[a]scale=-2:1080,crop=1080:1080,gblur=sigma=30,eq=brightness=-0.15[bg];[b]scale=1080:-2[fg];[bg][fg]overlay=0:(H-h)/2,setsar=1,fps=30" \
-  -c:v libx264 -crf 16 -preset fast -c:a aac -b:a 192k broll/cuts/later.mp4
-echo "cut later"
+vo selfridge  aygSMgK3BEM 108.95 112.20
+vo wiesner    aygSMgK3BEM 34.10  37.95
+vo hello      _9_AEVQ_p74 7.90   10.40
+vo learn      _9_AEVQ_p74 25.40  27.20
+vo response   IOHayh06LJ4 56.60  58.80
+vo organism   bCoe7fLROlg 475.60 479.95
+vo maze       _9_AEVQ_p74 110.75 113.30
+vo billions   vfl3M-_5xUk 917.90 919.85
+vo emerge     aygSMgK3BEM 116.55 118.25

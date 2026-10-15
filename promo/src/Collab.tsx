@@ -3,14 +3,15 @@ import { AbsoluteFill, Sequence, interpolate, staticFile, useCurrentFrame } from
 import { Audio, Video } from "@remotion/media";
 import { Canvas, End, Flash, Grain, Hud, Slam, useFonts } from "./Twitter";
 
-// "Intelligence is collaborative": 15 s square meme-edit for the feed.
-// Soundtrack and B-roll come from broll.sh (git-ignored). The beat is 90 BPM, so one beat = 20 frames,
-// and the music starts 21.03 s in so its drop lands on frame 90, the first cut after Selfridge's line.
+// "Intelligence is collaborative": 30 s square cut for the feed, told by the scientists who started it.
+// Footage, voices and the instrumental come from broll.sh (git-ignored). The beat is 95.7 BPM and its
+// drop sits at 20.50 s, so the track starts 17.50 s in and the drop lands on frame 90, right after
+// Selfridge's line. Every cut sits on the beat grid b(n).
 const S = 1080;
-const BEAT = 20;
 const DROP = 90;
-const b = (n: number) => DROP + n * BEAT; // frame of beat n after the drop
-export const COLLAB_FRAMES = 450;
+const BEAT = (60 / 95.7) * 30; // 18.78 frames
+const b = (n: number) => Math.round(DROP + n * BEAT);
+export const COLLAB_FRAMES = 900;
 
 const BG = "#0B0B0B";
 const INK = "#EDEDEA";
@@ -18,33 +19,43 @@ const SIG = "#FF5A1F";
 const MONO = "'Fragment Mono', ui-monospace, monospace";
 const clamp = { extrapolateLeft: "clamp", extrapolateRight: "clamp" } as const;
 
-const Clip: React.FC<{ name: string; trim?: number; muted?: boolean; volume?: number; zoom?: [number, number] }> = ({ name, trim = 0, muted = true, volume = 1, zoom = [1, 1.06] }) => {
+const Shot: React.FC<{ name: string; zoom?: [number, number] }> = ({ name, zoom = [1, 1.08] }) => {
   const f = useCurrentFrame();
-  const k = interpolate(f, [0, 60], zoom, clamp);
+  const k = interpolate(f, [0, 90], zoom, clamp);
   return (
     <AbsoluteFill style={{ background: "#000", overflow: "hidden" }}>
-      <Video src={staticFile(`broll/cuts/${name}.mp4`)} trimBefore={trim} muted={muted} volume={volume} style={{ width: S, height: S, transform: `scale(${k})` }} />
+      <Video src={staticFile(`broll/cuts/${name}.mp4`)} muted style={{ width: S, height: S, transform: `scale(${k})` }} />
     </AbsoluteFill>
   );
 };
 
-// TV-style subtitle, words appear as they are spoken (times in frames from the clip start)
-const Sub: React.FC<{ words: [string, number][] }> = ({ words }) => {
+// documentary subtitle: words appear as they are spoken (frames from the voice line's start)
+type Words = [string, number][];
+const Sub: React.FC<{ words: Words }> = ({ words }) => {
   const f = useCurrentFrame();
   const shown = words.filter(([, t]) => f >= t);
   if (!shown.length) return null;
   return (
-    <div style={{ position: "absolute", left: 70, right: 70, bottom: 92, textAlign: "center" }}>
-      <span style={{ background: "rgba(0,0,0,.82)", color: INK, font: `400 36px/1.55 ${MONO}`, padding: "4px 14px", boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone" }}>
+    <div style={{ position: "absolute", left: 80, right: 80, bottom: 92, textAlign: "center" }}>
+      <span style={{ background: "rgba(0,0,0,.82)", color: INK, font: `400 34px/1.6 ${MONO}`, padding: "4px 14px", boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone" }}>
         {shown.map(([w]) => w).join(" ")}
       </span>
     </div>
   );
 };
 
-const LowerThird: React.FC<{ text: string }> = ({ text }) => {
+// a voice line from the archive, with its subtitle
+const Vo: React.FC<{ name: string; from: number; len: number; words: Words }> = ({ name, from, len, words }) => (
+  <Sequence from={from} layout="none">
+    <Audio src={staticFile(`broll/vo/${name}.wav`)} volume={1.5} />
+    <Sequence durationInFrames={len + 6} layout="none"><Sub words={words} /></Sequence>
+  </Sequence>
+);
+
+// who is speaking, archive-label style
+const Who: React.FC<{ text: string }> = ({ text }) => {
   const f = useCurrentFrame();
-  const o = interpolate(f, [4, 12], [0, 1], clamp);
+  const o = interpolate(f, [3, 10], [0, 1], clamp);
   return (
     <div style={{ position: "absolute", left: 52, top: 104, opacity: o, font: `400 17px ${MONO}`, letterSpacing: "0.14em", color: INK, textTransform: "uppercase", display: "flex", gap: 10, alignItems: "center" }}>
       <span style={{ width: 10, height: 10, background: SIG, display: "inline-block" }} />
@@ -53,103 +64,104 @@ const LowerThird: React.FC<{ text: string }> = ({ text }) => {
   );
 };
 
-// a mono tag in the corner of a shot, like a lab label on archive film
-const Tag: React.FC<{ text: string; color?: string }> = ({ text, color = INK }) => (
-  <div style={{ position: "absolute", left: 52, bottom: 50, font: `400 17px ${MONO}`, letterSpacing: "0.14em", color, textTransform: "uppercase", background: "rgba(0,0,0,.7)", padding: "6px 10px" }}>{text}</div>
-);
-
-// the card's own text stays; ours sits under it as a translation
-const Translate: React.FC<{ text: string }> = ({ text }) => {
-  const f = useCurrentFrame();
-  const o = interpolate(f, [8, 12], [0, 1], clamp);
-  return (
-    <div style={{ position: "absolute", left: 0, right: 0, bottom: 150, textAlign: "center", opacity: o }}>
-      <span style={{ background: BG, color: INK, font: `400 30px ${MONO}`, letterSpacing: "0.1em", padding: "10px 18px", textTransform: "uppercase" }}>{text}</span>
-    </div>
-  );
-};
-
-// darkens the top of busy footage so the headline reads
-const Shade: React.FC = () => <AbsoluteFill style={{ background: "linear-gradient(180deg, rgba(0,0,0,.75) 0%, rgba(0,0,0,.35) 30%, rgba(0,0,0,0) 50%)" }} />;
-
 const Seg: React.FC<{ from: number; to: number; children: React.ReactNode }> = ({ from, to, children }) => (
   <Sequence from={from} durationInFrames={to - from} layout="none">{children}</Sequence>
 );
 
-// music sits under the voices: full on the drop, ducked while a clip speaks
+// every voice line: where it starts, how long it runs (for ducking), word timings (for the subtitle)
+const VOICES: { name: string; from: number; len: number; words: Words }[] = [
+  { name: "selfridge", from: 0, len: 97, words: [["“I'm", 6], ["convinced", 9], ["that", 16], ["machines", 22], ["can", 29], ["and", 33], ["will", 37], ["think", 40], ["in", 48], ["our", 54], ["lifetime.”", 60]] },
+  { name: "wiesner", from: b(1), len: 115, words: [["I", 2], ["suspect", 3], ["if", 12], ["you", 19], ["come", 22], ["back", 26], ["in", 32], ["four", 37], ["or", 46], ["five", 50], ["years,", 55], ["I'll", 63], ["say", 68], ["sure,", 73], ["they", 85], ["really", 88], ["do", 95], ["think.", 103]] },
+  { name: "hello", from: b(8) - 6, len: 75, words: [["Hello,", 2], ["I'm", 41], ["Claude", 55], ["Shannon.", 61]] },
+  { name: "learn", from: b(11) + 15, len: 54, words: [["He", 3], ["can", 6], ["learn", 10], ["from", 27], ["experience.", 34]] },
+  { name: "response", from: b(17) - 4, len: 66, words: [["And", 3], ["every", 7], ["time", 13], ["we", 18], ["did", 23], ["that,", 28], ["we'd", 38], ["get", 43], ["a", 46], ["response.", 49]] },
+  { name: "organism", from: b(20) + 4, len: 130, words: [["We", 2], ["must", 12], ["look", 16], ["to", 23], ["the", 28], ["whole", 31], ["brain", 39], ["functioning", 52], ["as", 75], ["a", 89], ["unified", 93], ["organism.", 108]] },
+  { name: "maze", from: b(30) + 6, len: 77, words: [["Then", 2], ["guide", 8], ["your", 17], ["call", 23], ["through", 32], ["the", 40], ["maze", 45], ["of", 53], ["connections.", 59]] },
+  { name: "billions", from: b(35) + 8, len: 59, words: [["Billions", 2], ["of", 12], ["circuits", 18], ["may", 29], ["be", 36], ["set", 41], ["up.", 46]] },
+  { name: "emerge", from: b(40) + 4, len: 51, words: [["Something", 3], ["will", 8], ["emerge", 13], ["from", 22], ["the", 29], ["laboratories.", 33]] },
+];
+
+// the beat carries the gaps and sits low under every voice
 const musicVolume = (f: number) => {
-  const duck = (a: number, z: number, v: number) => (f >= a && f < z ? v : 1);
-  const base = interpolate(f, [0, 6, COLLAB_FRAMES - 24, COLLAB_FRAMES], [0, 0.55, 0.9, 0], clamp);
-  const lift = f >= DROP ? 0.9 / 0.55 : 1;
-  return Math.min(1, base * lift) * duck(b(7), b(9.5), 0.3) * duck(b(9.5), b(12), 0.22) * duck(b(12), b(13), 0.3);
+  const speaking = VOICES.some(({ from, len }) => f >= from - 3 && f < from + len + 3);
+  const level = f < DROP ? 0.35 : speaking ? 0.32 : 0.95;
+  return level * interpolate(f, [0, 8, COLLAB_FRAMES - 30, COLLAB_FRAMES], [0, 1, 1, 0], clamp);
 };
 
 export const Collab: React.FC = () => {
   useFonts();
   return (
     <AbsoluteFill style={{ background: BG, overflow: "hidden" }}>
-      <Audio src={staticFile("music/soundtrack.mp3")} trimBefore={Math.round(24.03 * 30) - DROP} volume={musicVolume} />
+      <Audio src={staticFile("music/instrumental.mp3")} trimBefore={Math.round(17.5 * 30)} volume={musicVolume} />
 
-      {/* 0:00 cold open. A 1961 MIT film: the machines will think */}
-      <Seg from={0} to={DROP}>
-        <Clip name="selfridge" muted={false} volume={1.6} zoom={[1.0, 1.12]} />
-        <LowerThird text="Oliver Selfridge · The Thinking Machine · 1961" />
-        <Sub words={[["“I'm", 6], ["convinced", 9], ["that", 16], ["machines", 22], ["can", 29], ["and", 33], ["will", 37], ["think", 40], ["in", 48], ["our", 54], ["lifetime.”", 60]]} />
+      {/* I. 1961: the machines will think */}
+      <Seg from={0} to={b(0)}>
+        <Shot name="selfridge" zoom={[1, 1.12]} />
+        <Who text="Oliver Selfridge · The Thinking Machine · 1961" />
       </Seg>
-      <Sequence from={DROP} durationInFrames={8} layout="none"><Clip name="selfridge" trim={DROP} muted={false} volume={1.6} /></Sequence>
-
-      {/* the drop: neurons, they do, but never alone */}
-      <Seg from={b(0)} to={b(2)}>
-        <Clip name="neurons" zoom={[1.1, 1.35]} />
-        <Seg from={0} to={BEAT}><Slam text="They do." size={230} /><Flash strength={0.7} /></Seg>
-        <Seg from={BEAT} to={BEAT * 2}><Slam text="But never alone." size={150} color={SIG} /><Flash strength={0.2} /></Seg>
+      <Seg from={b(0)} to={b(2)}><Shot name="checkers" /><Flash strength={0.6} /></Seg>
+      <Seg from={b(2)} to={b(4)}><Shot name="tapes" /></Seg>
+      <Seg from={b(4)} to={b(7)}>
+        <Shot name="wiesner" zoom={[1.05, 1.15]} />
+        <Who text="Jerome Wiesner · MIT · 1961" />
       </Seg>
-
-      {/* football: three cuts of the 26-pass goal, the last one hits the net */}
-      <Seg from={b(2)} to={b(5)}>
-        <Seg from={0} to={15}><Clip name="ball-a" /><Flash strength={0.25} /></Seg>
-        <Seg from={15} to={30}><Clip name="ball-b" /><Flash strength={0.15} /></Seg>
-        <Seg from={30} to={60}><Clip name="ball-c" trim={7} zoom={[1, 1.15]} /></Seg>
-        <Shade />
-        <Slam text="Nobody scores alone." size={118} y={118} />
-        <Seg from={30} to={60}><Tag text="Argentina v Serbia · 2006 · 26 passes, 1 goal" color={SIG} /></Seg>
+      <Seg from={b(7)} to={b(8)}>
+        <Shot name="neurons" zoom={[1.2, 1.35]} />
+        <Slam text="They do." size={230} />
+        <Flash strength={0.7} />
       </Seg>
 
-      {/* cypher: pass the mic */}
-      <Seg from={b(5)} to={b(7)}>
-        <Clip name="cypher" zoom={[1.05, 1.18]} />
-        <Seg from={0} to={BEAT}><Slam text="Pass the mic." size={170} /><Flash strength={0.3} /></Seg>
-        <Seg from={BEAT} to={BEAT * 2}><Slam text="Pass the context." size={150} color={SIG} /></Seg>
+      {/* II. Shannon's mouse learns */}
+      <Seg from={b(8)} to={b(11)}>
+        <Shot name="shannon" zoom={[1, 1.1]} />
+        <Who text="Claude Shannon · Bell Labs · 1952" />
       </Seg>
+      <Seg from={b(11)} to={b(15)}><Shot name="maze" zoom={[1, 1.12]} /></Seg>
 
-      {/* cartoon run: time card, the plan, ka-chow */}
-      <Seg from={b(7)} to={b(9.5)}>
-        <Clip name="later" muted={false} volume={1.2} zoom={[1, 1]} />
-        <Translate text="one context window later" />
+      {/* III. one cell fires */}
+      <Seg from={b(15)} to={b(17)}>
+        <Shot name="cat" />
+        <Who text="Hubel & Wiesel · visual cortex · 1959" />
+        <Slam text="One cell fires." size={130} y={170} />
+        <Flash strength={0.3} />
       </Seg>
-      <Seg from={b(9.5)} to={b(12)}>
-        <Clip name="phineas" muted={false} volume={1.8} zoom={[1, 1.08]} />
-        <Sub words={[["Codex,", 0], ["I", 4], ["know", 13], ["what", 18], ["we're", 22], ["gonna", 27], ["do", 34], ["today!", 41]]} />
-      </Seg>
-      <Seg from={b(12)} to={b(13)}>
-        <Clip name="kachow" muted={false} volume={1.8} zoom={[1.0, 1.25]} />
-        <Shade />
-        <Flash strength={0.5} />
-        <Slam text="Context loaded." size={140} y={120} color={INK} />
-      </Seg>
+      <Seg from={b(17)} to={b(20)}><Shot name="dot" zoom={[1.05, 1]} /></Seg>
 
-      {/* our canvas: everyone linked */}
-      <Seg from={b(13)} to={b(16)}>
-        <Canvas offset={22} />
+      {/* IV. but the mind is the whole network */}
+      <Seg from={b(20)} to={b(27)}>
+        <Shot name="diagram" zoom={[1, 1.15]} />
+        <Who text="The Human Brain · Encyclopaedia Britannica · 1955" />
+      </Seg>
+      <Seg from={b(27)} to={b(30)}>
+        <Shot name="neurons" zoom={[1, 1.2]} />
+        <Slam text="Intelligence is collaborative." size={150} />
         <Flash strength={0.6} />
-        <Slam text="Intelligence is collaborative." size={96} y={108} />
-        <Seg from={BEAT * 1.5} to={BEAT * 3}><Slam text="So are your agents." size={56} y={985} color={SIG} /></Seg>
       </Seg>
 
-      <Seg from={b(16)} to={COLLAB_FRAMES}>
+      {/* V. connect them */}
+      <Seg from={b(30)} to={b(32)}>
+        <Shot name="operators" />
+        <Flash strength={0.3} />
+      </Seg>
+      <Seg from={b(32)} to={b(35)}>
+        <Shot name="plugs" zoom={[1, 1.12]} />
+        <Seg from={b(33) - b(32)} to={b(35) - b(32)}><Slam text="Connect them." size={150} y={150} color={SIG} /></Seg>
+      </Seg>
+
+      {/* VI. today: your agents, one nervous system */}
+      <Seg from={b(35)} to={b(40)}>
+        <Canvas offset={10} />
+        <Flash strength={0.6} />
+        <Seg from={0} to={b(37) - b(35)}><Slam text="Your agents." size={110} y={108} /></Seg>
+        <Seg from={b(37) - b(35)} to={b(40) - b(35)}><Slam text="One nervous system." size={110} y={108} color={SIG} /></Seg>
+      </Seg>
+      <Seg from={b(40)} to={COLLAB_FRAMES}>
         <End />
         <Flash strength={0.4} />
+        <Who text="Claude Shannon · 1961" />
       </Seg>
+
+      {VOICES.map((v) => <Vo key={v.name} {...v} />)}
 
       <Hud />
       <Grain />

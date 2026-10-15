@@ -1,17 +1,19 @@
-# Synapse: "Intelligence is collaborative" (15 s, 1:1, `Collab.tsx`)
+# Synapse: "Intelligence is collaborative" (30 s, 1:1, `Collab.tsx`)
 
-Sources: `./broll.sh` pulls the soundtrack ("Bombastic" type beat, TNYPOP) and B-roll from YouTube and cuts
-them into `public/broll/cuts`. All of it is third-party and git-ignored. Music starts at 21.03 s so the drop
-(90 BPM, 20 frames a beat) lands on frame 90.
+Told by the scientists who started it. Archive voices and footage only, all graded black and white,
+over "Wild" (Kanye West type beat by Encore, 95.7 BPM). `./broll.sh` pulls and cuts everything into
+`public/broll` and `public/music` (git-ignored, third-party). The track starts 17.50 s in so its drop
+lands at 3.0 s; every cut sits on the beat grid.
 
-| Time | Shot | On screen | Sound |
-|---|---|---|---|
-| 0.0 to 3.0 | Oliver Selfridge, The Thinking Machine (1961) | Subtitle: "I'm convinced that machines can and will think in our lifetime." | His voice, beat intro |
-| 3.0 to 4.3 | Neurons growing (two-photon), B/W | THEY DO. / BUT NEVER ALONE. | Drop |
-| 4.3 to 6.3 | Cambiasso's 26-pass goal, three cuts into the net | NOBODY SCORES ALONE. | Beat |
-| 6.3 to 7.7 | Kendrick, BET Cypher 2013, B/W | PASS THE MIC. / PASS THE CONTEXT. | Beat |
-| 7.7 to 9.3 | SpongeBob time card | ONE CONTEXT WINDOW LATER | "A few moments later" |
-| 9.3 to 11.0 | Phineas | "Codex, I know what we're gonna do today!" | His line |
-| 11.0 to 11.7 | Lightning McQueen | CONTEXT LOADED. | "Ka-chow!" |
-| 11.7 to 13.7 | Synapse canvas, links drawing | INTELLIGENCE IS COLLABORATIVE. / So are your agents. | Beat |
-| 13.7 to 15.0 | End card | SYNAPSE · heysynapse.vercel.app · Multiplayer, coming soon | Fade |
+| Time | Picture | Voice / on screen |
+|---|---|---|
+| 0 to 3 | Oliver Selfridge, The Thinking Machine (1961) | "I'm convinced that machines can and will think in our lifetime." |
+| 3 to 7.4 | Checkers computer, tape drives, Jerome Wiesner (MIT) | "I suspect if you come back in four or five years, I'll say sure, they really do think." |
+| 7.4 to 8 | Neurons | THEY DO. |
+| 8 to 12.4 | Claude Shannon and Theseus, Bell Labs (1952) | "Hello, I'm Claude Shannon." / "He can learn from experience." |
+| 12.4 to 15.5 | Hubel and Wiesel's cat, the black dot | ONE CELL FIRES. / "And every time we did that, we'd get a response." |
+| 15.5 to 19.9 | The Human Brain (1955) diagrams | "We must look to the whole brain functioning as a unified organism." |
+| 19.9 to 21.8 | Neurons | INTELLIGENCE IS COLLABORATIVE. |
+| 21.8 to 24.9 | Bell switchboard operators patching lines | "Then guide your call through the maze of connections." / CONNECT THEM. |
+| 24.9 to 28 | Synapse canvas, links drawing | YOUR AGENTS. / ONE NERVOUS SYSTEM. / "Billions of circuits may be set up." (1968) |
+| 28 to 30 | End card | "Something will emerge from the laboratories." (Shannon, 1961) |
