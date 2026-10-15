@@ -140,6 +140,7 @@ Code and Codex, so you can just say *"connect to the codex agent and ask what it
 | ⌘F or `/` | fuzzy search. ↑↓ to pick, Enter to jump |
 | drag the ring around a node | create a link |
 | drag a node | move it (saved) |
+| drag a project frame | move the whole project; other frames step aside so they never overlap |
 | click a node | details, links, messages, recent activity |
 | hover a link, click × (or select it and press ⌫) | remove the link |
 | scroll, drag the background | zoom, pan |
