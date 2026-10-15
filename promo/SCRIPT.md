@@ -1,19 +1,20 @@
-# Synapse: "Intelligence is collaborative" (30 s, 1:1, `Collab.tsx`)
+# Synapse: "Unleash intelligence. Connection drives innovation." (38 s, 1:1, `Collab.tsx`)
 
-Told by the scientists who started it. Archive voices and footage only, all graded black and white,
-over "Wild" (Kanye West type beat by Encore, 95.7 BPM). `./broll.sh` pulls and cuts everything into
-`public/broll` and `public/music` (git-ignored, third-party). The track starts 17.50 s in so its drop
-lands at 3.0 s; every cut sits on the beat grid.
+The instrumental ("Wild", Kanye West type beat by Encore, 95.8 BPM) plays from its first bar. Its 20.4 s
+build-up carries the archive era and the drop lands on today. The music starts in the back, climbs through
+the build-up and then holds: it never dips under a voice. Grades move with the era: black and white
+archive, faded 80s, full colour now. `./broll.sh` pulls and cuts everything (git-ignored, third-party).
 
 | Time | Picture | Voice / on screen |
 |---|---|---|
-| 0 to 3 | Oliver Selfridge, The Thinking Machine (1961) | "I'm convinced that machines can and will think in our lifetime." |
-| 3 to 7.4 | Checkers computer, tape drives, Jerome Wiesner (MIT) | "I suspect if you come back in four or five years, I'll say sure, they really do think." |
-| 7.4 to 8 | Neurons | THEY DO. |
-| 8 to 12.4 | Claude Shannon and Theseus, Bell Labs (1952) | "Hello, I'm Claude Shannon." / "He can learn from experience." |
-| 12.4 to 15.5 | Hubel and Wiesel's cat, the black dot | ONE CELL FIRES. / "And every time we did that, we'd get a response." |
-| 15.5 to 19.9 | The Human Brain (1955) diagrams | "We must look to the whole brain functioning as a unified organism." |
-| 19.9 to 21.8 | Neurons | INTELLIGENCE IS COLLABORATIVE. |
-| 21.8 to 24.9 | Bell switchboard operators patching lines | "Then guide your call through the maze of connections." / CONNECT THEM. |
-| 24.9 to 28 | Synapse canvas, links drawing | YOUR AGENTS. / ONE NERVOUS SYSTEM. / "Billions of circuits may be set up." (1968) |
-| 28 to 30 | End card | "Something will emerge from the laboratories." (Shannon, 1961) |
+| 0 to 3.5 | Oliver Selfridge, MIT (1961) | "I'm convinced that machines can and will think in our lifetime." |
+| 3.5 to 7.9 | Checkers computer, tape drives, Jerome Wiesner | "I suspect if you come back in four or five years, I'll say sure, they really do think." |
+| 7.9 to 12.4 | The Human Brain (1955), Hubel and Wiesel (1959) | "We must look to the whole brain functioning as a unified organism." |
+| 12.4 to 16.6 | Macintosh (1984), Steve Jobs (1990) | "It's the equivalent of a bicycle for our minds." |
+| 16.6 to 20.4 | Circuit boards, wafers, cleanrooms, Shannon flash, chips, fabs, Foxconn line, faster and faster | UNLEASH |
+| 20.4 | Drop: neural network | INTELLIGENCE. (2012, deep learning) |
+| 21.7 to 28.4 | AlphaGo (2016), neurons, AlphaFold (2020), Shannon's mouse, ChatGPT (2022), DevDay (2023) | Nobel presenter: "It had to wait until the year 2020 for the real breakthrough." |
+| 28.4 to 30.4 | Demis Hassabis receives the Nobel Prize (2024) | |
+| 30.4 to 32.9 | Switchboard operators patching lines, neurons | CONNECTION / DRIVES INNOVATION. |
+| 32.9 to 35.4 | Synapse canvas, links drawing | CONNECT YOUR AGENTS. / Shannon (1961): "Something will emerge from the laboratories." |
+| 35.4 to 37.9 | End card | SYNAPSE · heysynapse.vercel.app · Multiplayer, coming soon |
