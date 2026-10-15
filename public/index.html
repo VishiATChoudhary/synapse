@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Synapse</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='11' fill='%236C7CFF'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #07080c;
+    --ink: #e9ecf3;
+    --muted: #7d8496;
+    --faint: #474d5c;
+    --line: rgba(255,255,255,.07);
+    --glass: #10121a;
+    --sans: -apple-system, "SF Pro Display", "Inter", system-ui, sans-serif;
+    --mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+    --ease: cubic-bezier(.22,1,.36,1);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  .brand { position: fixed; top: 22px; left: 26px; display: flex; align-items: center; gap: 12px; user-select: none; }
+  .brand .mark { width: 22px; height: 22px; border-radius: 50%; position: relative;
+    background: #6C7CFF; animation: breathe 3.6s ease-in-out infinite; }
+  .brand .mark::after { content: ""; position: absolute; inset: -5px; border-radius: 50%; border: 1.5px solid #6C7CFF;
+    animation: ripple 3.6s ease-out infinite; }
+  @keyframes ripple { from { transform: scale(.7); opacity: .8; } to { transform: scale(1.5); opacity: 0; } }
+  .brand h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .02em; }
+  .brand span { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+  @keyframes breathe { 50% { transform: scale(.88); } }
+
+  .stats { position: fixed; top: 20px; right: 24px; display: flex; gap: 8px; }
+  .pill { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; border-radius: 999px;
+    background: var(--glass); border: 1px solid var(--line);
+    font-size: 12px; color: var(--muted); }
+  .pill b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .dot.busy { background: #2EC4A0; animation: blink 1.2s ease-in-out infinite; }
+  .dot.idle { background: #6b7183; }
+  @keyframes blink { 50% { opacity: .35; } }
+
+  .hints { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); display: flex; gap: 18px;
+    padding: 9px 16px; border-radius: 12px; background: var(--glass); border: 1px solid var(--line);
+    font-size: 12px; color: var(--muted); white-space: nowrap; user-select: none;
+    transition: opacity .4s var(--ease); }
+  kbd { font-family: var(--mono); font-size: 10.5px; color: var(--ink); padding: 2px 6px; border-radius: 5px;
+    background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08); margin-right: 4px; }
+
+  .empty { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; text-align: center;
+    color: var(--muted); font-size: 14px; opacity: 0; transition: opacity .6s var(--ease); }
+  .empty.show { opacity: 1; }
+  .empty code { font-family: var(--mono); color: var(--ink); }
+
+  /* Side panel */
+  .panel { position: fixed; top: 66px; right: 16px; bottom: 16px; width: 360px; border-radius: 18px;
+    background: var(--glass); border: 1px solid var(--line);
+    display: flex; flex-direction: column; overflow: hidden;
+    transform: translateX(calc(100% + 30px)); transition: transform .5s var(--ease); }
+  .panel.open { transform: none; }
+  .panel header { padding: 20px 20px 16px; border-bottom: 1px solid var(--line); position: relative; }
+  .panel .orb { width: 14px; height: 14px; border-radius: 50%; display: inline-block; vertical-align: -1px; margin-right: 9px; }
+  .panel h2 { margin: 0; font-size: 17px; font-weight: 600; display: flex; align-items: center; }
+  .panel .cwd { margin-top: 8px; font: 11.5px var(--mono); color: var(--muted); word-break: break-all; }
+  .panel .meta { margin-top: 12px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .tag { font-size: 11px; padding: 3px 9px; border-radius: 999px; background: rgba(255,255,255,.05); color: var(--muted); border: 1px solid var(--line); display: inline-flex; align-items: center; gap: 6px; }
+  .close { position: absolute; top: 16px; right: 16px; width: 28px; height: 28px; border-radius: 8px; border: 0;
+    background: transparent; color: var(--muted); font-size: 18px; cursor: pointer; transition: background .2s, color .2s; }
+  .close:hover { background: rgba(255,255,255,.07); color: var(--ink); }
+  .panel section { padding: 16px 20px 6px; }
+  .panel h3 { margin: 0 0 10px; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  .link { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin: 0 -10px; border-radius: 10px; font-size: 13px; transition: background .2s; }
+  .link:hover { background: rgba(255,255,255,.04); }
+  .link .arrow { color: var(--faint); font-family: var(--mono); font-size: 12px; }
+  .link .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .link button { border: 0; background: transparent; color: var(--faint); cursor: pointer; font-size: 12px; padding: 4px 6px; border-radius: 6px; opacity: 0; transition: opacity .2s, color .2s, background .2s; }
+  .link:hover button { opacity: 1; }
+  .link button:hover { color: #ff7b8a; background: rgba(255,90,110,.1); }
+  .none { font-size: 12.5px; color: var(--faint); padding-bottom: 6px; }
+  .feed { flex: 1; overflow-y: auto; padding: 4px 20px 20px; mask-image: linear-gradient(transparent, #000 18px); }
+  .feed::-webkit-scrollbar { width: 0; }
+  .msg { padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,.04); font-size: 12.5px; line-height: 1.5; color: #c3c8d4;
+    animation: rise .5s var(--ease) both; word-break: break-word; }
+  .msg.tool { white-space: pre-wrap; }
+  .msg .who { display: block; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin-bottom: 3px; font-weight: 600; }
+  .msg.user .who { color: #8ea0ff; }
+  .msg.tool { color: var(--muted); font: 11.5px var(--mono); }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+
+  .legend { position: fixed; left: 24px; bottom: 22px; display: flex; flex-direction: column; gap: 7px; user-select: none; max-height: 50vh; overflow: hidden; }
+  .legend .item { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--muted); cursor: default; transition: color .2s; }
+  .legend .item:hover { color: var(--ink); }
+  .legend .sw { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .legend .n { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+  /* search */
+  .search { position: fixed; top: 17px; left: 50%; transform: translateX(-50%); width: 400px; z-index: 5; }
+  .search .box { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 8px 0 12px; border-radius: 11px;
+    background: var(--glass); border: 1px solid var(--line); color: var(--muted); transition: border-color .2s; }
+  .search .box:focus-within { border-color: rgba(108,124,255,.7); }
+  .search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--ink); font: 13px var(--sans); }
+  .search input::placeholder { color: var(--faint); }
+  .search kbd { margin: 0; }
+  .results { margin-top: 6px; padding: 5px; border-radius: 12px; background: var(--glass); border: 1px solid var(--line);
+    opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity .18s var(--ease), transform .18s var(--ease); }
+  .search.open .results { opacity: 1; transform: none; pointer-events: auto; }
+  .res { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; color: #c9cdd8; }
+  .res.on { background: rgba(255,255,255,.06); color: #fff; }
+  .res .sw { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .res .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .res .meta { margin-left: auto; font: 11px var(--mono); color: var(--faint); white-space: nowrap; }
+  .res mark { background: none; color: #fff; font-weight: 600; text-decoration: underline 1.5px rgba(108,124,255,.9); text-underline-offset: 3px; }
+  .res.none { color: var(--faint); cursor: default; }
+
+  /* markdown */
+  .md { white-space: normal; }
+  .md p { margin: 0 0 7px; }
+  .md p:last-child, .md ul:last-child, .md ol:last-child, .md pre:last-child { margin-bottom: 0; }
+  .md h4 { margin: 10px 0 5px; font-size: 13px; font-weight: 600; color: var(--ink); }
+  .md h4:first-child { margin-top: 0; }
+  .md ul, .md ol { margin: 3px 0 7px; padding-left: 18px; }
+  .md li { margin: 2px 0; }
+  .md li::marker { color: var(--faint); }
+  .md strong { color: var(--ink); font-weight: 600; }
+  .md code { font: 11.5px var(--mono); background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: 4px; color: #dfe3ee; }
+  .md pre { margin: 6px 0 8px; padding: 10px 12px; border-radius: 8px; background: #0a0b10; border: 1px solid var(--line); overflow-x: auto; }
+  .md pre::-webkit-scrollbar { height: 6px; }
+  .md pre::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 3px; }
+  .md pre::-webkit-scrollbar-track { background: transparent; }
+  .md pre code { background: none; padding: 0; font-size: 11px; line-height: 1.55; white-space: pre; }
+  .md a { color: #8ea0ff; text-decoration: none; }
+  .md a:hover { text-decoration: underline; }
+  .md .fl { color: #8ea0ff; font-family: var(--mono); font-size: 11.5px; }
+  .md blockquote { margin: 4px 0 7px; padding-left: 10px; border-left: 2px solid rgba(255,255,255,.12); color: var(--muted); }
+  .md hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+  .feed h3 { margin: 16px 0 6px; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  .bubble { margin: 7px 0; padding: 9px 12px; border-radius: 12px; background: #181b25; font-size: 12.5px; line-height: 1.5; color: #cfd3dd; animation: rise .4s var(--ease) both; }
+  .bubble.out { margin-left: 26px; background: rgba(108,124,255,.13); }
+  .bubble.in { margin-right: 26px; }
+  .bubble .who { display: block; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin-bottom: 3px; font-weight: 600; }
+  .toast { position: fixed; bottom: 76px; left: 50%; transform: translate(-50%, 12px); opacity: 0; pointer-events: none;
+    padding: 9px 16px; border-radius: 11px; background: #181b25; border: 1px solid var(--line);
+    font-size: 12.5px; transition: all .4s var(--ease); }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div class="brand"><div class="mark"></div><h1>synapse</h1><span>agent context mesh</span></div>
+<div class="search" id="search">
+  <div class="box">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="q" placeholder="Search agents, projects, folders" autocomplete="off" spellcheck="false">
+    <kbd>⌘F</kbd>
+  </div>
+  <div class="results" id="results"></div>
+</div>
+<div class="stats">
+  <div class="pill"><span class="dot busy"></span><b id="nBusy">0</b> working</div>
+  <div class="pill"><span class="dot idle"></span><b id="nIdle">0</b> idle</div>
+  <div class="pill"><b id="nEdges">0</b> links</div>
+</div>
+<div class="empty" id="empty"><div>No live agents yet.<br><br>Start a <code>claude</code> session and it will appear here.</div></div>
+<div class="hints" id="hints">
+  <span><kbd>⌘F</kbd>search</span>
+  <span><kbd>drag ring</kbd>link agents</span>
+  <span><kbd>drag</kbd>move</span>
+  <span><kbd>scroll</kbd>zoom</span>
+  <span><kbd>F</kbd>fit</span>
+  <span><kbd>⌫</kbd>remove link</span>
+</div>
+<div class="legend" id="legend"></div>
+<aside class="panel" id="panel"></aside>
+<div class="toast" id="toast"></div>
+
+<script>
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const $ = (id) => document.getElementById(id);
+
+const R = 24;          // node core radius
+const RING = 15;       // width of the "link from here" ring around a node
+let dpr = 1, W = 0, H = 0;
+const cam = { x: 0, y: 0, k: 1, tx: 0, ty: 0, tk: 1 };
+
+let agents = new Map();   // id -> node {a, x, y, vx, vy, born, color, ...}
+let edges = [];
+let layout = {};
+let hover = null;         // {type:'node'|'ring'|'edge'|'x', id}
+let selected = null;      // {type:'node'|'edge', id}
+let drag = null;
+let mouse = { x: 0, y: 0, wx: 0, wy: 0 };
+const flows = new Map();  // edge id -> burst intensity 0..1
+const packets = [];       // messages in flight {from, to, born}
+let query = '', matches = null, resultIdx = 0;
+
+// ---------- helpers ----------
+function rgba(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }
+const BG = '#07080c';
+const short = (s, n = 26) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const toWorld = (sx, sy) => ({ x: (sx - cam.x) / cam.k, y: (sy - cam.y) / cam.k });
+const ease = (t) => 1 - Math.pow(1 - t, 3);
+function initials(n) { const p = n.split(/[-_ .]+/).filter(Boolean); return ((p[0]?.[0] || '') + (p[1]?.[0] || p[0]?.[1] || '')).toUpperCase(); }
+function ago(ms) { const s = (Date.now() - ms) / 1000; if (s < 60) return 'just now'; if (s < 3600) return `${~~(s/60)}m ago`; if (s < 86400) return `${~~(s/3600)}h ago`; return `${~~(s/86400)}d ago`; }
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2200); }
+
+function resize() {
+  dpr = window.devicePixelRatio || 1; W = innerWidth; H = innerHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+}
+addEventListener('resize', resize); resize();
+
+// ---------- state sync ----------
+function spawnPoint(i) {
+  // golden-angle spiral around the visual centre, skipping occupied spots
+  const c = toWorld(W / 2, H / 2);
+  for (let n = i; n < i + 200; n++) {
+    const r = 150 * Math.sqrt(n + 0.5), t = n * 2.39996;
+    const p = { x: c.x + r * Math.cos(t), y: c.y + r * Math.sin(t) * 0.8 };
+    if ([...agents.values()].every((o) => Math.hypot(o.x - p.x, o.y - p.y) > 140)) return p;
+  }
+  return { x: c.x, y: c.y };
+}
+
+function applyState(s) {
+  layout = s.layout || {};
+  const seen = new Set();
+  s.agents.forEach((a, i) => {
+    seen.add(a.id);
+    let n = agents.get(a.id);
+    if (!n) {
+      const p = layout[a.id] || spawnPoint(agents.size);
+      n = { x: p.x, y: p.y, vx: 0, vy: 0, born: performance.now(), color: a.color, phase: Math.random() * 6.28, dying: 0 };
+      if (!layout[a.id]) setTimeout(() => agents.has(a.id) && saveLayout(a.id), 1500);
+      agents.set(a.id, n);
+    }
+    n.a = a; n.color = a.color; n.dying = 0;
+  });
+  for (const [id, n] of agents) if (!seen.has(id) && !n.dying) n.dying = performance.now();
+  edges = s.edges;
+  const live = [...agents.values()].filter((n) => !n.dying);
+  $('nBusy').textContent = live.filter((n) => n.a.status === 'busy').length;
+  $('nIdle').textContent = live.filter((n) => n.a.status !== 'busy').length;
+  $('nEdges').textContent = edges.filter((e) => agents.has(e.from) && agents.has(e.to)).length;
+  $('empty').classList.toggle('show', live.length === 0);
+  renderLegend(live);
+  if (selected?.type === 'node') renderPanel(false);
+}
+
+const es = new EventSource('/api/events');
+let firstState = true;
+es.addEventListener('state', (ev) => {
+  applyState(JSON.parse(ev.data));
+  if (firstState) { firstState = false; fit(true); }
+});
+es.addEventListener('flow', (ev) => {
+  const f = JSON.parse(ev.data);
+  if (f.type === 'message') {
+    packets.push({ from: f.from, to: f.to, born: performance.now() });
+    if (f.edge) flows.set(f.edge, 0.6);
+    toast(`${f.fromName} → ${f.toName}: ${f.preview}`);
+    if (selected?.type === 'node' && (selected.id === f.from || selected.id === f.to)) renderPanel(true);
+    return;
+  }
+  flows.set(f.edge, 1);
+  const e = edges.find((x) => x.id === f.edge);
+  const from = e && agents.get(e.from), to = e && agents.get(e.to);
+  if (from && to) toast(`Context flowed: ${from.a.name} → ${to.a.name}`);
+});
+
+function saveLayout(id) {
+  const n = agents.get(id);
+  fetch('/api/layout', { method: 'POST', body: JSON.stringify({ [id]: { x: Math.round(n.x), y: Math.round(n.y) } }) });
+}
+async function addEdge(from, to) {
+  const r = await fetch('/api/edges', { method: 'POST', body: JSON.stringify({ from, to }) });
+  if (r.status === 409) return toast('Already linked');
+  if (!r.ok) return toast('Could not link');
+  const e = await r.json();
+  flows.set(e.id, 1);
+  toast(`${agents.get(to).a.name} can now see ${agents.get(from).a.name}`);
+}
+async function removeEdge(id) {
+  await fetch(`/api/edges/${id}`, { method: 'DELETE' });
+  if (selected?.id === id) selected = null;
+}
+
+// ---------- geometry ----------
+function edgeGeom(e) {
+  const a = agents.get(e.from), b = agents.get(e.to);
+  if (!a || !b) return null;
+  const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len, ny = dx / len, bend = Math.min(60, len * 0.14);
+  const cx = (a.x + b.x) / 2 + nx * bend, cy = (a.y + b.y) / 2 + ny * bend;
+  return { a, b, cx, cy, len };
+}
+function qpt(g, t) {
+  const u = 1 - t;
+  return { x: u*u*g.a.x + 2*u*t*g.cx + t*t*g.b.x, y: u*u*g.a.y + 2*u*t*g.cy + t*t*g.b.y };
+}
+function tAtDist(g, fromEnd, d) {
+  // walk along curve from an endpoint until we're d away from it
+  const end = fromEnd ? g.b : g.a;
+  for (let i = 0; i <= 60; i++) {
+    const t = fromEnd ? 1 - i / 60 : i / 60, p = qpt(g, t);
+    if (Math.hypot(p.x - end.x, p.y - end.y) >= d) return t;
+  }
+  return fromEnd ? 0.8 : 0.2;
+}
+function hitTest(wx, wy) {
+  let best = null;
+  for (const [id, n] of agents) {
+    if (n.dying) continue;
+    const d = Math.hypot(n.x - wx, n.y - wy);
+    if (d <= R + 2) return { type: 'node', id };
+    if (d <= R + RING + 4 && (!best || d < best.d)) best = { type: 'ring', id, d };
+  }
+  if (best) return best;
+  for (const e of edges) {
+    const g = edgeGeom(e); if (!g) continue;
+    const m = qpt(g, 0.5);
+    if (hover?.id === e.id && Math.hypot(m.x - wx, m.y - wy) < 13 / cam.k) return { type: 'x', id: e.id };
+    for (let i = 0; i <= 30; i++) {
+      const p = qpt(g, i / 30);
+      if (Math.hypot(p.x - wx, p.y - wy) < 7 / cam.k + 2) return { type: 'edge', id: e.id };
+    }
+  }
+  return null;
+}
+
+// ---------- input ----------
+cv.addEventListener('pointerdown', (ev) => {
+  cv.setPointerCapture(ev.pointerId);
+  const w = toWorld(ev.clientX, ev.clientY);
+  const h = hitTest(w.x, w.y);
+  const sx = ev.clientX, sy = ev.clientY;
+  if (h?.type === 'node') { const n = agents.get(h.id); drag = { mode: 'move', id: h.id, ox: w.x - n.x, oy: w.y - n.y, sx, sy, moved: false }; }
+  else if (h?.type === 'ring') drag = { mode: 'link', id: h.id, sx, sy };
+  else if (h?.type === 'x') { removeEdge(h.id); hover = null; }
+  else if (h?.type === 'edge') { selected = { type: 'edge', id: h.id }; closePanel(); }
+  else drag = { mode: 'pan', sx, sy, cx: cam.tx, cy: cam.ty, moved: false };
+});
+addEventListener('pointermove', (ev) => {
+  mouse.x = ev.clientX; mouse.y = ev.clientY;
+  const w = toWorld(ev.clientX, ev.clientY); mouse.wx = w.x; mouse.wy = w.y;
+  if (drag?.mode === 'move') {
+    const n = agents.get(drag.id); if (!n) return;
+    if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) > 3) drag.moved = true;
+    n.x = w.x - drag.ox; n.y = w.y - drag.oy; n.vx = n.vy = 0;
+  } else if (drag?.mode === 'pan') {
+    if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) > 3) drag.moved = true;
+    cam.tx = drag.cx + ev.clientX - drag.sx; cam.ty = drag.cy + ev.clientY - drag.sy;
+    cam.x = cam.tx; cam.y = cam.ty;
+  } else if (!drag) {
+    hover = hitTest(w.x, w.y);
+  }
+  cv.style.cursor = drag?.mode === 'link' ? 'crosshair' : drag?.mode ? 'grabbing'
+    : hover?.type === 'ring' ? 'crosshair' : hover?.type === 'node' ? 'grab'
+    : hover?.type === 'x' || hover?.type === 'edge' ? 'pointer' : 'default';
+});
+addEventListener('pointerup', () => {
+  if (!drag) return;
+  if (drag.mode === 'move') {
+    if (drag.moved) saveLayout(drag.id);
+    else { selected = { type: 'node', id: drag.id }; renderPanel(true); revealSelected(); }
+  } else if (drag.mode === 'link') {
+    const t = linkTarget();
+    if (t) addEdge(drag.id, t);
+  } else if (drag.mode === 'pan' && !drag.moved) {
+    selected = null; closePanel();
+  }
+  drag = null;
+});
+function linkTarget() {
+  let best = null, bd = Infinity;
+  for (const [id, n] of agents) {
+    if (n.dying || id === drag?.id) continue;
+    const d = Math.hypot(n.x - mouse.wx, n.y - mouse.wy);
+    if (d < R + 34 && d < bd) { bd = d; best = id; }
+  }
+  return best;
+}
+cv.addEventListener('wheel', (ev) => {
+  ev.preventDefault();
+  const k = clamp(cam.tk * Math.exp(-ev.deltaY * (ev.ctrlKey ? 0.01 : 0.0015)), 0.25, 2.5);
+  // keep the point under the cursor fixed, relative to the target camera
+  const wx = (ev.clientX - cam.tx) / cam.tk, wy = (ev.clientY - cam.ty) / cam.tk;
+  cam.tk = k; cam.tx = ev.clientX - wx * k; cam.ty = ev.clientY - wy * k;
+}, { passive: false });
+cv.addEventListener('dblclick', (ev) => { const w = toWorld(ev.clientX, ev.clientY); if (!hitTest(w.x, w.y)) fit(); });
+addEventListener('keydown', (ev) => {
+  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'f') { ev.preventDefault(); $('q').focus(); $('q').select(); return; }
+  if (ev.target.tagName === 'INPUT') return;
+  if (ev.key === '/') { ev.preventDefault(); $('q').focus(); return; }
+  if (ev.key === 'f' || ev.key === 'F') fit();
+  if (ev.key === 'Escape') { selected = null; closePanel(); }
+  if ((ev.key === 'Backspace' || ev.key === 'Delete') && selected?.type === 'edge') removeEdge(selected.id);
+});
+
+function revealSelected() {
+  const n = agents.get(selected?.id); if (!n) return;
+  const sx = n.x * cam.tk + cam.tx, limit = W - 420;
+  if (sx > limit) cam.tx -= sx - limit + 40;
+}
+function fit(instant) {
+  const live = [...agents.values()].filter((n) => !n.dying);
+  if (!live.length) return;
+  const xs = live.map((n) => n.x), ys = live.map((n) => n.y);
+  const minX = Math.min(...xs) - 120, maxX = Math.max(...xs) + 120, minY = Math.min(...ys) - 110, maxY = Math.max(...ys) + 130;
+  const availW = W - (selected?.type === 'node' ? 390 : 0);
+  const k = clamp(Math.min(availW / (maxX - minX), (H - 140) / (maxY - minY)), 0.35, 1.25);
+  cam.tk = k; cam.tx = availW / 2 - ((minX + maxX) / 2) * k; cam.ty = H / 2 + 10 - ((minY + maxY) / 2) * k;
+  if (instant) Object.assign(cam, { x: cam.tx, y: cam.ty, k: cam.tk });
+}
+
+// ---------- search ----------
+function fuzzy(q, text) {
+  const t = text.toLowerCase();
+  const at = t.indexOf(q);
+  if (at >= 0) return { score: 200 - at + (at === 0 || /[-_ /.]/.test(t[at - 1]) ? 60 : 0), idx: [...q].map((_, i) => at + i) };
+  let j = 0, score = 0, prev = -2;
+  const idx = [];
+  for (let i = 0; i < t.length && j < q.length; i++) {
+    if (t[i] !== q[j]) continue;
+    score += (i === prev + 1 ? 6 : 1) + (i === 0 || /[-_ /.]/.test(t[i - 1]) ? 4 : 0);
+    idx.push(i); prev = i; j++;
+  }
+  return j === q.length ? { score, idx } : null;
+}
+function searchAgents(q) {
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const out = [];
+  for (const [id, n] of agents) {
+    if (n.dying) continue;
+    // every word has to match some field; highlight the matches on the best field
+    let total = 0, top = null;
+    const idx = {};
+    for (const w of words) {
+      let best = null;
+      for (const [field, weight] of [['name', 1], ['project', 0.85], ['kind', 0.7], ['cwd', 0.5]]) {
+        const m = fuzzy(w, n.a[field] || '');
+        if (m && (!best || m.score * weight > best.score)) best = { score: m.score * weight, field, idx: m.idx };
+      }
+      if (!best) { total = -1; break; }
+      total += best.score;
+      (idx[best.field] ||= []).push(...best.idx);
+      if (!top || best.score > top.score) top = best;
+    }
+    if (total >= 0) out.push({ id, n, score: total, field: top.field, idx: idx[top.field], idxAll: idx });
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+function highlight(text, idx) {
+  const set = new Set(idx);
+  return [...text].map((c, i) => (set.has(i) ? `<mark>${esc(c)}</mark>` : esc(c))).join('');
+}
+function runSearch() {
+  query = $('q').value;
+  const res = searchAgents(query);
+  matches = query.trim() ? new Set(res.map((r) => r.id)) : null;
+  resultIdx = clamp(resultIdx, 0, Math.max(0, res.length - 1));
+  $('search').classList.toggle('open', !!query.trim() && document.activeElement === $('q'));
+  $('results').innerHTML = res.slice(0, 8).map((r, i) => `
+    <div class="res ${i === resultIdx ? 'on' : ''}" data-id="${r.id}">
+      <span class="sw" style="background:${r.n.color}"></span>
+      <span class="nm">${highlight(r.n.a.name, r.idxAll.name || [])}</span>
+      <span class="meta">${highlight(r.n.a.kind, r.idxAll.kind || [])} · ${highlight(short(r.n.a.project, 18), r.idxAll.project || [])}</span>
+    </div>`).join('') || '<div class="res none">No agents match</div>';
+  $('results').querySelectorAll('[data-id]').forEach((el) => el.onmousedown = (e) => { e.preventDefault(); focusAgent(el.dataset.id); });
+  return res;
+}
+function focusAgent(id) {
+  const n = agents.get(id); if (!n) return;
+  selected = { type: 'node', id };
+  renderPanel(true);
+  const k = Math.max(cam.tk, 0.9);
+  cam.tk = k; cam.tx = (W - 390) / 2 - n.x * k; cam.ty = H / 2 - n.y * k;
+  n.ping = performance.now();
+  $('q').value = ''; runSearch();
+  $('q').blur();
+}
+$('q').addEventListener('input', () => { resultIdx = 0; runSearch(); });
+$('q').addEventListener('focus', runSearch);
+$('q').addEventListener('blur', () => $('search').classList.remove('open'));
+$('q').addEventListener('keydown', (ev) => {
+  const res = searchAgents(query);
+  if (ev.key === 'ArrowDown') { ev.preventDefault(); resultIdx = Math.min(resultIdx + 1, Math.min(res.length, 8) - 1); runSearch(); }
+  else if (ev.key === 'ArrowUp') { ev.preventDefault(); resultIdx = Math.max(resultIdx - 1, 0); runSearch(); }
+  else if (ev.key === 'Enter' && res[resultIdx]) focusAgent(res[resultIdx].id);
+  else if (ev.key === 'Escape') { $('q').value = ''; runSearch(); $('q').blur(); }
+});
+
+// ---------- markdown ----------
+function md(src) {
+  const blocks = [];
+  const hold = (html) => `\u0000${blocks.push(html) - 1}\u0000`;
+  src = String(src).replace(/```[\w-]*\n?([\s\S]*?)(```|$)/g, (_, code) => `\n${hold(`<pre><code>${esc(code.replace(/\n$/, ''))}</code></pre>`)}\n`);
+  const inline = (t) => {
+    const codes = [];
+    t = t.replace(/`([^`]+)`/g, (_, c) => `\u0001${codes.push(`<code>${esc(c)}</code>`) - 1}\u0001`);
+    return esc(t)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^\w*])\*(?!\s)(.+?)\*(?!\w)/g, '$1<em>$2</em>')
+      .replace(/(^|[^\w_])_(?!\s)(.+?)_(?!\w)/g, '$1<em>$2</em>')
+      .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, url) => /^https?:/.test(url)
+        ? `<a href="${url}" target="_blank" rel="noopener">${label}</a>` : `<span class="fl" title="${url}">${label}</span>`)
+      .replace(/\u0001(\d+)\u0001/g, (_, i) => codes[i]);
+  };
+  const out = [];
+  let list = null, para = [];
+  const endPara = () => { if (para.length) out.push(`<p>${para.map(inline).join('<br>')}</p>`); para = []; };
+  const endList = () => { if (list) out.push(`</${list}>`); list = null; };
+  for (const line of src.split('\n')) {
+    let m;
+    if (/^\u0000\d+\u0000$/.test(line.trim())) { endPara(); endList(); out.push(line.trim()); }
+    else if (!line.trim()) { endPara(); endList(); }
+    else if ((m = line.match(/^#{1,6}\s+(.*)/))) { endPara(); endList(); out.push(`<h4>${inline(m[1])}</h4>`); }
+    else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { endPara(); endList(); out.push('<hr>'); }
+    else if ((m = line.match(/^\s*>\s?(.*)/))) { endPara(); endList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); }
+    else if ((m = line.match(/^\s*([-*+]|\d+[.)])\s+(.*)/))) {
+      endPara();
+      const tag = /\d/.test(m[1]) ? 'ol' : 'ul';
+      if (list !== tag) { endList(); out.push(`<${tag}>`); list = tag; }
+      out.push(`<li>${inline(m[2])}</li>`);
+    }
+    else { endList(); para.push(line); }
+  }
+  endPara(); endList();
+  return out.join('').replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[i]);
+}
+
+// ---------- legend ----------
+function renderLegend(live) {
+  const groups = new Map();
+  for (const n of live) {
+    const g = groups.get(n.a.projectKey) || { label: n.a.project, color: n.color, n: 0 };
+    g.n++; groups.set(n.a.projectKey, g);
+  }
+  $('legend').innerHTML = [...groups.values()].sort((a, b) => b.n - a.n).map((g) =>
+    `<div class="item"><span class="sw" style="background:${g.color}"></span>${esc(g.label)}<span class="n">${g.n}</span></div>`).join('');
+}
+
+// ---------- panel ----------
+const panel = $('panel');
+function closePanel() { panel.classList.remove('open'); }
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+async function renderPanel(fetchFeed) {
+  const n = agents.get(selected?.id); if (!n) return closePanel();
+  const a = n.a, col = n.color;
+  const inc = edges.filter((e) => e.to === a.id && agents.has(e.from));
+  const out = edges.filter((e) => e.from === a.id && agents.has(e.to));
+  const row = (e, other, arrow) => `<div class="link"><span class="orb" style="background:${agents.get(other).color};width:9px;height:9px;margin:0"></span>
+      <span class="arrow">${arrow}</span><span class="name" data-go="${other}">${esc(agents.get(other).a.name)}</span>
+      <button data-rm="${e.id}" title="Remove link">unlink</button></div>`;
+  const feed = panel.querySelector('.feed');
+  const keepFeed = !fetchFeed && feed && panel.dataset.id === a.id ? feed.outerHTML : '<div class="feed"></div>';
+  panel.dataset.id = a.id;
+  panel.innerHTML = `
+    <header>
+      <h2><span class="orb" style="background:${col}"></span>${esc(a.name)}</h2>
+      <div class="cwd">${esc(a.cwd)}</div>
+      <div class="meta">
+        <span class="tag">${esc(a.kind)}</span>
+        <span class="tag"><span class="dot ${a.status === 'busy' ? 'busy' : 'idle'}"></span>${a.status === 'busy' ? 'working' : 'idle'}</span>
+        <span class="tag">active ${ago(a.lastActivity)}</span>
+        <span class="tag"><span class="dot" style="background:${col}"></span>${esc(a.project)}</span>
+        <span class="tag">pid ${a.pid}</span>
+      </div>
+      <button class="close" id="closeP">×</button>
+    </header>
+    <section><h3>Reads context from</h3>${inc.map((e) => row(e, e.from, '←')).join('') || '<div class="none">Nothing yet. Drag from another agent\'s ring onto this one.</div>'}</section>
+    <section><h3>Shares context with</h3>${out.map((e) => row(e, e.to, '→')).join('') || '<div class="none">Not shared. Drag from this ring to another agent.</div>'}</section>
+    ${keepFeed}`;
+  panel.classList.add('open');
+  $('closeP').onclick = () => { selected = null; closePanel(); };
+  panel.querySelectorAll('[data-rm]').forEach((b) => (b.onclick = () => removeEdge(b.dataset.rm)));
+  panel.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => { selected = { type: 'node', id: b.dataset.go }; renderPanel(true); revealSelected(); }));
+  if (fetchFeed) {
+    const id = a.id;
+    const r = await fetch(`/api/agents/${id}/recent`).then((r) => r.json());
+    if (selected?.id !== id) return;
+    const chat = (r.chat || []).slice().reverse().map((m, i) =>
+      `<div class="bubble ${m.outgoing ? 'out' : 'in'}" style="animation-delay:${i * 30}ms"><span class="who">${m.outgoing ? `to ${esc(m.toName)}` : `from ${esc(m.fromName)}`} · ${ago(m.t)}</span><div class="md">${md(m.text)}</div></div>`).join('');
+    const acts = r.messages.slice().reverse().map((m, i) =>
+      `<div class="msg ${m.role} ${m.tool ? 'tool' : ''}" style="animation-delay:${i * 30}ms"><span class="who">${m.role === 'user' ? 'you' : m.tool ? 'tool' : 'agent'}</span>${m.tool ? esc(m.text) : `<div class="md">${md(m.text)}</div>`}</div>`).join('');
+    panel.querySelector('.feed').innerHTML = (chat ? `<h3>Agent messages</h3>${chat}` : '')
+      + `<h3>Recent activity</h3>${acts || `<div class="none" style="padding-top:4px">${a.transcript ? 'No messages yet.' : `No transcript readable for ${esc(a.kind)}. Linked agents can still message it.`}</div>`}`;
+  }
+}
+setInterval(() => { if (selected?.type === 'node' && panel.classList.contains('open') && !panel.matches(':hover')) renderPanel(true); }, 5000);
+
+// ---------- render ----------
+function drawGrid() {
+  const step = 32 * cam.k;
+  if (step < 10) return;
+  const ox = ((cam.x % step) + step) % step, oy = ((cam.y % step) + step) % step;
+  ctx.fillStyle = 'rgba(255,255,255,0.045)';
+  const s = Math.max(0.8, 1.1 * cam.k);
+  for (let x = ox; x < W; x += step) for (let y = oy; y < H; y += step) ctx.fillRect(x - s / 2, y - s / 2, s, s);
+}
+
+function drawEdge(e, t) {
+  const g = edgeGeom(e); if (!g) return;
+  const fa = g.a.dying ? 1 - clamp((t - g.a.dying) / 600, 0, 1) : 1;
+  const fb = g.b.dying ? 1 - clamp((t - g.b.dying) / 600, 0, 1) : 1;
+  const fade = Math.min(fa, fb, ease(clamp((t - Math.max(g.a.born, g.b.born)) / 900, 0, 1)));
+  if (fade <= 0) return;
+  if (matches && !(matches.has(e.from) && matches.has(e.to))) ctx.globalAlpha = 0.12; else ctx.globalAlpha = 1;
+  const burst = flows.get(e.id) || 0;
+  const hot = hover?.id === e.id || selected?.id === e.id;
+  const t0 = tAtDist(g, false, R + 7), t1 = tAtDist(g, true, R + 10);
+  const p1 = qpt(g, t1);
+
+  const grad = ctx.createLinearGradient(g.a.x, g.a.y, g.b.x, g.b.y);
+  const al = clamp(0.5 + burst * 0.5 + (hot ? 0.4 : 0), 0, 1) * fade;
+  grad.addColorStop(0, rgba(g.a.color, al));
+  grad.addColorStop(1, rgba(g.b.color, al));
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = 2 + burst * 1.5 + (hot ? 0.6 : 0);
+  ctx.beginPath();
+  for (let i = 0; i <= 40; i++) { const p = qpt(g, lerp(t0, t1, i / 40)); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); }
+  ctx.stroke();
+
+  // arrowhead
+  const pa = qpt(g, t1 - 0.02), ang = Math.atan2(p1.y - pa.y, p1.x - pa.x);
+  ctx.save();
+  ctx.translate(p1.x, p1.y); ctx.rotate(ang);
+  ctx.fillStyle = rgba(g.b.color, Math.min(1, al + 0.25));
+  ctx.beginPath(); ctx.moveTo(3, 0); ctx.lineTo(-8, -5); ctx.lineTo(-5.5, 0); ctx.lineTo(-8, 5); ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  // packets travelling source -> target
+  const speed = 0.00018 * (1 + burst * 5) * (300 / Math.max(160, g.len));
+  const count = 3;
+  for (let i = 0; i < count; i++) {
+    const u = (t * speed + i / count) % 1;
+    const p = qpt(g, lerp(t0, t1, u));
+    const life = Math.sin(u * Math.PI);
+    ctx.fillStyle = BG;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 4.2 + burst * 1.5, 0, 6.283); ctx.fill();
+    ctx.fillStyle = rgba(u < 0.5 ? g.a.color : g.b.color, life * fade);
+    ctx.beginPath(); ctx.arc(p.x, p.y, 2.6 + burst * 1.5, 0, 6.283); ctx.fill();
+  }
+
+  // delete chip
+  if (hot) {
+    const m = qpt(g, 0.5), xh = hover?.type === 'x' && hover.id === e.id, s = 1 / cam.k;
+    ctx.fillStyle = xh ? '#FF5C7A' : '#181b25';
+    ctx.strokeStyle = xh ? '#FF5C7A' : 'rgba(255,255,255,.18)';
+    ctx.lineWidth = s;
+    ctx.beginPath(); ctx.arc(m.x, m.y, 10 * s, 0, 6.283); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 * s;
+    const q = 3.5 * s;
+    ctx.beginPath(); ctx.moveTo(m.x - q, m.y - q); ctx.lineTo(m.x + q, m.y + q); ctx.moveTo(m.x + q, m.y - q); ctx.lineTo(m.x - q, m.y + q); ctx.stroke();
+  }
+}
+
+function drawNode(id, n, t) {
+  const a = n.a, c = n.color;
+  const appear = ease(clamp((t - n.born) / 700, 0, 1));
+  const vanish = n.dying ? 1 - clamp((t - n.dying) / 600, 0, 1) : 1;
+  const vis = appear * vanish;
+  if (vis <= 0) return;
+  const busy = a.status === 'busy';
+  const isHover = hover?.id === id && (hover.type === 'node' || hover.type === 'ring');
+  const isSel = selected?.type === 'node' && selected.id === id;
+  const isTarget = drag?.mode === 'link' && linkTarget() === id;
+  const isSource = drag?.mode === 'link' && drag.id === id;
+
+  const period = busy ? 1500 : 4200;
+  const ph = ((t + n.phase * 1000) % period) / period;
+  const breathe = 1 + Math.sin((t / period) * 6.283 + n.phase) * (busy ? 0.05 : 0.03);
+  const r = R * breathe * (0.6 + 0.4 * appear) * (isTarget ? 1.12 : 1);
+
+  const dim = matches && !matches.has(id) ? 0.14 : 1;
+  ctx.save();
+  ctx.globalAlpha = vis * dim;
+  ctx.translate(n.x, n.y);
+
+  // arrival ping (message received / search focus)
+  if (n.ping && t - n.ping < 900) {
+    const p = (t - n.ping) / 900;
+    ctx.strokeStyle = rgba(c, 1 - p); ctx.lineWidth = 3 * (1 - p) + 1;
+    ctx.beginPath(); ctx.arc(0, 0, r + 6 + ease(p) * 40, 0, 6.283); ctx.stroke();
+  }
+  if (matches?.has(id)) {
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(0, 0, r + 4, 0, 6.283); ctx.stroke();
+  }
+
+  // pulse rings
+  const rings = busy ? 2 : 1;
+  for (let i = 0; i < rings; i++) {
+    const p = (ph + i / rings) % 1;
+    ctx.strokeStyle = rgba(c, (1 - p) * (busy ? 0.55 : 0.25));
+    ctx.lineWidth = busy ? 2 : 1.5;
+    ctx.beginPath(); ctx.arc(0, 0, r + 4 + ease(p) * (busy ? 34 : 22), 0, 6.283); ctx.stroke();
+  }
+
+  // working: orbiting arc
+  if (busy) {
+    const s0 = t / 380;
+    ctx.strokeStyle = c; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.arc(0, 0, r + 6, s0, s0 + 1.2); ctx.stroke();
+  }
+
+  // link ring
+  if (isHover || isSource || isTarget || isSel) {
+    ctx.save();
+    ctx.rotate(t / 2400);
+    ctx.setLineDash(isSel && !isHover && !isTarget ? [] : [4, 5]);
+    ctx.strokeStyle = rgba(c, isTarget ? 1 : hover?.type === 'ring' && hover.id === id ? 0.9 : 0.5);
+    ctx.lineWidth = isTarget ? 2.5 : 1.5;
+    ctx.beginPath(); ctx.arc(0, 0, r + RING * 0.8, 0, 6.283); ctx.stroke();
+    ctx.restore();
+  }
+
+  // body: flat disk, lighter inner disk for depth without glow
+  ctx.fillStyle = c;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, 6.283); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.14)';
+  ctx.beginPath(); ctx.arc(0, 0, r * 0.62, 0, 6.283); ctx.fill();
+
+  ctx.fillStyle = 'rgba(8,9,14,.85)';
+  ctx.font = '700 11px -apple-system, "SF Pro Display", system-ui, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(initials(a.name), 0, 0.5);
+
+  // labels, knocked out of the background so links never run through text
+  ctx.lineJoin = 'round'; ctx.strokeStyle = BG; ctx.lineWidth = 5;
+  ctx.font = '500 13px -apple-system, "SF Pro Display", system-ui, sans-serif';
+  ctx.strokeText(short(a.name), 0, R + 27);
+  ctx.fillStyle = isSel || isHover ? '#fff' : 'rgba(233,236,243,.88)';
+  ctx.fillText(short(a.name), 0, R + 27);
+  ctx.font = '11px "SF Mono", ui-monospace, Menlo, monospace';
+  const sub = `${busy ? '●' : '○'} ${a.kind} · ${short(a.project, 22)}`;
+  ctx.strokeText(sub, 0, R + 44);
+  ctx.fillStyle = busy ? rgba(c, 0.95) : 'rgba(125,132,150,.9)';
+  ctx.fillText(sub, 0, R + 44);
+  ctx.restore();
+}
+
+// messages travelling between agents
+function drawPackets(t) {
+  for (let i = packets.length - 1; i >= 0; i--) {
+    const pk = packets[i], a = agents.get(pk.from), b = agents.get(pk.to);
+    const u = (t - pk.born) / 1300;
+    if (!a || !b || u >= 1) {
+      if (b && u >= 1) b.ping = t;
+      packets.splice(i, 1); continue;
+    }
+    const e = edges.find((x) => (x.from === pk.from && x.to === pk.to) || (x.from === pk.to && x.to === pk.from));
+    const g = e ? edgeGeom(e) : { a, b, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+    const k = ease(u);
+    const tt = e && e.from !== pk.from ? 1 - k : k;
+    for (let j = 3; j >= 0; j--) {
+      const back = e && e.from !== pk.from ? tt + j * 0.025 : tt - j * 0.025;
+      const p = qpt(g, clamp(back, 0, 1));
+      ctx.fillStyle = j ? rgba(a.color, 0.5 - j * 0.12) : a.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, j ? 4 - j * 0.6 : 6, 0, 6.283); ctx.fill();
+    }
+    const p = qpt(g, tt);
+    ctx.strokeStyle = BG; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, 6.283); ctx.stroke();
+  }
+}
+
+function drawLinkPreview(t) {
+  const s = agents.get(drag.id); if (!s) return;
+  const tid = linkTarget(), tn = tid && agents.get(tid);
+  const ex = tn ? tn.x : mouse.wx, ey = tn ? tn.y : mouse.wy;
+  const g = { a: s, b: { x: ex, y: ey }, cx: 0, cy: 0 };
+  const dx = ex - s.x, dy = ey - s.y, len = Math.hypot(dx, dy) || 1;
+  g.cx = (s.x + ex) / 2 - dy / len * Math.min(60, len * 0.14);
+  g.cy = (s.y + ey) / 2 + dx / len * Math.min(60, len * 0.14);
+  const t0 = tAtDist(g, false, R + 7);
+  ctx.save();
+  ctx.setLineDash([6, 7]); ctx.lineDashOffset = -t / 30;
+  ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (let i = 0; i <= 40; i++) { const p = qpt(g, lerp(t0, tn ? tAtDist(g, true, R + 12) : 1, i / 40)); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); }
+  ctx.stroke();
+  ctx.restore();
+  if (!tn) { ctx.fillStyle = s.color; ctx.beginPath(); ctx.arc(ex, ey, 4, 0, 6.283); ctx.fill(); }
+}
+
+function physics() {
+  // soft separation so nodes never overlap
+  const list = [...agents.entries()].filter(([, n]) => !n.dying);
+  for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+    const [ia, a] = list[i], [ib, b] = list[j];
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 0.01, min = 130;
+    if (d < min) {
+      const f = (min - d) * 0.04, ux = dx / d, uy = dy / d;
+      if (drag?.id !== ia) { a.vx -= ux * f; a.vy -= uy * f; }
+      if (drag?.id !== ib) { b.vx += ux * f; b.vy += uy * f; }
+    }
+  }
+  for (const [id, n] of list) {
+    if (drag?.id === id && drag.mode === 'move') continue;
+    n.x += n.vx; n.y += n.vy; n.vx *= 0.82; n.vy *= 0.82;
+  }
+}
+
+function frame(t) {
+  physics();
+  cam.x = lerp(cam.x, cam.tx, 0.16); cam.y = lerp(cam.y, cam.ty, 0.16); cam.k = lerp(cam.k, cam.tk, 0.16);
+  const w = toWorld(mouse.x, mouse.y); mouse.wx = w.x; mouse.wy = w.y;
+  for (const [id, v] of flows) { const nv = v * 0.985 - 0.002; nv <= 0 ? flows.delete(id) : flows.set(id, nv); }
+  for (const [id, n] of agents) if (n.dying && t - n.dying > 700) agents.delete(id);
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  drawGrid();
+  ctx.setTransform(dpr * cam.k, 0, 0, dpr * cam.k, dpr * cam.x, dpr * cam.y);
+  for (const e of edges) drawEdge(e, t);
+  ctx.globalAlpha = 1;
+  drawPackets(t);
+  if (drag?.mode === 'link') drawLinkPreview(t);
+  // draw selected/hovered last so they sit on top
+  const order = [...agents.entries()].sort(([a], [b]) => (a === hover?.id || a === selected?.id) - (b === hover?.id || b === selected?.id));
+  for (const [id, n] of order) drawNode(id, n, t);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

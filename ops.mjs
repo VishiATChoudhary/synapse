@@ -1,0 +1,97 @@
+// Operations shared by the CLI (skill), the MCP server and the web server.
+// Every call is made "as" an agent: `me` is the agent record of the caller.
+import crypto from 'node:crypto';
+import {
+  FILES, readJSON, writeJSON, listAgents, findAgent, readAgentMessages, formatMessages,
+  postMessage, takeInbox, linked, projectOf, colorOf,
+} from './lib.mjs';
+
+const brief = (a) => ({ name: a.name, id: a.id, kind: a.kind, cwd: a.cwd, status: a.status });
+
+function resolve(agents, query) {
+  const a = findAgent(agents, query);
+  if (!a) throw new Error(`No live agent matches "${query}". Run "peers --all" to see every agent.`);
+  return a;
+}
+
+export function createEdge(from, to) {
+  if (from.id === to.id) throw new Error('An agent cannot link to itself.');
+  const edges = readJSON(FILES.edges, []);
+  const existing = edges.find((e) => e.from === from.id && e.to === to.id);
+  if (existing) return { edge: existing, created: false };
+  const color = (a) => colorOf(projectOf(a.cwd).key);
+  const edge = {
+    id: crypto.randomUUID(), from: from.id, to: to.id, fromName: from.name, toName: to.name,
+    fromColor: color(from), toColor: color(to), fromKind: from.kind, toKind: to.kind, createdAt: Date.now(),
+  };
+  edges.push(edge);
+  writeJSON(FILES.edges, edges);
+  return { edge, created: true };
+}
+
+export function removeEdge(id) {
+  writeJSON(FILES.edges, readJSON(FILES.edges, []).filter((e) => e.id !== id));
+  const cursors = readJSON(FILES.cursors, {});
+  delete cursors[id];
+  writeJSON(FILES.cursors, cursors);
+}
+
+// Who am I connected to?
+export function peers(me, { all = false } = {}) {
+  const agents = listAgents();
+  const edges = readJSON(FILES.edges, []);
+  const byId = new Map(agents.map((a) => [a.id, a]));
+  const readsFrom = edges.filter((e) => e.to === me.id && byId.has(e.from)).map((e) => brief(byId.get(e.from)));
+  const sharesWith = edges.filter((e) => e.from === me.id && byId.has(e.to)).map((e) => brief(byId.get(e.to)));
+  const out = { me: brief(me), readsFrom, sharesWith };
+  if (all) out.allAgents = agents.filter((a) => a.id !== me.id).map(brief);
+  return out;
+}
+
+// direction: 'in' (they share with me), 'out' (I share with them), 'both'
+export function link(me, query, direction = 'both') {
+  const other = resolve(listAgents(), query);
+  const made = [];
+  if (direction === 'in' || direction === 'both') made.push(createEdge(other, me));
+  if (direction === 'out' || direction === 'both') made.push(createEdge(me, other));
+  return { linked: other.name, direction, created: made.filter((m) => m.created).length };
+}
+
+export function unlink(me, query) {
+  const other = resolve(listAgents(), query);
+  const gone = readJSON(FILES.edges, []).filter((e) => (e.from === me.id && e.to === other.id) || (e.from === other.id && e.to === me.id));
+  gone.forEach((e) => removeEdge(e.id));
+  return { unlinked: other.name, removed: gone.length };
+}
+
+// Read another agent's recent conversation. Allowed when they share with me.
+export function readContext(me, query, maxChars = 12000) {
+  const other = resolve(listAgents(), query);
+  const edges = readJSON(FILES.edges, []);
+  if (!edges.some((e) => e.from === other.id && e.to === me.id)) {
+    throw new Error(`${other.name} does not share context with you. Link it first ("link ${other.name}").`);
+  }
+  const { messages } = readAgentMessages(other);
+  const shared = readJSON(FILES.messages, []).filter((m) => m.from === other.id && m.to === me.id).slice(-5);
+  return {
+    agent: brief(other),
+    transcript: other.transcript,
+    context: messages.length ? formatMessages(messages, maxChars)
+      : '(No readable transcript for this agent type. Ask it directly with send.)',
+    recentMessagesToYou: shared.map((m) => m.text),
+  };
+}
+
+// Send a message. Allowed when the two agents are linked in either direction.
+export function send(me, query, text) {
+  const other = resolve(listAgents(), query);
+  if (!linked(readJSON(FILES.edges, []), me.id, other.id)) {
+    throw new Error(`You are not linked to ${other.name}. Link first ("link ${other.name}").`);
+  }
+  const m = postMessage(me, other, text);
+  return { sent: true, to: other.name, id: m.id, note: 'Delivered on their next prompt (Claude) or next inbox check (other agents).' };
+}
+
+export function inbox(me) {
+  return takeInbox(me.id).map((m) => ({ from: m.fromName, at: new Date(m.t).toISOString(), text: m.text }));
+}

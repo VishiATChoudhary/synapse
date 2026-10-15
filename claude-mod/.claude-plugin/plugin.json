@@ -1,0 +1,6 @@
+{
+  "name": "synapse-tui",
+  "version": "0.1.0",
+  "description": "Shows Synapse links into this session above the prompt, with toasts when agents connect or message",
+  "types": "./types/index.d.ts"
+}

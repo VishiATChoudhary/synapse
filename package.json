@@ -1,0 +1,15 @@
+{
+  "name": "synapse",
+  "version": "0.3.0",
+  "description": "See every coding agent on your machine as a live node, link them, and let them share context and message each other",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "synapse": "./cli.mjs" },
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.mjs",
+    "demo": "rm -rf /tmp/synapse-demo && SYNAPSE_DEMO=1 SYNAPSE_HOME=/tmp/synapse-demo PORT=${PORT:-4848} node server.mjs",
+    "install-agents": "node install.mjs"
+  },
+  "keywords": ["claude-code", "codex", "gemini-cli", "mcp", "agents", "multi-agent", "context"]
+}
