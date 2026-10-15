@@ -9,8 +9,9 @@
 //   synapse send <agent> <message...>  message a linked agent
 //   synapse inbox                      messages sent to you
 //   synapse agents                     every live agent
+//   synapse rename [agent] <new name>  rename an agent (yourself if no agent given); empty name resets
 //   synapse ui                         start the canvas (http://localhost:4747)
-import { agentForProcess, listAgents } from './lib.mjs';
+import { agentForProcess, listAgents, findAgent, renameAgent } from './lib.mjs';
 import * as ops from './ops.mjs';
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -35,9 +36,16 @@ try {
     case 'send': out = ops.send(whoami(), args[0], args.slice(1).join(' ')); break;
     case 'inbox': out = ops.inbox(whoami()); break;
     case 'ui': await import('./server.mjs'); break;
+    case 'rename': {
+      // `synapse rename <new name>` renames you; `synapse rename <agent> <new name>` renames that agent
+      const target = args.length > 1 ? findAgent(listAgents(), args[0]) : whoami();
+      if (!target) throw new Error(`no agent matches "${args[0]}"`);
+      out = renameAgent(target, (args.length > 1 ? args.slice(1) : args).join(' '));
+      break;
+    }
     case 'agents': out = listAgents().map(({ name, id, kind, cwd, status }) => ({ name, id, kind, cwd, status })); break;
     default:
-      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | agents');
+      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | agents | rename [agent] <name>');
       process.exit(cmd ? 1 : 0);
   }
   if (cmd === 'ui') { /* server keeps running */ }

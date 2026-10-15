@@ -21,6 +21,7 @@ export const FILES = {
   events: path.join(DATA, 'events.jsonl'),
   colors: path.join(DATA, 'colors.json'),
   messages: path.join(DATA, 'messages.json'),
+  names: path.join(DATA, 'names.json'),
 };
 
 export function readJSON(file, fallback) {
@@ -315,8 +316,29 @@ function processAgents() {
 }
 
 export function listAgents() {
-  if (DEMO) return DEMO.demoAgents();
-  return [...claudeAgents(), ...processAgents()];
+  const found = DEMO ? DEMO.demoAgents() : [...claudeAgents(), ...processAgents()];
+  // names given in the canvas or with `synapse rename` win over the generated ones
+  const names = readJSON(FILES.names, {});
+  return found.map((a) => (names[a.id] ? { ...a, name: names[a.id], autoName: a.name } : a));
+}
+
+// Rename an agent; an empty name goes back to the generated one. Links keep the new name too.
+export function renameAgent(agent, name) {
+  name = String(name ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 48);
+  const others = listAgents().filter((a) => a.id !== agent.id);
+  if (name && others.some((a) => a.name.toLowerCase() === name.toLowerCase())) throw new Error(`another agent is already called "${name}"`);
+  const names = readJSON(FILES.names, {});
+  if (name) names[agent.id] = name; else delete names[agent.id];
+  writeJSON(FILES.names, names);
+  const shown = name || agent.autoName || agent.name;
+  const edges = readJSON(FILES.edges, []);
+  let touched = false;
+  for (const e of edges) {
+    if (e.from === agent.id) { e.fromName = shown; touched = true; }
+    if (e.to === agent.id) { e.toName = shown; touched = true; }
+  }
+  if (touched) writeJSON(FILES.edges, edges);
+  return { id: agent.id, name: shown };
 }
 
 // Find which agent a process belongs to by walking up its parents (used by the MCP server).

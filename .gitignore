@@ -3,3 +3,6 @@ promo/out/
 .DS_Store
 *.log
 .claude-plugin/types/
+promo/public/footage/
+promo/public/music/
+promo/public/render/

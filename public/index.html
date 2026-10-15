@@ -95,6 +95,10 @@
   .panel .cwd { margin-top: 10px; font: 11px var(--mono); color: var(--ink-3); word-break: break-all; }
   .panel .meta { margin-top: 12px; display: flex; gap: 4px; flex-wrap: wrap; }
   .tag { font-size: 10.5px; text-transform: uppercase; padding: 2px 7px; border: 1px solid var(--rule); color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
+  .panel input.rename { flex: 1; min-width: 0; font: 300 36px/.9 var(--display); text-transform: uppercase; color: var(--ink); background: none; border: 0; border-bottom: 1px solid var(--ink); outline: 0; padding: 0 0 2px; }
+  .panel h2 .nm { cursor: text; }
+  .tag.ren { cursor: pointer; background: none; font-family: var(--mono); }
+  .tag.ren:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
   .close { position: absolute; top: 14px; right: 14px; width: 28px; height: 28px; border: 1px solid var(--rule); background: none; cursor: pointer; font-size: 15px; line-height: 1; transition: background-color .15s ease-out, color .15s ease-out; }
   .close:hover { background: var(--ink); color: var(--paper); }
   .panel section { padding: 14px 18px 6px; border-bottom: 1px solid var(--rule); }
@@ -500,7 +504,11 @@ cv.addEventListener('wheel', (ev) => {
   const wx = (ev.clientX - cam.tx) / cam.tk, wy = (ev.clientY - cam.ty) / cam.tk;
   cam.tk = k; cam.tx = ev.clientX - wx * k; cam.ty = ev.clientY - wy * k;
 }, { passive: false });
-cv.addEventListener('dblclick', (ev) => { const w = toWorld(ev.clientX, ev.clientY); if (!hitTest(w.x, w.y)) fit(); });
+cv.addEventListener('dblclick', (ev) => {
+  const w = toWorld(ev.clientX, ev.clientY), h = hitTest(w.x, w.y);
+  if (!h) return fit();
+  if (h.type === 'node') { selected = { type: 'node', id: h.id }; renderPanel(true).then(startRename); revealSelected(); }
+});
 addEventListener('keydown', (ev) => {
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'f') { ev.preventDefault(); $('q').focus(); $('q').select(); return; }
   if (ev.target.tagName === 'INPUT') return;
@@ -661,6 +669,7 @@ const panel = $('panel');
 function closePanel() { panel.classList.remove('open'); }
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 async function renderPanel(fetchFeed) {
+  if (panel.querySelector('input.rename')) return; // don't wipe a rename in progress
   const n = agents.get(selected?.id); if (!n) return closePanel();
   const a = n.a, shade = cssShade(shadeOf(n));
   const inc = edges.filter((e) => e.to === a.id && agents.has(e.from));
@@ -673,7 +682,7 @@ async function renderPanel(fetchFeed) {
   panel.dataset.id = a.id;
   panel.innerHTML = `
     <header>
-      <h2><span class="orb" style="${shade}"></span>${esc(a.name)}</h2>
+      <h2><span class="orb" style="${shade}"></span><span class="nm" id="pName" title="Double-click to rename">${esc(a.name)}</span></h2>
       <div class="cwd">${esc(a.cwd)}</div>
       <div class="meta">
         <span class="tag">${esc(a.kind)}</span>
@@ -681,6 +690,7 @@ async function renderPanel(fetchFeed) {
         <span class="tag">active ${ago(a.lastActivity)}</span>
         <span class="tag"><span class="sq" style="${shade}"></span>${esc(a.project)}</span>
         <span class="tag">pid ${a.pid}</span>
+        <button class="tag ren" id="renP" type="button">rename</button>
       </div>
       <button class="close" id="closeP" aria-label="Close">×</button>
     </header>
@@ -689,6 +699,8 @@ async function renderPanel(fetchFeed) {
     ${keepFeed}`;
   panel.classList.add('open');
   $('closeP').onclick = () => { selected = null; closePanel(); };
+  $('renP').onclick = startRename;
+  $('pName').ondblclick = startRename;
   panel.querySelectorAll('[data-rm]').forEach((b) => (b.onclick = () => removeEdge(b.dataset.rm)));
   panel.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => { selected = { type: 'node', id: b.dataset.go }; renderPanel(true); revealSelected(); }));
   if (fetchFeed) {
@@ -704,6 +716,31 @@ async function renderPanel(fetchFeed) {
   }
 }
 setInterval(() => { if (selected?.type === 'node' && panel.classList.contains('open') && !panel.matches(':hover')) renderPanel(true); }, 5000);
+
+// ---------- rename ----------
+// the panel title turns into an input: Enter saves, Escape cancels, an empty name resets
+function startRename() {
+  const n = agents.get(selected?.id), title = $('pName');
+  if (!n || !title) return;
+  const input = document.createElement('input');
+  input.className = 'rename'; input.value = n.a.name; input.maxLength = 48; input.spellcheck = false;
+  title.replaceWith(input); input.focus(); input.select();
+  let done = false;
+  const finish = async (save) => {
+    if (done) return; done = true;
+    const name = input.value.trim();
+    input.remove();
+    if (save && name !== n.a.name) {
+      const r = await fetch(`/api/agents/${n.a.id}/name`, { method: 'POST', body: JSON.stringify({ name }) });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) toast(out.error || 'Could not rename');
+      else { n.a.name = out.name; toast(name ? `Renamed to ${out.name}` : `Back to ${out.name}`); }
+    }
+    renderPanel(false);
+  };
+  input.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Enter') finish(true); if (ev.key === 'Escape') finish(false); });
+  input.addEventListener('blur', () => finish(true));
+}
 
 // ---------- render ----------
 // nodes are squares: a filled body in the project colour, an outline that pulses outward,

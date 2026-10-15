@@ -5,7 +5,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { exec } from 'node:child_process';
-import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, projectOf, colorOf } from './lib.mjs';
+import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, projectOf, colorOf, renameAgent } from './lib.mjs';
 import { createEdge, removeEdge } from './ops.mjs';
 
 const PORT = Number(process.env.PORT || 4747);
@@ -132,6 +132,17 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/layout' && req.method === 'POST') {
     writeJSON(FILES.layout, { ...readJSON(FILES.layout, {}), ...(await body(req)) });
     return json(res, 200, { ok: true });
+  }
+  const ren = p.match(/^\/api\/agents\/([\w-]+)\/name$/);
+  if (ren && req.method === 'POST') {
+    const a = agents().find((x) => x.id === ren[1]);
+    if (!a) return json(res, 404, { error: 'gone' });
+    try {
+      const out = renameAgent(a, (await body(req)).name);
+      lastSig = '';
+      broadcast('state', state());
+      return json(res, 200, out);
+    } catch (e) { return json(res, 409, { error: e.message }); }
   }
   const recent = p.match(/^\/api\/agents\/([\w-]+)\/recent$/);
   if (recent) {

@@ -127,6 +127,7 @@ synapse link codex-api              # link both ways (--in / --out for one direc
 synapse read codex-api              # their latest conversation
 synapse send codex-api "Did the rate limiter land? I'm about to touch auth."
 synapse inbox                       # what other agents sent me
+synapse rename "auth refactor"     # rename yourself (or: synapse rename <agent> <name>)
 synapse ui                          # start the canvas
 ```
 
@@ -142,6 +143,7 @@ Code and Codex, so you can just say *"connect to the codex agent and ask what it
 | drag a node | move it (saved) |
 | drag a project frame | move the whole project; other frames step aside so they never overlap |
 | click a node | details, links, messages, recent activity |
+| double-click a node (or **rename** in its panel) | rename it. Empty name goes back to the generated one |
 | hover a link, click × (or select it and press ⌫) | remove the link |
 | scroll, drag the background | zoom, pan |
 | F, or double-click the background | fit everything on screen |
