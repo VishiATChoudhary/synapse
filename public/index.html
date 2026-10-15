@@ -1,174 +1,192 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="signal">
 <head>
 <meta charset="utf-8">
+<script>document.documentElement.dataset.theme = localStorage.getItem('synapse-mode') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'signal');</script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Synapse</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='11' fill='%236C7CFF'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2316130F'/%3E%3Crect x='5' y='17' width='9' height='9' fill='%23F1EFE9'/%3E%3Crect x='18' y='6' width='9' height='9' fill='%23FF4400'/%3E%3Cpath d='M14 19 18 14' stroke='%23F1EFE9' stroke-width='2'/%3E%3C/svg%3E">
 <style>
+  @font-face { font-family: 'Big Shoulders Display'; src: url(/fonts/big-shoulders-display.woff2) format('woff2'); font-weight: 200 500; font-display: swap; }
+  @font-face { font-family: 'Fragment Mono'; src: url(/fonts/fragment-mono.woff2) format('woff2'); font-weight: 400; font-display: swap; }
+  @font-face { font-family: 'Geist'; src: url(/fonts/geist.woff2) format('woff2'); font-weight: 400; font-display: swap; }
+
+  /* same system as the landing page: one ink on paper, orange marks live state */
+  :root, [data-theme="signal"] { --paper: #F1EFE9; --ink: #16130F; --sig: #FF4400; --on-ink: #F1EFE9; --blend: multiply; --grain: .2; }
+  [data-theme="night"] { --paper: #0B0B0B; --ink: #EDEDEA; --sig: #FF5A1F; --on-ink: #0B0B0B; --blend: overlay; --grain: .12; }
   :root {
-    --bg: #07080c;
-    --ink: #e9ecf3;
-    --muted: #7d8496;
-    --faint: #474d5c;
-    --line: rgba(255,255,255,.07);
-    --glass: #10121a;
-    --sans: -apple-system, "SF Pro Display", "Inter", system-ui, sans-serif;
-    --mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
-    --ease: cubic-bezier(.22,1,.36,1);
+    --ink-2: color-mix(in srgb, var(--ink) 62%, var(--paper));
+    --ink-3: color-mix(in srgb, var(--ink) 40%, var(--paper));
+    --rule: color-mix(in srgb, var(--ink) 18%, var(--paper));
+    --wash: color-mix(in srgb, var(--ink) 5%, var(--paper));
+    --display: 'Big Shoulders Display', 'Arial Narrow', sans-serif;
+    --mono: 'Fragment Mono', ui-monospace, Menlo, monospace;
+    --sans: 'Geist', system-ui, sans-serif;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper); color: var(--ink); font: 400 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  ::selection { background: var(--ink); color: var(--paper); }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  button { font: inherit; color: inherit; }
+  .lbl, kbd, .bar, .hints, .legend, .tag, .toast { font-family: var(--mono); }
 
-  .brand { position: fixed; top: 22px; left: 26px; display: flex; align-items: center; gap: 12px; user-select: none; }
-  .brand .mark { width: 22px; height: 22px; border-radius: 50%; position: relative;
-    background: #6C7CFF; animation: breathe 3.6s ease-in-out infinite; }
-  .brand .mark::after { content: ""; position: absolute; inset: -5px; border-radius: 50%; border: 1.5px solid #6C7CFF;
-    animation: ripple 3.6s ease-out infinite; }
-  @keyframes ripple { from { transform: scale(.7); opacity: .8; } to { transform: scale(1.5); opacity: 0; } }
-  .brand h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .02em; }
-  .brand span { color: var(--muted); font-size: 12px; font-family: var(--mono); }
-  @keyframes breathe { 50% { transform: scale(.88); } }
+  /* top bar */
+  .bar { position: fixed; top: 0; left: 0; right: 0; height: 48px; z-index: 6; display: flex; align-items: stretch; background: var(--paper); border-bottom: 1px solid var(--rule); font-size: 11px; text-transform: uppercase; }
+  .bar > * { display: flex; align-items: center; border-right: 1px solid var(--rule); }
+  .brand { gap: 10px; padding: 0 18px; user-select: none; }
+  .brand b { font: 500 24px/1 var(--display); letter-spacing: .02em; }
+  .brand span { color: var(--ink-3); }
+  .stats { margin-left: auto; border-left: 1px solid var(--rule); }
+  .stat { display: flex; align-items: center; gap: 8px; height: 100%; padding: 0 14px; border-right: 1px solid var(--rule); color: var(--ink-2); }
+  .stat:last-child { border-right: 0; }
+  .stat b { font-weight: 400; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .sq { width: 7px; height: 7px; border: 1px solid var(--ink-2); flex: none; }
+  .sq.busy { background: var(--sig); border-color: var(--sig); }
+  .mode { width: 48px; justify-content: center; background: none; border: 0; cursor: pointer; font-size: 14px; border-right: 0 !important; }
+  .mode:hover { background: var(--wash); }
+  kbd { font-size: 10.5px; color: var(--ink-2); padding: 1px 5px; border: 1px solid var(--rule); margin-right: 5px; }
 
-  .stats { position: fixed; top: 20px; right: 24px; display: flex; gap: 8px; }
-  .pill { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; border-radius: 999px;
-    background: var(--glass); border: 1px solid var(--line);
-    font-size: 12px; color: var(--muted); }
-  .pill b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; }
-  .dot.busy { background: #2EC4A0; animation: blink 1.2s ease-in-out infinite; }
-  .dot.idle { background: #6b7183; }
-  @keyframes blink { 50% { opacity: .35; } }
+  /* search */
+  .search { position: relative; width: 380px; padding: 0 10px; }
+  .search .box { display: flex; align-items: center; gap: 9px; width: 100%; height: 30px; padding: 0 8px 0 10px; border: 1px solid var(--rule); color: var(--ink-3); transition: border-color .15s ease-out; }
+  .search .box:focus-within { border-color: var(--ink); }
+  .search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--ink); font: 12px var(--mono); }
+  .search input::placeholder { color: var(--ink-3); text-transform: uppercase; }
+  .search kbd { margin: 0; }
+  .results { position: absolute; top: 44px; left: 10px; right: 10px; background: var(--paper); border: 1px solid var(--ink); text-transform: none;
+    opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity .15s ease-out, transform .15s ease-out; }
+  .search.open .results { opacity: 1; transform: none; pointer-events: auto; }
+  .res { display: flex; align-items: center; gap: 10px; padding: 8px 10px; cursor: pointer; font: 13px var(--sans); border-top: 1px solid var(--rule); }
+  .res:first-child { border-top: 0; }
+  .res.on { background: var(--ink); color: var(--paper); }
+  .res .sw { width: 9px; height: 9px; flex: none; }
+  .res .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .res .meta { margin-left: auto; font: 10.5px var(--mono); color: var(--ink-3); white-space: nowrap; text-transform: uppercase; }
+  .res.on .meta { color: inherit; opacity: .6; }
+  .res mark { background: none; color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+  .res.none { color: var(--ink-3); cursor: default; }
 
-  .hints { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); display: flex; gap: 18px;
-    padding: 9px 16px; border-radius: 12px; background: var(--glass); border: 1px solid var(--line);
-    font-size: 12px; color: var(--muted); white-space: nowrap; user-select: none;
-    transition: opacity .4s var(--ease); }
-  kbd { font-family: var(--mono); font-size: 10.5px; color: var(--ink); padding: 2px 6px; border-radius: 5px;
-    background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08); margin-right: 4px; }
+  .hints { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; background: var(--paper); border: 1px solid var(--rule);
+    font-size: 10.5px; text-transform: uppercase; color: var(--ink-2); white-space: nowrap; user-select: none; }
+  .hints span { padding: 7px 12px; border-right: 1px solid var(--rule); }
+  .hints span:last-child { border-right: 0; }
 
-  .empty { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; text-align: center;
-    color: var(--muted); font-size: 14px; opacity: 0; transition: opacity .6s var(--ease); }
+  .empty { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; text-align: center; opacity: 0; transition: opacity .3s ease-out; }
   .empty.show { opacity: 1; }
+  .empty h2 { margin: 0; font: 200 clamp(64px, 10vw, 140px)/.85 var(--display); text-transform: uppercase; }
+  .empty p { margin: 18px 0 0; color: var(--ink-2); }
   .empty code { font-family: var(--mono); color: var(--ink); }
 
-  /* Side panel */
-  .panel { position: fixed; top: 66px; right: 16px; bottom: 16px; width: 360px; border-radius: 18px;
-    background: var(--glass); border: 1px solid var(--line);
-    display: flex; flex-direction: column; overflow: hidden;
-    transform: translateX(calc(100% + 30px)); transition: transform .5s var(--ease); }
-  .panel.open { transform: none; }
-  .panel header { padding: 20px 20px 16px; border-bottom: 1px solid var(--line); position: relative; }
-  .panel .orb { width: 14px; height: 14px; border-radius: 50%; display: inline-block; vertical-align: -1px; margin-right: 9px; }
-  .panel h2 { margin: 0; font-size: 17px; font-weight: 600; display: flex; align-items: center; }
-  .panel .cwd { margin-top: 8px; font: 11.5px var(--mono); color: var(--muted); word-break: break-all; }
-  .panel .meta { margin-top: 12px; display: flex; gap: 6px; flex-wrap: wrap; }
-  .tag { font-size: 11px; padding: 3px 9px; border-radius: 999px; background: rgba(255,255,255,.05); color: var(--muted); border: 1px solid var(--line); display: inline-flex; align-items: center; gap: 6px; }
-  .close { position: absolute; top: 16px; right: 16px; width: 28px; height: 28px; border-radius: 8px; border: 0;
-    background: transparent; color: var(--muted); font-size: 18px; cursor: pointer; transition: background .2s, color .2s; }
-  .close:hover { background: rgba(255,255,255,.07); color: var(--ink); }
-  .panel section { padding: 16px 20px 6px; }
-  .panel h3 { margin: 0 0 10px; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
-  .link { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin: 0 -10px; border-radius: 10px; font-size: 13px; transition: background .2s; }
-  .link:hover { background: rgba(255,255,255,.04); }
-  .link .arrow { color: var(--faint); font-family: var(--mono); font-size: 12px; }
-  .link .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-  .link button { border: 0; background: transparent; color: var(--faint); cursor: pointer; font-size: 12px; padding: 4px 6px; border-radius: 6px; opacity: 0; transition: opacity .2s, color .2s, background .2s; }
-  .link:hover button { opacity: 1; }
-  .link button:hover { color: #ff7b8a; background: rgba(255,90,110,.1); }
-  .none { font-size: 12.5px; color: var(--faint); padding-bottom: 6px; }
-  .feed { flex: 1; overflow-y: auto; padding: 4px 20px 20px; mask-image: linear-gradient(transparent, #000 18px); }
-  .feed::-webkit-scrollbar { width: 0; }
-  .msg { padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,.04); font-size: 12.5px; line-height: 1.5; color: #c3c8d4;
-    animation: rise .5s var(--ease) both; word-break: break-word; }
-  .msg.tool { white-space: pre-wrap; }
-  .msg .who { display: block; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin-bottom: 3px; font-weight: 600; }
-  .msg.user .who { color: #8ea0ff; }
-  .msg.tool { color: var(--muted); font: 11.5px var(--mono); }
-  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  .legend { position: fixed; left: 16px; bottom: 16px; min-width: 180px; max-height: 45vh; overflow: hidden; background: var(--paper); border: 1px solid var(--rule); user-select: none; }
+  .legend .head { padding: 7px 10px; font-size: 10.5px; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--rule); }
+  .legend .item { display: flex; align-items: center; gap: 9px; padding: 5px 10px; font-size: 11.5px; color: var(--ink-2); }
+  .legend .item:hover { color: var(--ink); background: var(--wash); }
+  .legend .sw { width: 9px; height: 9px; flex: none; }
+  .legend .n { margin-left: auto; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
-  .legend { position: fixed; left: 24px; bottom: 22px; display: flex; flex-direction: column; gap: 7px; user-select: none; max-height: 50vh; overflow: hidden; }
-  .legend .item { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--muted); cursor: default; transition: color .2s; }
-  .legend .item:hover { color: var(--ink); }
-  .legend .sw { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-  .legend .n { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
-  /* search */
-  .search { position: fixed; top: 17px; left: 50%; transform: translateX(-50%); width: 400px; z-index: 5; }
-  .search .box { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 8px 0 12px; border-radius: 11px;
-    background: var(--glass); border: 1px solid var(--line); color: var(--muted); transition: border-color .2s; }
-  .search .box:focus-within { border-color: rgba(108,124,255,.7); }
-  .search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--ink); font: 13px var(--sans); }
-  .search input::placeholder { color: var(--faint); }
-  .search kbd { margin: 0; }
-  .results { margin-top: 6px; padding: 5px; border-radius: 12px; background: var(--glass); border: 1px solid var(--line);
-    opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity .18s var(--ease), transform .18s var(--ease); }
-  .search.open .results { opacity: 1; transform: none; pointer-events: auto; }
-  .res { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; color: #c9cdd8; }
-  .res.on { background: rgba(255,255,255,.06); color: #fff; }
-  .res .sw { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-  .res .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .res .meta { margin-left: auto; font: 11px var(--mono); color: var(--faint); white-space: nowrap; }
-  .res mark { background: none; color: #fff; font-weight: 600; text-decoration: underline 1.5px rgba(108,124,255,.9); text-underline-offset: 3px; }
-  .res.none { color: var(--faint); cursor: default; }
+  /* side panel */
+  .panel { position: fixed; top: 48px; right: 0; bottom: 0; width: 380px; background: var(--paper); border-left: 1px solid var(--rule);
+    display: flex; flex-direction: column; overflow: hidden; transform: translateX(100%); transition: transform .2s ease-out; z-index: 5; }
+  .panel.open { transform: none; }
+  .panel header { padding: 18px 18px 16px; border-bottom: 1px solid var(--rule); position: relative; }
+  .panel .orb { width: 12px; height: 12px; display: inline-block; flex: none; }
+  .panel h2 { margin: 0; display: flex; align-items: center; gap: 10px; font: 300 36px/.9 var(--display); text-transform: uppercase; padding-right: 30px; word-break: break-all; }
+  .panel .cwd { margin-top: 10px; font: 11px var(--mono); color: var(--ink-3); word-break: break-all; }
+  .panel .meta { margin-top: 12px; display: flex; gap: 4px; flex-wrap: wrap; }
+  .tag { font-size: 10.5px; text-transform: uppercase; padding: 2px 7px; border: 1px solid var(--rule); color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
+  .close { position: absolute; top: 14px; right: 14px; width: 28px; height: 28px; border: 1px solid var(--rule); background: none; cursor: pointer; font-size: 15px; line-height: 1; transition: background-color .15s ease-out, color .15s ease-out; }
+  .close:hover { background: var(--ink); color: var(--paper); }
+  .panel section { padding: 14px 18px 6px; border-bottom: 1px solid var(--rule); }
+  .panel h3, .feed h3 { margin: 0 0 8px; font: 10.5px var(--mono); text-transform: uppercase; color: var(--ink-3); font-weight: 400; }
+  .link { display: flex; align-items: center; gap: 9px; padding: 6px 8px; margin: 0 -8px; font-size: 13px; }
+  .link:hover { background: var(--wash); }
+  .link .arrow { color: var(--ink-3); font: 12px var(--mono); }
+  .link .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .link button { border: 1px solid var(--rule); background: none; cursor: pointer; font: 10px var(--mono); text-transform: uppercase; padding: 2px 6px; opacity: 0; transition: opacity .15s ease-out; }
+  .link:hover button { opacity: 1; }
+  .link button:hover { background: var(--sig); border-color: var(--sig); color: #fff; }
+  .none { font-size: 12.5px; color: var(--ink-3); padding-bottom: 8px; }
+  .feed { flex: 1; overflow-y: auto; padding: 14px 18px 20px; }
+  .feed::-webkit-scrollbar { width: 0; }
+  .feed h3 { margin-top: 6px; }
+  .msg { padding: 10px 0; border-top: 1px solid var(--rule); font-size: 12.5px; line-height: 1.55; color: var(--ink-2); animation: rise .25s ease-out both; word-break: break-word; }
+  .msg.tool { white-space: pre-wrap; color: var(--ink-3); font: 11px var(--mono); }
+  .msg .who { display: block; font: 10px var(--mono); text-transform: uppercase; color: var(--ink-3); margin-bottom: 3px; }
+  .msg.user .who { color: var(--sig); }
+  .msg.assistant { color: var(--ink); }
+  @keyframes rise { from { opacity: 0; transform: translateY(4px); } }
 
   /* markdown */
   .md { white-space: normal; }
   .md p { margin: 0 0 7px; }
   .md p:last-child, .md ul:last-child, .md ol:last-child, .md pre:last-child { margin-bottom: 0; }
-  .md h4 { margin: 10px 0 5px; font-size: 13px; font-weight: 600; color: var(--ink); }
+  .md h4 { margin: 10px 0 5px; font: 400 13px var(--sans); color: var(--ink); text-transform: uppercase; letter-spacing: .02em; }
   .md h4:first-child { margin-top: 0; }
   .md ul, .md ol { margin: 3px 0 7px; padding-left: 18px; }
   .md li { margin: 2px 0; }
-  .md li::marker { color: var(--faint); }
-  .md strong { color: var(--ink); font-weight: 600; }
-  .md code { font: 11.5px var(--mono); background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: 4px; color: #dfe3ee; }
-  .md pre { margin: 6px 0 8px; padding: 10px 12px; border-radius: 8px; background: #0a0b10; border: 1px solid var(--line); overflow-x: auto; }
+  .md li::marker { color: var(--ink-3); }
+  .md strong { color: var(--ink); font-weight: 400; text-decoration: underline; text-decoration-color: var(--rule); text-underline-offset: 3px; }
+  .md code { font: 11.5px var(--mono); background: var(--wash); padding: 0 4px; border: 1px solid var(--rule); color: var(--ink); }
+  .md pre { margin: 6px 0 8px; padding: 10px 12px; background: var(--wash); border: 1px solid var(--rule); overflow-x: auto; }
   .md pre::-webkit-scrollbar { height: 6px; }
-  .md pre::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 3px; }
-  .md pre::-webkit-scrollbar-track { background: transparent; }
-  .md pre code { background: none; padding: 0; font-size: 11px; line-height: 1.55; white-space: pre; }
-  .md a { color: #8ea0ff; text-decoration: none; }
-  .md a:hover { text-decoration: underline; }
-  .md .fl { color: #8ea0ff; font-family: var(--mono); font-size: 11.5px; }
-  .md blockquote { margin: 4px 0 7px; padding-left: 10px; border-left: 2px solid rgba(255,255,255,.12); color: var(--muted); }
-  .md hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
-  .feed h3 { margin: 16px 0 6px; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
-  .bubble { margin: 7px 0; padding: 9px 12px; border-radius: 12px; background: #181b25; font-size: 12.5px; line-height: 1.5; color: #cfd3dd; animation: rise .4s var(--ease) both; }
-  .bubble.out { margin-left: 26px; background: rgba(108,124,255,.13); }
+  .md pre::-webkit-scrollbar-thumb { background: var(--rule); }
+  .md pre code { background: none; border: 0; padding: 0; font-size: 11px; line-height: 1.55; white-space: pre; }
+  .md a, .md .fl { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+  .md .fl { font: 11.5px var(--mono); }
+  .md blockquote { margin: 4px 0 7px; padding-left: 10px; border-left: 2px solid var(--rule); color: var(--ink-2); }
+  .md hr { border: 0; border-top: 1px solid var(--rule); margin: 10px 0; }
+  .bubble { margin: 6px 0; padding: 8px 11px; border: 1px solid var(--rule); font-size: 12.5px; line-height: 1.5; animation: rise .25s ease-out both; }
+  .bubble.out { margin-left: 26px; border-color: var(--ink); }
   .bubble.in { margin-right: 26px; }
-  .bubble .who { display: block; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin-bottom: 3px; font-weight: 600; }
-  .toast { position: fixed; bottom: 76px; left: 50%; transform: translate(-50%, 12px); opacity: 0; pointer-events: none;
-    padding: 9px 16px; border-radius: 11px; background: #181b25; border: 1px solid var(--line);
-    font-size: 12.5px; transition: all .4s var(--ease); }
+  .bubble .who { display: block; font: 10px var(--mono); text-transform: uppercase; color: var(--ink-3); margin-bottom: 3px; }
+
+  .toast { position: fixed; bottom: 58px; left: 50%; transform: translate(-50%, 8px); opacity: 0; pointer-events: none; z-index: 7;
+    padding: 8px 12px; background: var(--paper); border: 1px solid var(--ink); font-size: 12px; transition: opacity .2s ease-out, transform .2s ease-out; max-width: 70vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .toast b { color: var(--sig); font-weight: 400; }
+
+  .grain { position: fixed; inset: -50%; width: 200%; height: 200%; z-index: 20; pointer-events: none; opacity: var(--grain); mix-blend-mode: var(--blend);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .5 0 0 0 0 .5 0 0 0 0 .5 0 0 0 1.5 -.25'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    animation: grain .8s steps(5) infinite; }
+  @keyframes grain { 0%,100% { transform: translate(0,0); } 25% { transform: translate(-2%,3%); } 50% { transform: translate(3%,-2%); } 75% { transform: translate(-3%,-3%); } }
+  @media (max-width: 900px) { .brand span, .stat.idle, .stat.links { display: none; } .search { width: auto; flex: 1; } .hints { display: none; } }
+  @media (prefers-reduced-motion: reduce) { *, .grain { animation: none !important; transition: none !important; } }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<div class="grain" aria-hidden="true"></div>
 
-<div class="brand"><div class="mark"></div><h1>synapse</h1><span>agent context mesh</span></div>
-<div class="search" id="search">
-  <div class="box">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-    <input id="q" placeholder="Search agents, projects, folders" autocomplete="off" spellcheck="false">
-    <kbd>⌘F</kbd>
+<div class="bar">
+  <div class="brand">
+    <svg width="20" height="20" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.8" y="12.8" width="6.4" height="6.4"/><rect x="13.8" y="2.8" width="6.4" height="6.4" fill="var(--sig)" stroke="var(--sig)"/><path d="M8.2 12.8 13.8 9.2"/></svg>
+    <b>Synapse</b><span>agent context mesh</span>
   </div>
-  <div class="results" id="results"></div>
+  <div class="search" id="search">
+    <div class="box">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="q" placeholder="Search agents, projects, folders" autocomplete="off" spellcheck="false">
+      <kbd>⌘F</kbd>
+    </div>
+    <div class="results" id="results"></div>
+  </div>
+  <div class="stats">
+    <div class="stat"><span class="sq busy"></span><b id="nBusy">0</b> working</div>
+    <div class="stat idle"><span class="sq"></span><b id="nIdle">0</b> idle</div>
+    <div class="stat links"><b id="nEdges">0</b> links</div>
+  </div>
+  <button class="mode" id="mode" type="button" aria-label="Toggle dark mode"></button>
 </div>
-<div class="stats">
-  <div class="pill"><span class="dot busy"></span><b id="nBusy">0</b> working</div>
-  <div class="pill"><span class="dot idle"></span><b id="nIdle">0</b> idle</div>
-  <div class="pill"><b id="nEdges">0</b> links</div>
-</div>
-<div class="empty" id="empty"><div>No live agents yet.<br><br>Start a <code>claude</code> session and it will appear here.</div></div>
+<div class="empty" id="empty"><div><h2>No agents yet</h2><p>Start a <code>claude</code> or <code>codex</code> session and it shows up here.</p></div></div>
 <div class="hints" id="hints">
   <span><kbd>⌘F</kbd>search</span>
-  <span><kbd>drag ring</kbd>link agents</span>
+  <span><kbd>drag ring</kbd>link</span>
   <span><kbd>drag</kbd>move</span>
   <span><kbd>scroll</kbd>zoom</span>
   <span><kbd>F</kbd>fit</span>
-  <span><kbd>⌫</kbd>remove link</span>
+  <span><kbd>A</kbd>arrange</span>
+  <span><kbd>⌫</kbd>unlink</span>
 </div>
 <div class="legend" id="legend"></div>
 <aside class="panel" id="panel"></aside>
@@ -179,7 +197,7 @@ const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');
 const $ = (id) => document.getElementById(id);
 
-const R = 24;          // node core radius
+const R = 20;          // half the side of a node square
 const RING = 15;       // width of the "link from here" ring around a node
 let dpr = 1, W = 0, H = 0;
 const cam = { x: 0, y: 0, k: 1, tx: 0, ty: 0, tk: 1 };
@@ -197,7 +215,80 @@ let query = '', matches = null, resultIdx = 0;
 
 // ---------- helpers ----------
 function rgba(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }
-const BG = '#07080c';
+// theme tokens from CSS; signal = light, night = dark, following the system until you pick one
+const V = {};
+function readVars() { const cs = getComputedStyle(document.documentElement); for (const k of ['paper', 'ink', 'sig']) V[k] = cs.getPropertyValue('--' + k).trim(); patCache = {}; }
+// projects are told apart by shading, not colour: one ink, twelve textures.
+// The server still hands each project a stable palette slot; the slot picks the shade.
+const SHADES = ['solid', 'hatch', 'dots', 'open', 'cross', 'vlines', 'back', 'hlines', 'grid', 'dense', 'checker', 'heavy'];
+const SLOTS = ['#2F5BEA', '#E3A600', '#00A36C', '#E5458F', '#6F8F1F', '#7B4FD8', '#1D9BB0', '#C2410C', '#9C6B3C', '#0F766E', '#B0306A', '#64748B'];
+function preferredShade(n) {
+  const i = SLOTS.indexOf(String(n.color || '').toUpperCase());
+  if (i >= 0) return i;
+  let h = 0; for (const ch of n.a?.projectKey || '') h = (h * 31 + ch.charCodeAt(0)) | 0;
+  return Math.abs(h) % SHADES.length;
+}
+// projects on screen never share a shade: each keeps its stored slot if free, else takes the next free one
+let shadeMap = new Map();
+function assignShades() {
+  const live = new Map();
+  for (const n of agents.values()) if (!n.dying && n.a && !live.has(n.a.projectKey)) live.set(n.a.projectKey, preferredShade(n));
+  const next = new Map(), taken = new Set();
+  for (const [k, pref] of live) if (shadeMap.has(k) && !taken.has(shadeMap.get(k))) { next.set(k, shadeMap.get(k)); taken.add(shadeMap.get(k)); }
+  for (const [k, pref] of live) {
+    if (next.has(k)) continue;
+    let i = pref; for (let j = 0; j < SHADES.length && taken.has(i); j++) i = (pref + j + 1) % SHADES.length;
+    next.set(k, i); taken.add(i);
+  }
+  shadeMap = next;
+}
+function shadeOf(n) { return shadeMap.get(n.a?.projectKey) ?? preferredShade(n); }
+let patCache = {};
+function shadePattern(i) {
+  if (patCache[i]) return patCache[i];
+  const s = 8, t = document.createElement('canvas'); t.width = t.height = s * 2;
+  const c = t.getContext('2d'); c.scale(2, 2);
+  c.fillStyle = V.paper; c.fillRect(0, 0, s, s);
+  c.fillStyle = c.strokeStyle = V.ink; c.lineWidth = 1;
+  const line = (x1, y1, x2, y2) => { c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke(); };
+  const fwd = () => { line(0, s, s, 0); line(-s, s, s, -s); line(0, 2 * s, 2 * s, 0); };
+  const bwd = () => { line(0, 0, s, s); line(-s, 0, s, 2 * s); line(0, -s, 2 * s, s); };
+  switch (SHADES[i]) {
+    case 'solid': c.fillRect(0, 0, s, s); break;
+    case 'hatch': fwd(); break;
+    case 'back': bwd(); break;
+    case 'cross': fwd(); bwd(); break;
+    case 'heavy': c.lineWidth = 2.6; fwd(); break;
+    case 'dots': c.fillRect(1, 1, 2, 2); c.fillRect(5, 5, 2, 2); break;
+    case 'dense': for (let y = 0; y < s; y += 2.67) for (let x = 0; x < s; x += 2.67) c.fillRect(x, y, 1.4, 1.4); break;
+    case 'vlines': c.fillRect(0, 0, 1.4, s); c.fillRect(4, 0, 1.4, s); break;
+    case 'hlines': c.fillRect(0, 0, s, 1.4); c.fillRect(0, 4, s, 1.4); break;
+    case 'grid': c.fillRect(0, 0, s, 1); c.fillRect(0, 0, 1, s); break;
+    case 'checker': c.fillRect(0, 0, 4, 4); c.fillRect(4, 4, 4, 4); break;
+  }
+  const p = ctx.createPattern(t, 'repeat'); p.setTransform(new DOMMatrix().scale(0.5));
+  return (patCache[i] = p);
+}
+// the same twelve shades as CSS, for swatches in the legend, search results and panel
+function cssShade(i) {
+  const I = 'var(--ink)', rl = (deg, w = 1) => `repeating-linear-gradient(${deg}deg,${I} 0 ${w}px,transparent ${w}px 3.5px)`;
+  return 'border:1px solid var(--ink);background:' + ({
+    solid: I, open: 'none', hatch: rl(-45), back: rl(45), cross: `${rl(45)},${rl(-45)}`, heavy: rl(-45, 1.8),
+    vlines: rl(90), hlines: rl(0), dots: `radial-gradient(${I} .8px,transparent 1px) 0 0/3px 3px`,
+    dense: `radial-gradient(${I} .9px,transparent 1.1px) 0 0/2px 2px`,
+    grid: `linear-gradient(${I} 1px,transparent 1px) 0 0/4px 4px,linear-gradient(90deg,${I} 1px,transparent 1px) 0 0/4px 4px`,
+    checker: `conic-gradient(${I} 25%,transparent 0 50%,${I} 0 75%,transparent 0) 0 0/4px 4px`,
+  })[SHADES[i]];
+}
+
+readVars();
+(() => {
+  const btn = $('mode'), dark = matchMedia('(prefers-color-scheme: dark)');
+  const apply = (k) => { document.documentElement.dataset.theme = k; btn.textContent = k === 'night' ? '☀' : '☾'; readVars(); };
+  btn.onclick = () => { const k = document.documentElement.dataset.theme === 'night' ? 'signal' : 'night'; localStorage.setItem('synapse-mode', k); apply(k); };
+  dark.addEventListener('change', (e) => { if (!localStorage.getItem('synapse-mode')) apply(e.matches ? 'night' : 'signal'); });
+  apply(document.documentElement.dataset.theme);
+})();
 const short = (s, n = 26) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
 const lerp = (a, b, t) => a + (b - a) * t;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -214,8 +305,17 @@ function resize() {
 addEventListener('resize', resize); resize();
 
 // ---------- state sync ----------
-function spawnPoint(i) {
-  // golden-angle spiral around the visual centre, skipping occupied spots
+function spawnPoint(i, key) {
+  // next to agents of the same project if there are any, else a golden-angle spiral round the centre
+  const mates = [...agents.values()].filter((o) => !o.dying && o.a?.projectKey === key);
+  if (mates.length) {
+    const cx = mates.reduce((v, o) => v + o.x, 0) / mates.length, cy = mates.reduce((v, o) => v + o.y, 0) / mates.length;
+    for (let n = 0; n < 60; n++) {
+      const r = 140 + 30 * Math.floor(n / 8), t = n * 0.785;
+      const p = { x: cx + r * Math.cos(t), y: cy + r * Math.sin(t) };
+      if ([...agents.values()].every((o) => Math.hypot(o.x - p.x, o.y - p.y) > 130)) return p;
+    }
+  }
   const c = toWorld(W / 2, H / 2);
   for (let n = i; n < i + 200; n++) {
     const r = 150 * Math.sqrt(n + 0.5), t = n * 2.39996;
@@ -232,7 +332,7 @@ function applyState(s) {
     seen.add(a.id);
     let n = agents.get(a.id);
     if (!n) {
-      const p = layout[a.id] || spawnPoint(agents.size);
+      const p = layout[a.id] || spawnPoint(agents.size, a.projectKey);
       n = { x: p.x, y: p.y, vx: 0, vy: 0, born: performance.now(), color: a.color, phase: Math.random() * 6.28, dying: 0 };
       if (!layout[a.id]) setTimeout(() => agents.has(a.id) && saveLayout(a.id), 1500);
       agents.set(a.id, n);
@@ -240,6 +340,7 @@ function applyState(s) {
     n.a = a; n.color = a.color; n.dying = 0;
   });
   for (const [id, n] of agents) if (!seen.has(id) && !n.dying) n.dying = performance.now();
+  assignShades();
   edges = s.edges;
   const live = [...agents.values()].filter((n) => !n.dying);
   $('nBusy').textContent = live.filter((n) => n.a.status === 'busy').length;
@@ -254,7 +355,7 @@ const es = new EventSource('/api/events');
 let firstState = true;
 es.addEventListener('state', (ev) => {
   applyState(JSON.parse(ev.data));
-  if (firstState) { firstState = false; fit(true); }
+  if (firstState) { firstState = false; if (framesOverlap()) arrange(); fit(true); }
 });
 es.addEventListener('flow', (ev) => {
   const f = JSON.parse(ev.data);
@@ -314,7 +415,7 @@ function hitTest(wx, wy) {
   let best = null;
   for (const [id, n] of agents) {
     if (n.dying) continue;
-    const d = Math.hypot(n.x - wx, n.y - wy);
+    const d = Math.max(Math.abs(n.x - wx), Math.abs(n.y - wy));
     if (d <= R + 2) return { type: 'node', id };
     if (d <= R + RING + 4 && (!best || d < best.d)) best = { type: 'ring', id, d };
   }
@@ -396,6 +497,7 @@ addEventListener('keydown', (ev) => {
   if (ev.target.tagName === 'INPUT') return;
   if (ev.key === '/') { ev.preventDefault(); $('q').focus(); return; }
   if (ev.key === 'f' || ev.key === 'F') fit();
+  if (ev.key === 'a' || ev.key === 'A') { arrange(); toast('Arranged by project'); }
   if (ev.key === 'Escape') { selected = null; closePanel(); }
   if ((ev.key === 'Backspace' || ev.key === 'Delete') && selected?.type === 'edge') removeEdge(selected.id);
 });
@@ -410,9 +512,10 @@ function fit(instant) {
   if (!live.length) return;
   const xs = live.map((n) => n.x), ys = live.map((n) => n.y);
   const minX = Math.min(...xs) - 120, maxX = Math.max(...xs) + 120, minY = Math.min(...ys) - 110, maxY = Math.max(...ys) + 130;
-  const availW = W - (selected?.type === 'node' ? 390 : 0);
-  const k = clamp(Math.min(availW / (maxX - minX), (H - 140) / (maxY - minY)), 0.35, 1.25);
-  cam.tk = k; cam.tx = availW / 2 - ((minX + maxX) / 2) * k; cam.ty = H / 2 + 10 - ((minY + maxY) / 2) * k;
+  // leave room for the projects legend on the left and the panel on the right
+  const left = W > 900 ? 210 : 0, availW = W - left - (selected?.type === 'node' ? 390 : 0);
+  const k = clamp(Math.min(availW / (maxX - minX), (H - 160) / (maxY - minY)), 0.35, 1.25);
+  cam.tk = k; cam.tx = left + availW / 2 - ((minX + maxX) / 2) * k; cam.ty = H / 2 + 20 - ((minY + maxY) / 2) * k;
   if (instant) Object.assign(cam, { x: cam.tx, y: cam.ty, k: cam.tk });
 }
 
@@ -466,7 +569,7 @@ function runSearch() {
   $('search').classList.toggle('open', !!query.trim() && document.activeElement === $('q'));
   $('results').innerHTML = res.slice(0, 8).map((r, i) => `
     <div class="res ${i === resultIdx ? 'on' : ''}" data-id="${r.id}">
-      <span class="sw" style="background:${r.n.color}"></span>
+      <span class="sw" style="${cssShade(shadeOf(r.n))}"></span>
       <span class="nm">${highlight(r.n.a.name, r.idxAll.name || [])}</span>
       <span class="meta">${highlight(r.n.a.kind, r.idxAll.kind || [])} · ${highlight(short(r.n.a.project, 18), r.idxAll.project || [])}</span>
     </div>`).join('') || '<div class="res none">No agents match</div>';
@@ -537,11 +640,11 @@ function md(src) {
 function renderLegend(live) {
   const groups = new Map();
   for (const n of live) {
-    const g = groups.get(n.a.projectKey) || { label: n.a.project, color: n.color, n: 0 };
+    const g = groups.get(n.a.projectKey) || { label: n.a.project, shade: shadeOf(n), n: 0 };
     g.n++; groups.set(n.a.projectKey, g);
   }
-  $('legend').innerHTML = [...groups.values()].sort((a, b) => b.n - a.n).map((g) =>
-    `<div class="item"><span class="sw" style="background:${g.color}"></span>${esc(g.label)}<span class="n">${g.n}</span></div>`).join('');
+  $('legend').innerHTML = (groups.size ? '<div class="head">Projects</div>' : '') + [...groups.values()].sort((a, b) => b.n - a.n).map((g) =>
+    `<div class="item"><span class="sw" style="${cssShade(g.shade)}"></span>${esc(g.label)}<span class="n">${g.n}</span></div>`).join('');
 }
 
 // ---------- panel ----------
@@ -550,10 +653,10 @@ function closePanel() { panel.classList.remove('open'); }
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 async function renderPanel(fetchFeed) {
   const n = agents.get(selected?.id); if (!n) return closePanel();
-  const a = n.a, col = n.color;
+  const a = n.a, shade = cssShade(shadeOf(n));
   const inc = edges.filter((e) => e.to === a.id && agents.has(e.from));
   const out = edges.filter((e) => e.from === a.id && agents.has(e.to));
-  const row = (e, other, arrow) => `<div class="link"><span class="orb" style="background:${agents.get(other).color};width:9px;height:9px;margin:0"></span>
+  const row = (e, other, arrow) => `<div class="link"><span class="orb" style="${cssShade(shadeOf(agents.get(other)))};width:9px;height:9px;margin:0"></span>
       <span class="arrow">${arrow}</span><span class="name" data-go="${other}">${esc(agents.get(other).a.name)}</span>
       <button data-rm="${e.id}" title="Remove link">unlink</button></div>`;
   const feed = panel.querySelector('.feed');
@@ -561,16 +664,16 @@ async function renderPanel(fetchFeed) {
   panel.dataset.id = a.id;
   panel.innerHTML = `
     <header>
-      <h2><span class="orb" style="background:${col}"></span>${esc(a.name)}</h2>
+      <h2><span class="orb" style="${shade}"></span>${esc(a.name)}</h2>
       <div class="cwd">${esc(a.cwd)}</div>
       <div class="meta">
         <span class="tag">${esc(a.kind)}</span>
-        <span class="tag"><span class="dot ${a.status === 'busy' ? 'busy' : 'idle'}"></span>${a.status === 'busy' ? 'working' : 'idle'}</span>
+        <span class="tag"><span class="sq ${a.status === 'busy' ? 'busy' : ''}"></span>${a.status === 'busy' ? 'working' : 'idle'}</span>
         <span class="tag">active ${ago(a.lastActivity)}</span>
-        <span class="tag"><span class="dot" style="background:${col}"></span>${esc(a.project)}</span>
+        <span class="tag"><span class="sq" style="${shade}"></span>${esc(a.project)}</span>
         <span class="tag">pid ${a.pid}</span>
       </div>
-      <button class="close" id="closeP">×</button>
+      <button class="close" id="closeP" aria-label="Close">×</button>
     </header>
     <section><h3>Reads context from</h3>${inc.map((e) => row(e, e.from, '←')).join('') || '<div class="none">Nothing yet. Drag from another agent\'s ring onto this one.</div>'}</section>
     <section><h3>Shares context with</h3>${out.map((e) => row(e, e.to, '→')).join('') || '<div class="none">Not shared. Drag from this ring to another agent.</div>'}</section>
@@ -594,12 +697,21 @@ async function renderPanel(fetchFeed) {
 setInterval(() => { if (selected?.type === 'node' && panel.classList.contains('open') && !panel.matches(':hover')) renderPanel(true); }, 5000);
 
 // ---------- render ----------
+// nodes are squares: a filled body in the project colour, an outline that pulses outward,
+// and an orange tick running round the edge while the agent is working
+function lum(hex) { const n = parseInt(hex.slice(1), 16); return (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255; }
+function sqPath(r) { ctx.beginPath(); ctx.rect(-r, -r, r * 2, r * 2); }
+function knockout(text, x, y) { // label on a paper-coloured box so links never run through text
+  const w = ctx.measureText(text).width + 8;
+  ctx.fillStyle = V.paper; ctx.fillRect(x - w / 2, y - 8, w, 15);
+}
+
 function drawGrid() {
   const step = 32 * cam.k;
   if (step < 10) return;
   const ox = ((cam.x % step) + step) % step, oy = ((cam.y % step) + step) % step;
-  ctx.fillStyle = 'rgba(255,255,255,0.045)';
-  const s = Math.max(0.8, 1.1 * cam.k);
+  ctx.fillStyle = rgba(V.ink, 0.13);
+  const s = Math.max(1, 1.2 * cam.k);
   for (let x = ox; x < W; x += step) for (let y = oy; y < H; y += step) ctx.fillRect(x - s / 2, y - s / 2, s, s);
 }
 
@@ -609,19 +721,16 @@ function drawEdge(e, t) {
   const fb = g.b.dying ? 1 - clamp((t - g.b.dying) / 600, 0, 1) : 1;
   const fade = Math.min(fa, fb, ease(clamp((t - Math.max(g.a.born, g.b.born)) / 900, 0, 1)));
   if (fade <= 0) return;
-  if (matches && !(matches.has(e.from) && matches.has(e.to))) ctx.globalAlpha = 0.12; else ctx.globalAlpha = 1;
+  ctx.globalAlpha = matches && !(matches.has(e.from) && matches.has(e.to)) ? 0.12 : 1;
   const burst = flows.get(e.id) || 0;
   const hot = hover?.id === e.id || selected?.id === e.id;
-  const t0 = tAtDist(g, false, R + 7), t1 = tAtDist(g, true, R + 10);
+  const t0 = tAtDist(g, false, R + 8), t1 = tAtDist(g, true, R + 10);
   const p1 = qpt(g, t1);
 
-  const grad = ctx.createLinearGradient(g.a.x, g.a.y, g.b.x, g.b.y);
-  const al = clamp(0.5 + burst * 0.5 + (hot ? 0.4 : 0), 0, 1) * fade;
-  grad.addColorStop(0, rgba(g.a.color, al));
-  grad.addColorStop(1, rgba(g.b.color, al));
-  ctx.lineCap = 'round';
-  ctx.strokeStyle = grad;
-  ctx.lineWidth = 2 + burst * 1.5 + (hot ? 0.6 : 0);
+  const al = clamp(0.55 + burst * 0.45 + (hot ? 0.45 : 0), 0, 1) * fade;
+  ctx.lineCap = 'butt';
+  ctx.strokeStyle = burst > 0.05 ? rgba(V.sig, al) : rgba(V.ink, al);
+  ctx.lineWidth = 1.2 + burst * 1.3 + (hot ? 0.8 : 0);
   ctx.beginPath();
   for (let i = 0; i <= 40; i++) { const p = qpt(g, lerp(t0, t1, i / 40)); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); }
   ctx.stroke();
@@ -630,38 +739,31 @@ function drawEdge(e, t) {
   const pa = qpt(g, t1 - 0.02), ang = Math.atan2(p1.y - pa.y, p1.x - pa.x);
   ctx.save();
   ctx.translate(p1.x, p1.y); ctx.rotate(ang);
-  ctx.fillStyle = rgba(g.b.color, Math.min(1, al + 0.25));
-  ctx.beginPath(); ctx.moveTo(3, 0); ctx.lineTo(-8, -5); ctx.lineTo(-5.5, 0); ctx.lineTo(-8, 5); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.beginPath(); ctx.moveTo(3, 0); ctx.lineTo(-8, -5); ctx.lineTo(-8, 5); ctx.closePath(); ctx.fill();
   ctx.restore();
 
-  // packets travelling source -> target
+  // context travelling source -> target, as small squares in the source project's colour
   const speed = 0.00018 * (1 + burst * 5) * (300 / Math.max(160, g.len));
-  const count = 3;
-  for (let i = 0; i < count; i++) {
-    const u = (t * speed + i / count) % 1;
-    const p = qpt(g, lerp(t0, t1, u));
-    const life = Math.sin(u * Math.PI);
-    ctx.fillStyle = BG;
-    ctx.beginPath(); ctx.arc(p.x, p.y, 4.2 + burst * 1.5, 0, 6.283); ctx.fill();
-    ctx.fillStyle = rgba(u < 0.5 ? g.a.color : g.b.color, life * fade);
-    ctx.beginPath(); ctx.arc(p.x, p.y, 2.6 + burst * 1.5, 0, 6.283); ctx.fill();
+  for (let i = 0; i < 3; i++) {
+    const u = (t * speed + i / 3) % 1, p = qpt(g, lerp(t0, t1, u)), life = Math.sin(u * Math.PI), s = 3 + burst * 2;
+    ctx.fillStyle = V.paper; ctx.fillRect(p.x - s - 1.5, p.y - s - 1.5, (s + 1.5) * 2, (s + 1.5) * 2);
+    ctx.fillStyle = rgba(V.ink, life * fade); ctx.fillRect(p.x - s, p.y - s, s * 2, s * 2);
   }
 
-  // delete chip
+  // unlink chip
   if (hot) {
-    const m = qpt(g, 0.5), xh = hover?.type === 'x' && hover.id === e.id, s = 1 / cam.k;
-    ctx.fillStyle = xh ? '#FF5C7A' : '#181b25';
-    ctx.strokeStyle = xh ? '#FF5C7A' : 'rgba(255,255,255,.18)';
-    ctx.lineWidth = s;
-    ctx.beginPath(); ctx.arc(m.x, m.y, 10 * s, 0, 6.283); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 * s;
+    const m = qpt(g, 0.5), xh = hover?.type === 'x' && hover.id === e.id, s = 1 / cam.k, h = 10 * s;
+    ctx.fillStyle = xh ? V.sig : V.paper; ctx.fillRect(m.x - h, m.y - h, h * 2, h * 2);
+    ctx.strokeStyle = xh ? V.sig : V.ink; ctx.lineWidth = s; ctx.strokeRect(m.x - h, m.y - h, h * 2, h * 2);
+    ctx.strokeStyle = xh ? '#fff' : V.ink; ctx.lineWidth = 1.4 * s;
     const q = 3.5 * s;
     ctx.beginPath(); ctx.moveTo(m.x - q, m.y - q); ctx.lineTo(m.x + q, m.y + q); ctx.moveTo(m.x + q, m.y - q); ctx.lineTo(m.x - q, m.y + q); ctx.stroke();
   }
 }
 
 function drawNode(id, n, t) {
-  const a = n.a, c = n.color;
+  const a = n.a, c = V.ink;
   const appear = ease(clamp((t - n.born) / 700, 0, 1));
   const vanish = n.dying ? 1 - clamp((t - n.dying) / 600, 0, 1) : 1;
   const vis = appear * vanish;
@@ -674,78 +776,66 @@ function drawNode(id, n, t) {
 
   const period = busy ? 1500 : 4200;
   const ph = ((t + n.phase * 1000) % period) / period;
-  const breathe = 1 + Math.sin((t / period) * 6.283 + n.phase) * (busy ? 0.05 : 0.03);
-  const r = R * breathe * (0.6 + 0.4 * appear) * (isTarget ? 1.12 : 1);
+  const r = R * (0.6 + 0.4 * appear) * (isTarget ? 1.1 : 1);
 
-  const dim = matches && !matches.has(id) ? 0.14 : 1;
   ctx.save();
-  ctx.globalAlpha = vis * dim;
+  ctx.globalAlpha = vis * (matches && !matches.has(id) ? 0.14 : 1);
   ctx.translate(n.x, n.y);
 
   // arrival ping (message received / search focus)
   if (n.ping && t - n.ping < 900) {
-    const p = (t - n.ping) / 900;
-    ctx.strokeStyle = rgba(c, 1 - p); ctx.lineWidth = 3 * (1 - p) + 1;
-    ctx.beginPath(); ctx.arc(0, 0, r + 6 + ease(p) * 40, 0, 6.283); ctx.stroke();
+    const p = (t - n.ping) / 900, e = r + 6 + ease(p) * 34;
+    ctx.strokeStyle = rgba(V.sig, 1 - p); ctx.lineWidth = 2.5 * (1 - p) + 1; ctx.strokeRect(-e, -e, e * 2, e * 2);
   }
-  if (matches?.has(id)) {
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(0, 0, r + 4, 0, 6.283); ctx.stroke();
-  }
+  if (matches?.has(id)) { const e = r + 5; ctx.strokeStyle = V.ink; ctx.lineWidth = 1.5; ctx.strokeRect(-e, -e, e * 2, e * 2); }
 
-  // pulse rings
+  // pulse: square outlines expanding from the body
   const rings = busy ? 2 : 1;
   for (let i = 0; i < rings; i++) {
-    const p = (ph + i / rings) % 1;
-    ctx.strokeStyle = rgba(c, (1 - p) * (busy ? 0.55 : 0.25));
-    ctx.lineWidth = busy ? 2 : 1.5;
-    ctx.beginPath(); ctx.arc(0, 0, r + 4 + ease(p) * (busy ? 34 : 22), 0, 6.283); ctx.stroke();
+    const p = (ph + i / rings) % 1, e = r + 3 + ease(p) * (busy ? 26 : 16);
+    ctx.strokeStyle = rgba(c, (1 - p) * (busy ? 0.6 : 0.3)); ctx.lineWidth = 1;
+    ctx.strokeRect(-e, -e, e * 2, e * 2);
   }
 
-  // working: orbiting arc
-  if (busy) {
-    const s0 = t / 380;
-    ctx.strokeStyle = c; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.arc(0, 0, r + 6, s0, s0 + 1.2); ctx.stroke();
-  }
-
-  // link ring
+  // link ring: dashed square, solid while selected
   if (isHover || isSource || isTarget || isSel) {
+    const e = r + RING * 0.75;
     ctx.save();
-    ctx.rotate(t / 2400);
-    ctx.setLineDash(isSel && !isHover && !isTarget ? [] : [4, 5]);
-    ctx.strokeStyle = rgba(c, isTarget ? 1 : hover?.type === 'ring' && hover.id === id ? 0.9 : 0.5);
-    ctx.lineWidth = isTarget ? 2.5 : 1.5;
-    ctx.beginPath(); ctx.arc(0, 0, r + RING * 0.8, 0, 6.283); ctx.stroke();
+    ctx.setLineDash(isSel && !isHover && !isTarget ? [] : [4, 4]);
+    ctx.lineDashOffset = -t / 60;
+    ctx.strokeStyle = isTarget ? V.sig : rgba(V.ink, hover?.type === 'ring' && hover.id === id ? 1 : 0.6);
+    ctx.lineWidth = isTarget ? 2 : 1;
+    ctx.strokeRect(-e, -e, e * 2, e * 2);
     ctx.restore();
   }
 
-  // body: flat disk, lighter inner disk for depth without glow
-  ctx.fillStyle = c;
-  ctx.beginPath(); ctx.arc(0, 0, r, 0, 6.283); ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,.14)';
-  ctx.beginPath(); ctx.arc(0, 0, r * 0.62, 0, 6.283); ctx.fill();
+  // body
+  ctx.fillStyle = shadePattern(shadeOf(n)); sqPath(r); ctx.fill();
+  ctx.strokeStyle = V.ink; ctx.lineWidth = isSel ? 2 : 1; ctx.stroke();
 
-  ctx.fillStyle = 'rgba(8,9,14,.85)';
-  ctx.font = '700 11px -apple-system, "SF Pro Display", system-ui, sans-serif';
+  // working: a tick running round the frame
+  if (busy) {
+    const d = ((t / 1600 + n.phase) % 1) * 8 * r;
+    const pt = d < 2 * r ? [-r + d, -r] : d < 4 * r ? [r, -r + d - 2 * r] : d < 6 * r ? [r - (d - 4 * r), r] : [-r, r - (d - 6 * r)];
+    ctx.fillStyle = V.sig; ctx.fillRect(pt[0] - 3.5, pt[1] - 3.5, 7, 7);
+  }
+
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(initials(a.name), 0, 0.5);
 
-  // labels, knocked out of the background so links never run through text
-  ctx.lineJoin = 'round'; ctx.strokeStyle = BG; ctx.lineWidth = 5;
-  ctx.font = '500 13px -apple-system, "SF Pro Display", system-ui, sans-serif';
-  ctx.strokeText(short(a.name), 0, R + 27);
-  ctx.fillStyle = isSel || isHover ? '#fff' : 'rgba(233,236,243,.88)';
-  ctx.fillText(short(a.name), 0, R + 27);
-  ctx.font = '11px "SF Mono", ui-monospace, Menlo, monospace';
-  const sub = `${busy ? '●' : '○'} ${a.kind} · ${short(a.project, 22)}`;
-  ctx.strokeText(sub, 0, R + 44);
-  ctx.fillStyle = busy ? rgba(c, 0.95) : 'rgba(125,132,150,.9)';
-  ctx.fillText(sub, 0, R + 44);
+  // labels
+  ctx.font = '11.5px "Fragment Mono", ui-monospace, monospace';
+  const name = short(a.name).toUpperCase();
+  knockout(name, 0, R + 22);
+  ctx.fillStyle = V.ink; ctx.fillText(name, 0, R + 22);
+  ctx.font = '10px "Fragment Mono", ui-monospace, monospace';
+  const sub = `${busy ? '■' : '□'} ${a.kind} · ${short(a.project, 22)}`.toUpperCase();
+  knockout(sub, 0, R + 38);
+  ctx.fillStyle = busy ? V.sig : rgba(V.ink, 0.5);
+  ctx.fillText(sub, 0, R + 38);
   ctx.restore();
 }
 
-// messages travelling between agents
+// messages travelling between agents: a square with a short trail
 function drawPackets(t) {
   for (let i = packets.length - 1; i >= 0; i--) {
     const pk = packets[i], a = agents.get(pk.from), b = agents.get(pk.to);
@@ -756,17 +846,14 @@ function drawPackets(t) {
     }
     const e = edges.find((x) => (x.from === pk.from && x.to === pk.to) || (x.from === pk.to && x.to === pk.from));
     const g = e ? edgeGeom(e) : { a, b, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
-    const k = ease(u);
-    const tt = e && e.from !== pk.from ? 1 - k : k;
-    for (let j = 3; j >= 0; j--) {
-      const back = e && e.from !== pk.from ? tt + j * 0.025 : tt - j * 0.025;
-      const p = qpt(g, clamp(back, 0, 1));
-      ctx.fillStyle = j ? rgba(a.color, 0.5 - j * 0.12) : a.color;
-      ctx.beginPath(); ctx.arc(p.x, p.y, j ? 4 - j * 0.6 : 6, 0, 6.283); ctx.fill();
+    const k = ease(u), rev = e && e.from !== pk.from, tt = rev ? 1 - k : k;
+    for (let j = 3; j >= 1; j--) {
+      const p = qpt(g, clamp(rev ? tt + j * 0.025 : tt - j * 0.025, 0, 1)), s = 4 - j * 0.8;
+      ctx.fillStyle = rgba(V.sig, 0.55 - j * 0.13); ctx.fillRect(p.x - s, p.y - s, s * 2, s * 2);
     }
     const p = qpt(g, tt);
-    ctx.strokeStyle = BG; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, 6.283); ctx.stroke();
+    ctx.fillStyle = V.paper; ctx.fillRect(p.x - 7.5, p.y - 7.5, 15, 15);
+    ctx.fillStyle = V.sig; ctx.fillRect(p.x - 6, p.y - 6, 12, 12);
   }
 }
 
@@ -778,15 +865,78 @@ function drawLinkPreview(t) {
   const dx = ex - s.x, dy = ey - s.y, len = Math.hypot(dx, dy) || 1;
   g.cx = (s.x + ex) / 2 - dy / len * Math.min(60, len * 0.14);
   g.cy = (s.y + ey) / 2 + dx / len * Math.min(60, len * 0.14);
-  const t0 = tAtDist(g, false, R + 7);
+  const t0 = tAtDist(g, false, R + 8);
   ctx.save();
-  ctx.setLineDash([6, 7]); ctx.lineDashOffset = -t / 30;
-  ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.lineCap = 'round';
+  ctx.setLineDash([5, 5]); ctx.lineDashOffset = -t / 30;
+  ctx.strokeStyle = V.sig; ctx.lineWidth = 1.5;
   ctx.beginPath();
   for (let i = 0; i <= 40; i++) { const p = qpt(g, lerp(t0, tn ? tAtDist(g, true, R + 12) : 1, i / 40)); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); }
   ctx.stroke();
   ctx.restore();
-  if (!tn) { ctx.fillStyle = s.color; ctx.beginPath(); ctx.arc(ex, ey, 4, 0, 6.283); ctx.fill(); }
+  if (!tn) { ctx.fillStyle = V.sig; ctx.fillRect(ex - 4, ey - 4, 8, 8); }
+}
+
+// one hairline frame per project, drawn behind everything, labelled like a figure
+function projectGroups() {
+  const groups = new Map();
+  for (const [id, n] of agents) {
+    if (n.dying || !n.a) continue;
+    const g = groups.get(n.a.projectKey) || { label: n.a.project, shade: shadeOf(n), nodes: [] };
+    g.nodes.push([id, n]); groups.set(n.a.projectKey, g);
+  }
+  return groups;
+}
+function drawGroups() {
+  const s = 1 / cam.k;
+  for (const g of projectGroups().values()) {
+    const xs = g.nodes.map(([, n]) => n.x), ys = g.nodes.map(([, n]) => n.y);
+    const x0 = Math.min(...xs) - R - 62, x1 = Math.max(...xs) + R + 62, y0 = Math.min(...ys) - R - 30, y1 = Math.max(...ys) + R + 54;
+    const dim = matches && !g.nodes.some(([id]) => matches.has(id));
+    ctx.globalAlpha = dim ? 0.3 : 1;
+    ctx.fillStyle = rgba(V.ink, 0.025); ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.strokeStyle = rgba(V.ink, 0.28); ctx.lineWidth = s; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    // tab: shade swatch, project name, agent count
+    ctx.font = '10.5px "Fragment Mono", ui-monospace, monospace'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    const text = `${g.label.toUpperCase()}  ${g.nodes.length}`, tw = ctx.measureText(text).width + 30;
+    ctx.fillStyle = V.paper; ctx.fillRect(x0, y0 - 20, tw, 20);
+    ctx.strokeStyle = rgba(V.ink, 0.28); ctx.strokeRect(x0, y0 - 20, tw, 20);
+    ctx.fillStyle = shadePattern(g.shade); ctx.fillRect(x0 + 7, y0 - 14, 8, 8);
+    ctx.strokeStyle = V.ink; ctx.strokeRect(x0 + 7, y0 - 14, 8, 8);
+    ctx.fillStyle = V.ink; ctx.fillText(text, x0 + 21, y0 - 9.5);
+  }
+  ctx.globalAlpha = 1; ctx.textBaseline = 'alphabetic';
+}
+
+// ---------- arrange ----------
+// pack every project into its own block: agents on a small grid, blocks in rows, biggest first
+function groupRects() {
+  return [...projectGroups().values()].map((g) => {
+    const xs = g.nodes.map(([, n]) => n.x), ys = g.nodes.map(([, n]) => n.y);
+    return { x0: Math.min(...xs) - R - 62, x1: Math.max(...xs) + R + 62, y0: Math.min(...ys) - R - 50, y1: Math.max(...ys) + R + 54 };
+  });
+}
+function framesOverlap() {
+  const r = groupRects();
+  for (let i = 0; i < r.length; i++) for (let j = i + 1; j < r.length; j++)
+    if (r[i].x0 < r[j].x1 && r[j].x0 < r[i].x1 && r[i].y0 < r[j].y1 && r[j].y0 < r[i].y1) return true;
+  return false;
+}
+function arrange() {
+  const groups = [...projectGroups().values()].sort((a, b) => b.nodes.length - a.nodes.length);
+  if (!groups.length) return;
+  const CW = 230, CH = 150, GAP = 110;
+  const blocks = groups.map((g) => { const cols = Math.ceil(Math.sqrt(g.nodes.length)), rows = Math.ceil(g.nodes.length / cols); return { g, cols, w: cols * CW, h: rows * CH }; });
+  const rowW = Math.max(blocks[0].w, Math.sqrt(blocks.reduce((v, b) => v + (b.w + GAP) * (b.h + GAP), 0)) * 1.5);
+  let x = 0, y = 0, rowH = 0;
+  for (const b of blocks) {
+    if (x > 0 && x + b.w > rowW) { x = 0; y += rowH + GAP; rowH = 0; }
+    b.g.nodes.sort(([, p], [, q]) => p.a.name.localeCompare(q.a.name)).forEach(([, n], i) => {
+      n.goal = { x: x + (i % b.cols) * CW + CW / 2, y: y + Math.floor(i / b.cols) * CH + CH / 2 };
+    });
+    x += b.w + GAP; rowH = Math.max(rowH, b.h);
+  }
+  setTimeout(() => { for (const [id, n] of agents) if (!n.dying) saveLayout(id); fit(); }, 1400);
+  setTimeout(() => { for (const n of agents.values()) delete n.goal; }, 2000);
 }
 
 function physics() {
@@ -794,15 +944,23 @@ function physics() {
   const list = [...agents.entries()].filter(([, n]) => !n.dying);
   for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
     const [ia, a] = list[i], [ib, b] = list[j];
-    const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 0.01, min = 130;
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 0.01, min = a.a.projectKey === b.a.projectKey ? 165 : 270;
     if (d < min) {
       const f = (min - d) * 0.04, ux = dx / d, uy = dy / d;
       if (drag?.id !== ia) { a.vx -= ux * f; a.vy -= uy * f; }
       if (drag?.id !== ib) { b.vx += ux * f; b.vy += uy * f; }
     }
   }
+  // pull each agent gently toward the middle of its project, so projects form clusters
+  const mid = new Map();
+  for (const [, n] of list) { const m = mid.get(n.a.projectKey) || { x: 0, y: 0, c: 0 }; m.x += n.x; m.y += n.y; m.c++; mid.set(n.a.projectKey, m); }
+  for (const [id, n] of list) {
+    const m = mid.get(n.a.projectKey);
+    if (m.c > 1 && drag?.id !== id) { n.vx += (m.x / m.c - n.x) * 0.0016; n.vy += (m.y / m.c - n.y) * 0.0016; }
+  }
   for (const [id, n] of list) {
     if (drag?.id === id && drag.mode === 'move') continue;
+    if (n.goal) { n.x = lerp(n.x, n.goal.x, 0.12); n.y = lerp(n.y, n.goal.y, 0.12); n.vx = n.vy = 0; continue; }
     n.x += n.vx; n.y += n.vy; n.vx *= 0.82; n.vy *= 0.82;
   }
 }
@@ -818,6 +976,7 @@ function frame(t) {
   ctx.clearRect(0, 0, W, H);
   drawGrid();
   ctx.setTransform(dpr * cam.k, 0, 0, dpr * cam.k, dpr * cam.x, dpr * cam.y);
+  drawGroups();
   for (const e of edges) drawEdge(e, t);
   ctx.globalAlpha = 1;
   drawPackets(t);

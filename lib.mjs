@@ -359,10 +359,26 @@ export function projectOf(cwd) {
 }
 
 // Stable colour per project: first come, first served from a flat palette, persisted.
-// ordered so neighbours in the list are far apart in hue
-const PALETTE = ['#6C7CFF', '#F2B33D', '#2EC4A0', '#FF5C7A', '#A3D33C', '#D65FE0', '#3FB8F5', '#FF8552', '#E8D8B0', '#14A3A3', '#B7835A', '#A3ADC2'];
+// Print-ink colours that read on both the light and the dark canvas, ordered so neighbours
+// are far apart in hue. Orange is left out: the canvas uses it for "working".
+const PALETTE = ['#2F5BEA', '#E3A600', '#00A36C', '#E5458F', '#6F8F1F', '#7B4FD8', '#1D9BB0', '#C2410C', '#9C6B3C', '#0F766E', '#B0306A', '#64748B'];
+// colours handed out before the palette changed, mapped slot for slot onto the new one
+const OLD_PALETTE = ['#6C7CFF', '#F2B33D', '#2EC4A0', '#FF5C7A', '#A3D33C', '#D65FE0', '#3FB8F5', '#FF8552', '#E8D8B0', '#14A3A3', '#B7835A', '#A3ADC2'];
 export function colorOf(key) {
   const colors = readJSON(FILES.colors, {});
+  let migrated = false;
+  for (const [k, c] of Object.entries(colors)) {
+    const i = OLD_PALETTE.indexOf(c);
+    if (i >= 0) { colors[k] = PALETTE[i]; migrated = true; }
+  }
+  // two projects on one slot (e.g. an agent still running older code picked one): first keeps it
+  const seen = new Set();
+  for (const [k, c] of Object.entries(colors)) {
+    if (!seen.has(c)) { seen.add(c); continue; }
+    const free = PALETTE.find((p) => !seen.has(p));
+    if (free) { colors[k] = free; seen.add(free); migrated = true; }
+  }
+  if (migrated) writeJSON(FILES.colors, colors);
   if (!colors[key]) {
     const used = Object.values(colors);
     colors[key] = PALETTE.find((c) => !used.includes(c)) || PALETTE[used.length % PALETTE.length];

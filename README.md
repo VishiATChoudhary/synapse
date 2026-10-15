@@ -6,12 +6,14 @@
 
 **Every coding agent on your machine, on one canvas. Draw a line between two of them and they share context.**
 
-<img alt="Node 18+" src="https://img.shields.io/badge/node-%E2%89%A518-6C7CFF?style=flat-square&labelColor=10121a">
-<img alt="Zero dependencies" src="https://img.shields.io/badge/dependencies-0-2EC4A0?style=flat-square&labelColor=10121a">
-<img alt="MCP" src="https://img.shields.io/badge/MCP-stdio-F2B33D?style=flat-square&labelColor=10121a">
-<img alt="MIT" src="https://img.shields.io/badge/license-MIT-FF5C7A?style=flat-square&labelColor=10121a">
+<img alt="Node 18+" src="https://img.shields.io/badge/node-%E2%89%A518-16130F?style=flat-square&labelColor=F1EFE9">
+<img alt="Zero dependencies" src="https://img.shields.io/badge/dependencies-0-16130F?style=flat-square&labelColor=F1EFE9">
+<img alt="MCP" src="https://img.shields.io/badge/MCP-stdio-16130F?style=flat-square&labelColor=F1EFE9">
+<img alt="MIT" src="https://img.shields.io/badge/license-MIT-FF4400?style=flat-square&labelColor=F1EFE9">
 
 Claude Code · Codex · Gemini CLI · OpenCode · Cursor Agent · Amp · Copilot CLI · Superset
+
+**[heysynapse.vercel.app](https://heysynapse.vercel.app)**
 
 </div>
 
@@ -54,8 +56,9 @@ http://localhost:4848 and leaves your real sessions alone.
 </tr>
 </table>
 
-- **Live canvas.** Working agents pulse fast with a spinning arc, idle ones breathe. Messages travel along the links as little packets.
-- **One colour per project.** Sessions are grouped by git repo, and worktrees count as their main repo. Colours are stable once assigned.
+- **Live canvas.** Working agents pulse fast with an orange tick running round them, idle ones breathe. Messages travel along the links as little packets.
+- **Grouped by project.** Agents of the same git repo sit together in a labelled frame, each project with its own shading (solid, hatched, dotted, ...). Worktrees count as their main repo, and a shading never changes once assigned.
+- **Light and dark.** One ink on paper, orange for live state. Follows your system, or flip it with the button in the top bar. Fonts are bundled, so the canvas loads nothing from the internet.
 - **Links are directional.** `A → B` means B gets A's context. Draw both directions for a two-way pair.
 - **Agents talk.** Any two linked agents can message each other, Claude to Codex included.
 - **You see it in the terminal.** Claude Code and Codex print a line whenever context or messages arrive. Claude Code also gets a live band above the prompt and a toast the moment something connects.
@@ -141,6 +144,8 @@ Code and Codex, so you can just say *"connect to the codex agent and ask what it
 | hover a link, click × (or select it and press ⌫) | remove the link |
 | scroll, drag the background | zoom, pan |
 | F, or double-click the background | fit everything on screen |
+| A | arrange: one block per project (also runs by itself when project frames overlap) |
+| ☾ / ☀ in the top bar | light or dark |
 
 ## What's in the box
 

@@ -21,7 +21,7 @@ type Edge = {
 }
 type Message = { id: string; from: string; to: string; fromName: string; delivered: boolean }
 
-const ACCENT = '#6C7CFF'
+const ACCENT = '#FF4400'
 const POLL_MS = 1500
 
 export const register: Register = on => {
@@ -114,7 +114,7 @@ export const register: Register = on => {
         {v.outgoing.length ? <Text dimColor>shares ⇢ </Text> : null}
         {list(v.outgoing, 'out')}
         {v.unread ? (
-          <Text color="#F2B33D">✉ {v.unread} from {v.unreadFrom.join(', ')}</Text>
+          <Text color={ACCENT}>✉ {v.unread} from {v.unreadFrom.join(', ')}</Text>
         ) : null}
       </Box>
     )

@@ -93,6 +93,14 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     return fs.createReadStream(INDEX).pipe(res);
   }
+  // bundled fonts, so the canvas makes no third-party requests
+  const font = p.match(/^\/fonts\/([a-z-]+\.woff2)$/);
+  if (font) {
+    const file = path.join(ROOT, 'public', 'fonts', font[1]);
+    if (!fs.existsSync(file)) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'content-type': 'font/woff2', 'cache-control': 'max-age=31536000' });
+    return fs.createReadStream(file).pipe(res);
+  }
   if (p === '/api/events') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
     clients.add(res);
