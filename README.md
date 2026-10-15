@@ -65,7 +65,7 @@ http://localhost:4848 and leaves your real sessions alone.
 ```mermaid
 flowchart LR
   subgraph machine[your machine]
-    C1[Claude Code] & C2[Codex] & C3[Gemini / OpenCode / ...]
+    C1[Claude Code] & C2[Codex] & C3[Gemini, OpenCode,<br/>Cursor, Amp, ...]
   end
   D[discovery<br/>session registry + process scan] --> S[(~/.synapse<br/>edges · messages)]
   UI[canvas<br/>localhost:4747] <--> S
