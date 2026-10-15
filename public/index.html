@@ -98,6 +98,7 @@
   .panel input.rename { flex: 1; min-width: 0; font: 300 36px/.9 var(--display); text-transform: uppercase; color: var(--ink); background: none; border: 0; border-bottom: 1px solid var(--ink); outline: 0; padding: 0 0 2px; }
   .panel h2 .nm { cursor: text; }
   .tag.ren { cursor: pointer; background: none; font-family: var(--mono); }
+  .frame-rename { position: fixed; z-index: 6; box-sizing: border-box; font-family: var(--mono); text-transform: uppercase; letter-spacing: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--ink); outline: 0; }
   .tag.ren:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
   .close { position: absolute; top: 14px; right: 14px; width: 28px; height: 28px; border: 1px solid var(--rule); background: none; cursor: pointer; font-size: 15px; line-height: 1; transition: background-color .15s ease-out, color .15s ease-out; }
   .close:hover { background: var(--ink); color: var(--paper); }
@@ -187,6 +188,7 @@
   <span><kbd>⌘F</kbd>search</span>
   <span><kbd>drag ring</kbd>link</span>
   <span><kbd>drag</kbd>move agent or project</span>
+  <span><kbd>dbl-click</kbd>rename agent or project</span>
   <span><kbd>scroll</kbd>zoom</span>
   <span><kbd>F</kbd>fit</span>
   <span><kbd>A</kbd>arrange</span>
@@ -508,6 +510,7 @@ cv.addEventListener('dblclick', (ev) => {
   const w = toWorld(ev.clientX, ev.clientY), h = hitTest(w.x, w.y);
   if (!h) return fit();
   if (h.type === 'node') { selected = { type: 'node', id: h.id }; renderPanel(true).then(startRename); revealSelected(); }
+  if (h.type === 'group') startProjectRename(h.key);
 });
 addEventListener('keydown', (ev) => {
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'f') { ev.preventDefault(); $('q').focus(); $('q').select(); return; }
@@ -737,6 +740,35 @@ function startRename() {
       else { n.a.name = out.name; toast(name ? `Renamed to ${out.name}` : `Back to ${out.name}`); }
     }
     renderPanel(false);
+  };
+  input.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Enter') finish(true); if (ev.key === 'Escape') finish(false); });
+  input.addEventListener('blur', () => finish(true));
+}
+
+// a project's frame tab turns into an input laid over the canvas: Enter saves, Escape cancels, an empty name resets
+let renamingGroup = null;
+function startProjectRename(key) {
+  const g = groupRects().find((r) => r.key === key);
+  if (!g || renamingGroup) return;
+  const input = document.createElement('input');
+  input.className = 'frame-rename'; input.value = g.label; input.maxLength = 48; input.spellcheck = false;
+  // sized like the tab at the current zoom
+  const k = cam.k;
+  input.style.left = `${cam.x + g.x0 * k}px`; input.style.top = `${cam.y + (g.y0 - 20) * k}px`;
+  input.style.width = `${Math.max(180 * k, (g.x1 - g.x0) * k * 0.6)}px`; input.style.height = `${20 * k}px`;
+  input.style.fontSize = `${10.5 * k}px`; input.style.padding = `0 ${6 * k}px 0 ${21 * k}px`;
+  document.body.appendChild(input); input.focus(); input.select();
+  renamingGroup = key;
+  let done = false;
+  const finish = async (save) => {
+    if (done) return; done = true;
+    const name = input.value.trim();
+    input.remove(); renamingGroup = null;
+    if (!save || name === g.label) return;
+    const r = await fetch('/api/projects/name', { method: 'POST', body: JSON.stringify({ key, name }) });
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok) toast(out.error || 'Could not rename');
+    else toast(name ? `Renamed to ${out.label}` : `Back to ${out.label}`);
   };
   input.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Enter') finish(true); if (ev.key === 'Escape') finish(false); });
   input.addEventListener('blur', () => finish(true));

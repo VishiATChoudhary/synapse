@@ -21,6 +21,7 @@ $S read <agent>                # recent conversation of an agent that shares wit
 $S send <agent> "<message>"    # message a linked agent
 $S inbox                       # messages other agents sent you (each shown once)
 $S rename "<name>"             # rename yourself; `rename <agent> "<name>"` renames another
+$S rename-project <project> "<name>"   # rename a project (its frame on the canvas)
 ```
 
 `<agent>` takes a name, an id, or a unique prefix of either (e.g. `codex-agent`).

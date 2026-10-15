@@ -22,6 +22,7 @@ export const FILES = {
   colors: path.join(DATA, 'colors.json'),
   messages: path.join(DATA, 'messages.json'),
   names: path.join(DATA, 'names.json'),
+  projects: path.join(DATA, 'projects.json'),
 };
 
 export function readJSON(file, fallback) {
@@ -362,22 +363,41 @@ export function findAgent(agents, query) {
 // ---------------------------------------------------------------- projects & colours
 
 // Group sessions by real project: worktrees share their main repo's git dir.
+// `label` is what is shown (a name given in the canvas or with `synapse rename-project` wins),
+// `autoLabel` is the generated one.
 const projectCache = new Map();
 export function projectOf(cwd) {
-  if (projectCache.has(cwd)) return projectCache.get(cwd);
-  let key = cwd, label = path.basename(cwd);
-  try {
-    const common = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).trim();
-    key = common.replace(/\/\.git\/?$/, '');
-    label = path.basename(key);
-  } catch {}
-  const wt = cwd.match(/\/worktrees\/([^/]+)\//); // e.g. ~/.superset/worktrees/<Project>/<branch>
-  if (wt) label = wt[1];
-  if (key === cwd) key = `project:${label}`; // not a git repo: group by name
-  const p = { key, label };
-  projectCache.set(cwd, p);
-  return p;
+  let p = projectCache.get(cwd);
+  if (!p) {
+    let key = cwd, label = path.basename(cwd);
+    try {
+      const common = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).trim();
+      key = common.replace(/\/\.git\/?$/, '');
+      label = path.basename(key);
+    } catch {}
+    const wt = cwd.match(/\/worktrees\/([^/]+)\//); // e.g. ~/.superset/worktrees/<Project>/<branch>
+    if (wt) label = wt[1];
+    if (key === cwd) key = `project:${label}`; // not a git repo: group by name
+    p = { key, autoLabel: label };
+    projectCache.set(cwd, p);
+  }
+  const given = readJSON(FILES.projects, {})[p.key];
+  return { key: p.key, label: given || p.autoLabel, autoLabel: p.autoLabel };
+}
+
+// Rename a project; an empty name goes back to the generated one.
+export function renameProject(key, name) {
+  name = String(name ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 48);
+  const live = new Map(listAgents().map((a) => { const p = projectOf(a.cwd); return [p.key, p]; }));
+  if (name && [...live.values()].some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) {
+    throw new Error(`another project is already called "${name}"`);
+  }
+  const given = readJSON(FILES.projects, {});
+  if (name) given[key] = name; else delete given[key];
+  writeJSON(FILES.projects, given);
+  const auto = live.get(key)?.autoLabel ?? [...projectCache.values()].find((p) => p.key === key)?.autoLabel ?? path.basename(key);
+  return { key, label: name || auto };
 }
 
 // Stable colour per project: first come, first served from a flat palette, persisted.
