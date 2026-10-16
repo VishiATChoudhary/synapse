@@ -447,5 +447,5 @@ handle('agent:kill', ({ pid }) => {
   if (!listAgents().some((a) => a.pid === pid)) throw new Error('that is not a running agent');
   process.kill(pid, 'SIGTERM');
 });
-handle('synapse', ({ args, as }) => execFileSync(process.execPath.includes('Electron') ? 'node' : process.execPath, [path.join(ROOT, '..', 'cli.mjs'), ...args], { encoding: 'utf8', env: { ...process.env, SYNAPSE_AGENT: as || '' }, timeout: 8000 }));
+handle('synapse', ({ args, as }) => execFileSync(process.execPath, [path.join(ROOT, '..', 'cli.mjs'), ...args], { encoding: 'utf8', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SYNAPSE_AGENT: as || '' }, timeout: 8000 }));
 handle('linked', ({ a, b }) => linked(readJSON(FILES.edges, []), a, b));

@@ -168,6 +168,13 @@ Code and Codex, so you can just say *"connect to the codex agent and ask what it
 
 Settings: `PORT`, `SYNAPSE_HOME` (state folder, default `~/.synapse`), `SYNAPSE_BUDGET` (characters per link per prompt), `SYNAPSE_AGENT` (force an identity).
 
+## Desktop app
+
+`npm install && npm run app:install` packages the checkout into `Synapse.app` (Apple Silicon), copies it to
+`/Applications` and opens it. `npm run app:build` only builds, into `dist/`, together with a `.dmg`. The app is
+ad-hoc signed: it runs on the machine that built it, and on another Mac only after right-click → Open (or
+`xattr -dr com.apple.quarantine Synapse.app`), since there is no Developer ID or notarization.
+
 ## Good to know
 
 - Messages are pulled, not pushed: an agent sees them with its next prompt or inbox check.
