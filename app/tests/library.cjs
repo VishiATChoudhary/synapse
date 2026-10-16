@@ -2,7 +2,7 @@
 // symlink in <SYNAPSE_HOME>/workspaces, the library tab lists them, and the setting turns it off.
 // All app state and PTYs belong to a temporary fixture.
 // Run: npm --prefix app run test:library
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -42,12 +42,21 @@ const js = (code) => win.webContents.executeJavaScript(code, true);
 const linkOf = (name) => { try { return fs.readlinkSync(path.join(lib, name)); } catch { return null; } };
 const config = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'utf8'));
 
+// every pty:spawn, with the size the renderer asked for
+const spawns = [];
 (async () => {
   await import(pathToFileURL(path.join(root, 'app/main.mjs')));
+  const realSpawn = ipcMain._invokeHandlers.get('pty:spawn');
+  ipcMain.removeHandler('pty:spawn');
+  ipcMain.handle('pty:spawn', (e, a) => { spawns.push(a); return realSpawn(e, a); });
   await until(() => { win = BrowserWindow.getAllWindows()[0]; return win; }, 'app window');
   win.webContents.on('console-message', (event) => { if (event.level === 'error') errors.push(event.message); });
   win.show(); win.focus();
   await until(() => js(`!!document.querySelector('.term.visible .xterm-helper-textarea')`), 'first session');
+
+  // the first session is created at the size it is shown at, not xterm's default 80x24
+  const fits = await js(`(() => { const w = document.querySelector('.term.visible'); const cs = getComputedStyle(w); const cell = w.querySelector('.xterm-rows').firstElementChild.getBoundingClientRect().height; return Math.floor((w.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)) / cell); })()`);
+  assert.ok(spawns.length >= 1 && Math.abs(spawns[0].rows - fits) <= 1, `first pty spawned with ${spawns[0]?.rows} rows, the view fits ${fits}`);
 
   // the whole theme button is clickable: nothing lies over its top half
   const hits = await js(`(() => { const r = document.querySelector('#theme').getBoundingClientRect(); const x = r.left + r.width / 2; return [r.top + 6, r.bottom - 6].map((y) => document.elementFromPoint(x, y).id || document.elementFromPoint(x, y).className); })()`);

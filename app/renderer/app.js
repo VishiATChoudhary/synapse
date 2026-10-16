@@ -66,6 +66,9 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  // measure while shown: a hidden element makes fit() fall back to 80x24, and the pty would start at that size
+  const wasVisible = wrap.classList.contains('visible');
+  wrap.classList.add('visible');
   term.open(wrap);
   // app shortcuts pass through; the macOS editing keys xterm drops or mis-sends become their readline
   // bytes (⌘⌫ clears the line, ⌘← / ⌘→ jump to its ends); everything else goes to the pty as is
@@ -78,6 +81,7 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
     e.preventDefault(); term.input(bytes); return false;
   });
   fit.fit();
+  if (!wasVisible) wrap.classList.remove('visible'); // renderStage() decides what is shown
   const { id: pty } = await spawn(term.cols, term.rows);
   const x = { id: nextId++, pty, kind, title, question, parent, exited: false, term, fit, el: wrap };
   term.onData(sforkFilter(() => x));
