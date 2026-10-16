@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<aside class="side">
+<aside class="side" id="sidebar">
   <div class="side-head">
     <span class="wordmark">synapse</span>
     <button class="icon" id="theme" title="light / dark">◐</button>
@@ -21,8 +21,11 @@
 
 <main class="main">
   <header class="top">
+    <button class="icon" id="toggle-sidebar" title="Toggle sidebar  ⌘B" aria-label="Toggle sidebar" aria-controls="sidebar" aria-expanded="true">◧</button>
     <div class="deck" id="deck"></div>
     <div class="top-right">
+      <button class="icon" id="split-right" title="Split side by side  ⌘D" aria-label="Split side by side">◫</button>
+      <button class="icon" id="split-down" title="Split top and bottom  ⇧⌘D" aria-label="Split top and bottom">⊟</button>
       <button class="ghost" id="btn-canvas" title="node view  ⌃Tab or ⌘G · ⌘-click a node opens its session">◇ synapse</button>
       <button class="ghost sig" id="btn-fork" title="⇧⌘F">⑂ fork</button>
     </div>

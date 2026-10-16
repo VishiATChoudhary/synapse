@@ -392,16 +392,17 @@ const projectCache = new Map();
 export function projectOf(cwd) {
   let p = projectCache.get(cwd);
   if (!p) {
-    let key = cwd, label = path.basename(cwd);
+    let key = cwd, label = path.basename(cwd), isGit = false;
     try {
       const common = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).trim();
       key = common.replace(/\/\.git\/?$/, '');
+      isGit = true;
       label = path.basename(key);
     } catch {}
     const wt = cwd.match(/\/worktrees\/([^/]+)\//); // e.g. ~/.superset/worktrees/<Project>/<branch>
     if (wt) label = wt[1];
-    if (key === cwd) key = `project:${label}`; // not a git repo: group by name
+    if (!isGit) key = `project:${label}`; // not a git repo: group by name
     p = { key, autoLabel: label };
     projectCache.set(cwd, p);
   }

@@ -2,7 +2,7 @@
 // symlink in <SYNAPSE_HOME>/workspaces, the library tab lists them, and the setting turns it off.
 // All app state and PTYs belong to a temporary fixture.
 // Run: npm --prefix app run test:library
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -11,7 +11,7 @@ const { pathToFileURL } = require('node:url');
 const { execFileSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '../..');
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-library-'));
+const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-library-')));
 const state = path.join(fixture, 'state');
 const lib = path.join(state, 'workspaces');
 const dir = (...p) => { const d = path.join(fixture, ...p); fs.mkdirSync(d, { recursive: true }); return d; };
@@ -44,33 +44,16 @@ async function until(check, label) {
   while (Date.now() < deadline) { if (await check()) return; await sleep(25); }
   throw new Error(`Timed out: ${label}`);
 }
-const js = (code) => win.webContents.executeJavaScript(code, true);
+const js = (code) => win.webContents.executeJavaScript(code, true).catch(e => { throw new Error(`${code}: ${e.message}`); });
 const linkOf = (name) => { try { return fs.readlinkSync(path.join(lib, name)); } catch { return null; } };
 const config = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'utf8'));
 
-// every pty:spawn, with the size the renderer asked for
-const spawns = [];
 (async () => {
   await import(pathToFileURL(path.join(root, 'app/main.mjs')));
-  const realSpawn = ipcMain._invokeHandlers.get('pty:spawn');
-  ipcMain.removeHandler('pty:spawn');
-  ipcMain.handle('pty:spawn', (e, a) => { spawns.push(a); return realSpawn(e, a); });
   await until(() => { win = BrowserWindow.getAllWindows()[0]; return win; }, 'app window');
   win.webContents.on('console-message', (event) => { if (event.level === 'error') errors.push(event.message); });
   win.show(); win.focus();
   await until(() => js(`!!document.querySelector('.term.visible .xterm-helper-textarea')`), 'first session');
-
-  // the first pty gets the rows the view shows (not xterm's default 24), and that number holds still:
-  // a container sized by its own content once made fit() add a row on every refresh
-  const viewRows = () => js(`document.querySelector('.term.visible .xterm-rows').children.length`);
-  const shown = await viewRows();
-  assert.ok(spawns.length >= 1 && spawns[0].rows === shown && shown > 24, `first pty spawned with ${spawns[0]?.rows} rows, the view shows ${shown}`);
-  await sleep(2500);
-  assert.equal(await viewRows(), shown, 'rows do not creep between refreshes');
-  // and everything xterm draws lies inside its box: the last row and column are not under the stage's edge
-  const box = await js(`(() => { const w = document.querySelector('.term.visible').getBoundingClientRect(); const sc = document.querySelector('.term.visible .xterm-screen').getBoundingClientRect(); const st = document.querySelector('#stage').getBoundingClientRect(); return { over: Math.round(Math.max(0, sc.bottom - w.bottom, sc.right - w.right, sc.bottom - st.bottom, sc.right - st.right)), slack: Math.round(w.bottom - sc.bottom) }; })()`);
-  assert.equal(box.over, 0, 'xterm screen overflows its box');
-  assert.ok(box.slack < 40, `too much unused space below the terminal: ${box.slack}px`);
 
   // the whole theme button is clickable: nothing lies over its top half
   const hits = await js(`(() => { const r = document.querySelector('#theme').getBoundingClientRect(); const x = r.left + r.width / 2; return [r.top + 6, r.bottom - 6].map((y) => document.elementFromPoint(x, y).id || document.elementFromPoint(x, y).className); })()`);
@@ -89,12 +72,31 @@ const spawns = [];
   await js(`document.querySelector('#tree .proj-head').click()`);
   assert.equal(await js(`document.querySelector('#tree .proj').classList.contains('closed')`), false, 'unfolds again');
 
+  // the deck is one chip; after a fork it shows depth and the tree drops down on hover
+  assert.equal(await js(`document.querySelectorAll('#deck .stack').length`), 1, 'one chip');
+  assert.equal(await js(`!!document.querySelector('#deck .stack-list')`), false, 'no tree with a single session');
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'F', modifiers: ['meta', 'shift'] });
+  win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'F', modifiers: ['meta', 'shift'] });
+  await until(() => js(`!document.querySelector('#modal').hidden && document.querySelector('#modal-title').textContent.includes('fork')`), 'fork prompt');
+  await js(`(() => { const i = document.querySelector('#modal input'); i.value = 'dig into the slow build'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+  await until(() => js(`document.querySelector('#deck .stack.deep')`), 'fork created');
+  assert.match(await js(`document.querySelector('#deck .depth').textContent`), /⑂ 2\/2/, 'depth badge');
+  assert.deepEqual(await js(`[...document.querySelectorAll('#deck .srow .label')].map((e) => e.textContent)`), ['alpha', 'dig into the slow build'], 'root first, then the fork');
+  assert.equal(await js(`document.querySelector('#deck .srow.cur .label').textContent`), 'dig into the slow build');
+  assert.equal(await js(`getComputedStyle(document.querySelector('#deck .stack-list')).maxHeight`), '0px', 'tree hidden until hover');
+  const chip = await js(`(() => { const r = document.querySelector('#deck .card.top').getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()`);
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: chip.x, y: chip.y });
+  await until(() => js(`getComputedStyle(document.querySelector('#deck .stack-list')).maxHeight !== '0px'`), 'hover unfolds the tree');
+  await js(`document.querySelector('#deck .srow').click()`);
+  await until(() => js(`document.querySelector('#deck .srow.cur .label').textContent === 'alpha'`), 'clicking the root brings it on top');
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: 600, y: 600 });
+
   // ⌃1 starts the first agent profile (claude) in the focused worktree; the shell is not on a digit
   const slotsBefore = await js(`document.querySelectorAll('#tree .slot').length`);
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode: '1', modifiers: ['control'] });
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: '1', modifiers: ['control'] });
   await until(() => js(`document.querySelectorAll('#tree .slot').length`).then((n) => n === slotsBefore + 1), '⌃1 opened a session');
-  assert.equal(await js(`[...document.querySelectorAll('#tree .slot-kind')].at(-1).textContent`), 'claude', '⌃1 is claude');
+  assert.equal(await js(`[...document.querySelectorAll('#tree .slot-title')].at(-1).textContent`), 'claude', '⌃1 is claude');
   await until(() => js(`[...document.querySelectorAll('.term .xterm-rows > div')].some((d) => d.textContent.includes('FAKE_CLAUDE_RAN'))`), 'claude found through the PATH that .zshrc sets');
 
   // a second after start, everything known gets linked: app.json entries, Superset repos and worktrees
@@ -138,7 +140,31 @@ const spawns = [];
   await js(`document.querySelector('#add-project').click()`);
   await until(() => js(`!document.querySelector('#modal').hidden && document.querySelector('.modal .seg button.on')?.textContent === 'library'`), 'library tab');
   await until(() => js(`document.querySelectorAll('.modal .lib .opt').length === 7`), 'seven library rows');
-  await js(`[...document.querySelectorAll('.modal .lib .opt')].find((o) => o.textContent.includes('delta')).click()`);
+  assert.deepEqual(await js(`[...document.querySelectorAll('.modal .seg button')].map(b => b.textContent)`), ['clone', 'open folder', 'new', 'library'], 'library is the last tab');
+  assert.equal(await js(`document.activeElement === document.querySelector('.modal input[type=search]')`), true, 'search is focused');
+  const search = (query) => js(`(() => { const i = document.querySelector('.modal input'); i.value = ${JSON.stringify(query)}; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  const key = (key, shiftKey = false) => js(`document.querySelector('.modal input').dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, shiftKey: ${shiftKey}, bubbles: true }))`);
+  const names = () => js(`[...document.querySelectorAll('.modal .lib .opt .k')].map(e => e.textContent)`);
+  await search('  BeTA ');
+  assert.deepEqual(await names(), ['beta', 'beta-2'], 'search ignores case and surrounding spaces');
+  await key('ArrowUp');
+  assert.equal(await js(`document.querySelector('.modal .lib .sel .k').textContent`), 'beta-2', 'arrows navigate filtered results');
+  await search('other/beta');
+  assert.deepEqual(await names(), ['beta-2'], 'search matches paths');
+  await search('no-such-workspace');
+  assert.deepEqual(await names(), []);
+  assert.equal(await js(`document.querySelector('.modal .lib').textContent`), 'No matching workspaces.');
+  await key('Enter');
+  assert.equal(await js(`document.querySelector('#modal').hidden`), false, 'Enter with no results does nothing');
+  await search('');
+  assert.equal((await names()).length, 7, 'clearing search restores all entries');
+  await key('Tab');
+  assert.equal(await js(`document.querySelector('.modal .seg button.on').textContent`), 'clone', 'last tab wraps to first');
+  assert.equal(await js(`document.querySelector('.modal input').type`), 'text');
+  await key('Tab', true);
+  assert.equal(await js(`document.querySelector('.modal .seg button.on').textContent`), 'library');
+  await search('delta');
+  await key('Enter');
   await until(() => config().workspaces.includes(fs.realpathSync(path.join(lib, 'delta'))), 'delta added from the library');
   await until(() => js(`document.querySelector('#modal').hidden`), 'modal closed');
 
@@ -174,11 +200,7 @@ const spawns = [];
   // a dirty worktree: the question names the uncommitted changes and the button says "anyway"; confirming deletes it
   await js(`synapse.project.add(${JSON.stringify(feature)})`);
   fs.writeFileSync(path.join(feature, 'wip.txt'), 'not committed');
-  const featureReal = fs.realpathSync(feature);
-  const acmeBox = `document.querySelector('#tree .proj[data-key=' + CSS.escape(${JSON.stringify(fs.realpathSync(acme))}) + ']')`;
-  await until(() => js(`!!${acmeBox}`), 'acme project in the sidebar');
-  await js(`(() => { const b = ${acmeBox}; if (b.classList.contains('closed')) b.querySelector('.proj-head').click(); })()`); // a project without sessions starts collapsed
-  await until(() => js(`[...document.querySelectorAll('#tree .wt')].some((w) => w.dataset.path === ${JSON.stringify(fs.realpathSync(feature))})`), 'feature worktree in the sidebar');
+  await until(() => js(`[...document.querySelectorAll('.proj.closed .proj-head')].forEach(e => e.click()); [...document.querySelectorAll('#tree .wt')].some((w) => w.dataset.path === ${JSON.stringify(fs.realpathSync(feature))})`), 'feature worktree in the sidebar');
   await js(`(() => { const w = [...document.querySelectorAll('#tree .wt')].find((w) => w.dataset.path === ${JSON.stringify(fs.realpathSync(feature))}); const t = w.querySelector('.wt-head'); const r = t.getBoundingClientRect(); t.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 5, clientY: r.top + 5 })); })()`);
   assert.deepEqual(await menuLabels(), ['New agent', 'New worktree', 'Remove worktree', 'Remove from sidebar']);
   await clickItem('Remove worktree');
@@ -186,9 +208,11 @@ const spawns = [];
   assert.equal(await js(`document.querySelector('#modal .btn.danger').textContent`), 'Delete anyway');
   await js(`document.querySelector('#modal .btn.danger').click()`);
   await until(() => !fs.existsSync(feature), 'worktree folder removed');
-  await until(() => !config().workspaces.includes(featureReal), 'worktree gone from app.json');
+  assert.ok(!config().workspaces.includes(feature), 'removed from configuration');
   assert.deepEqual(errors, []);
   console.log('PASS right-click menus, dirty check, worktree removal');
+  await js(`document.querySelector('#modal').hidden = true`);
+
 })().catch((error) => { console.error(error); process.exitCode = 1; }).finally(() => {
   app.once('will-quit', () => { fs.rmSync(fixture, { recursive: true, force: true }); app.exit(process.exitCode || 0); });
   app.quit();

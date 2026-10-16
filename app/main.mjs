@@ -8,7 +8,8 @@ import os from 'node:os';
 import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
-import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, recordFork } from '../lib.mjs';
+import { git, listChoices, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
+import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork } from '../lib.mjs';
 
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
 const SHELL = process.env.SHELL || '/bin/zsh';
@@ -38,15 +39,11 @@ function config() {
 
 // ---------------------------------------------------------------- git
 
-const git = (cwd, args) => {
-  try { return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 }).trim(); }
-  catch (e) { throw new Error((e.stderr || e.message || '').toString().trim()); }
-};
-
 // A workspace is a checkout you added (a repo or one of its worktrees). The sidebar groups them by repo.
 function projects() {
   const groups = new Map();
-  for (const ws of config().workspaces) {
+  const c = config();
+  for (const ws of c.workspaces) {
     if (!fs.existsSync(ws)) continue;
     const p = projectOf(ws);
     let g = groups.get(p.key);
@@ -55,7 +52,7 @@ function projects() {
     try { branch = git(ws, ['rev-parse', '--abbrev-ref', 'HEAD']); } catch {}
     let real = ws;
     try { real = fs.realpathSync(ws); } catch {}
-    g.worktrees.push({ path: ws, branch, name: path.basename(ws), home: ws === g.path || real === g.path }); // the repo's own folder, not a worktree
+    g.worktrees.push({ path: ws, branch, name: c.worktreeNames?.[ws] || path.basename(ws), home: ws === g.path || real === g.path }); // the repo's own folder, not a worktree
   }
   // the order they were dragged into in the sidebar, then the rest by name
   const order = config().projectOrder || [];
@@ -165,14 +162,22 @@ function library() {
   let names = [];
   try { names = fs.readdirSync(WS_HOME); } catch { return []; }
   const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
-  const added = new Set(config().workspaces.map(real));
+  const c = config();
+  const added = new Set(c.workspaces.map(real));
+  const worktreeNames = Object.fromEntries(Object.entries(c.worktreeNames || {}).map(([p, name]) => [real(p), name]));
+  const projectNames = readJSON(FILES.projects, {});
   const out = [];
   for (const name of names.sort((a, b) => a.localeCompare(b))) {
     if (name.startsWith('.')) continue;
     const entry = path.join(WS_HOME, name);
     let target;
     try { target = fs.realpathSync(entry); if (!fs.statSync(target).isDirectory()) continue; } catch { continue; }
-    out.push({ name, path: target, link: target !== real(entry) || fs.lstatSync(entry).isSymbolicLink(), added: added.has(target) });
+    let label = worktreeNames[target] || name;
+    if (!worktreeNames[target] && Object.keys(projectNames).length) {
+      const p = projectOf(target);
+      if (projectNames[p.key]) label = p.key === target || p.key.startsWith('project:') ? p.label : `${p.label}@${path.basename(target)}`;
+    }
+    out.push({ name, label, path: target, link: target !== real(entry) || fs.lstatSync(entry).isSymbolicLink(), added: added.has(target) });
   }
   return out;
 }
@@ -224,18 +229,17 @@ async function pickFolder() {
 }
 
 function addWorktree(repo, name, base) {
-  const dir = path.join(os.homedir(), '.synapse', 'worktrees', path.basename(repo), name);
-  fs.mkdirSync(path.dirname(dir), { recursive: true });
-  git(repo, ['worktree', 'add', '-b', name, dir, base || 'HEAD']);
-  addWorkspace(dir);
-  return dir;
+  return addWorkspace(createWorktree(repo, name, base, path.join(DATA, 'worktrees')));
 }
 
-function removeWorktree(repo, dir, force) {
-  git(repo, ['worktree', 'remove', ...(force ? ['--force'] : []), dir]);
+function removeWorktree(repo, dir, force = false) {
+  deleteWorktree(repo, dir, force);
   const c = config();
   c.workspaces = c.workspaces.filter((w) => w !== dir);
+  if (c.worktreeNames) delete c.worktreeNames[dir];
   writeJSON(FILES.app, c);
+  for (const [link, target] of libraryLinks()) if (target === dir) { try { fs.unlinkSync(link); } catch {} }
+  for (const t of ptys.values()) if (t.cwd === dir || t.cwd.startsWith(dir + path.sep)) { try { t.p.kill(); } catch {} }
 }
 
 // ---------------------------------------------------------------- ptys
@@ -420,6 +424,10 @@ function createWindow() {
     if (i.type === 'keyDown' && (g || tab)) { e.preventDefault(); win.webContents.send('canvas:toggle'); }
   });
   win.on('closed', () => { win = null; });
+  win.on('app-command', (_e, command) => {
+    if (command === 'browser-backward') win?.webContents.send('canvas:back');
+    if (command === 'browser-forward' && win?.webContents.navigationHistory.canGoForward()) win.webContents.navigationHistory.goForward();
+  });
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
 }
 
@@ -476,6 +484,13 @@ handle('project:create', ({ name }) => createWorkspace(name));
 handle('project:clone', ({ url, name }) => cloneWorkspace(url, name));
 handle('project:pick', () => pickFolder());
 handle('project:library', () => library());
+handle('project:rename', ({ key, name }) => {
+  const all = projects();
+  if (!all.some((p) => p.key === key)) throw new Error('workspace is no longer open');
+  name = String(name ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 48);
+  if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
+  return renameProject(key, name);
+});
 handle('settings:get', () => ({ autoSymlink: !!config().autoSymlink }));
 handle('settings:set', (patch) => { const c = config(); if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink; writeJSON(FILES.app, c); if (c.autoSymlink) scanLibrary(true); return { autoSymlink: !!c.autoSymlink }; });
 handle('worktree:add', ({ repo, name, base }) => addWorktree(repo, name, base));
@@ -489,6 +504,32 @@ handle('agent:kill', ({ pid }) => {
   pid = Number(pid);
   if (!listAgents().some((a) => a.pid === pid)) throw new Error('that is not a running agent');
   process.kill(pid, 'SIGTERM');
+});
+// a tab renamed in the sidebar renames the Synapse agent in its pty, so the node view shows the same name
+handle('agent:rename', ({ pty, name }) => {
+  const t = ptys.get(pty);
+  const a = t && listAgents().find((x) => x.pid === t.pid);
+  if (!a) return null;
+  return renameAgent(a, name);
+});
+handle('worktree:list', ({ repo }) => {
+  const c = config();
+  return listChoices(repo).map(w => ({ ...w, label: c.worktreeNames?.[w.path] || w.name, added: c.workspaces.includes(w.path) }));
+});
+handle('worktree:open', ({ repo, choice }) => addWorkspace(openWorktree(repo, choice, path.join(DATA, 'worktrees'))));
+handle('worktree:fetch', async ({ repo }) => { await fetchBranches(repo); });
+handle('worktree:prs', async ({ repo, choices }) => {
+  const { pulls, error } = await pullRequests(repo);
+  return { statuses: choices.map(w => choicePullRequest(repo, w, pulls)), error };
+});
+handle('worktree:rename', ({ path: dir, name }) => {
+  const c = config();
+  if (!c.workspaces.includes(dir)) throw new Error('worktree is no longer open');
+  name = String(name ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 48);
+  c.worktreeNames ||= {};
+  if (name) c.worktreeNames[dir] = name; else delete c.worktreeNames[dir];
+  writeJSON(FILES.app, c);
+  return { path: dir, name: name || path.basename(dir) };
 });
 handle('synapse', ({ args, as }) => execFileSync(process.execPath, [path.join(ROOT, '..', 'cli.mjs'), ...args], { encoding: 'utf8', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SYNAPSE_AGENT: as || '' }, timeout: 8000 }));
 handle('linked', ({ a, b }) => linked(readJSON(FILES.edges, []), a, b));
