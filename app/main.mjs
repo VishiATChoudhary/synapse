@@ -53,7 +53,9 @@ function projects() {
     if (!g) { g = { key: p.key, label: p.label, path: p.key.startsWith('project:') ? ws : p.key, color: colorOf(p.key), worktrees: [] }; groups.set(p.key, g); }
     let branch = '';
     try { branch = git(ws, ['rev-parse', '--abbrev-ref', 'HEAD']); } catch {}
-    g.worktrees.push({ path: ws, branch, name: path.basename(ws) });
+    let real = ws;
+    try { real = fs.realpathSync(ws); } catch {}
+    g.worktrees.push({ path: ws, branch, name: path.basename(ws), home: ws === g.path || real === g.path }); // the repo's own folder, not a worktree
   }
   return [...groups.values()].sort((a, b) => a.label.localeCompare(b.label));
 }

@@ -221,6 +221,8 @@ function render() {
   renderBar();
 }
 
+// a session named after its folder would repeat the checkout row above it: say what runs in it instead
+const slotTitle = (s, t, w) => (!t ? 'gone' : t.title === w.name && s.path.length < 2 ? (M.profiles[t.kind]?.label || t.kind) : t.title);
 function renderTree() {
   const tree = $('#tree');
   tree.replaceChildren();
@@ -241,9 +243,11 @@ function renderTree() {
       for (const w of p.worktrees) {
         const wt = el('div', 'wt');
         const wh = el('div', 'wt-head' + (cur?.worktree === w.path ? ' cur' : ''));
-        const wn = el('span', 'wt-name', w.name); wn.title = `${w.path}\n${w.branch}`;
-        wh.append(el('span', '', '⎇'), wn);
-        if (w.branch && w.branch !== w.name) wn.textContent = `${w.name} · ${w.branch}`;
+        // the repo's own folder shows as ⌂ + branch; a worktree as ⎇ + folder (· branch when they differ)
+        const home = w.home ?? w.path === p.path;
+        const label = home ? (w.branch || w.name) : w.branch && w.branch !== w.name ? `${w.name} · ${w.branch}` : w.name;
+        const wn = el('span', 'wt-name', label); wn.title = `${w.path}\n${w.branch}`;
+        wh.append(el('span', 'wt-glyph', home ? '⌂' : '⎇'), wn);
         const wa = el('button', 'wt-add', '+'); wa.title = 'new session here';
         wa.onclick = (e) => { e.stopPropagation(); pickProfile(w.path); };
         wh.appendChild(wa);
@@ -253,7 +257,7 @@ function renderTree() {
           n++;
           const t = top(s);
           const row = el('div', 'slot' + (s.id === M.focused ? ' focused' : ''));
-          row.append(el('span', 'dot ' + (t ? statusOf(t) : 'exited')), logo(t?.kind), el('span', 'slot-title', t ? (s.path.length > 1 ? t.title : t.title) : 'gone'));
+          row.append(el('span', 'dot ' + (t ? statusOf(t) : 'exited')), logo(t?.kind), el('span', 'slot-title', slotTitle(s, t, w)));
           const a = t && M.agents[t.pty];
           const unread = a && M.unread[a.synapseId];
           if (unread) row.appendChild(el('span', 'slot-unread', `✉${unread}`));
