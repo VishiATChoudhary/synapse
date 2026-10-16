@@ -231,7 +231,7 @@ function renderTree() {
   const cur = focusedSlot();
   let n = 0;
   for (const p of M.projects) {
-    const box = el('div', 'proj' + (M.open.has(p.key) ? '' : ' closed'));
+    const box = el('div', 'proj' + (M.open.has(p.key) ? '' : ' closed')); box.dataset.key = p.key;
     const head = el('div', 'proj-head');
     const sw = el('span', 'swatch'); sw.style.background = p.color;
     const live = M.slots.filter((s) => p.worktrees.some((w) => w.path === s.worktree)).length;
@@ -243,7 +243,7 @@ function renderTree() {
     box.appendChild(head);
     if (M.open.has(p.key)) {
       for (const w of p.worktrees) {
-        const wt = el('div', 'wt');
+        const wt = el('div', 'wt'); wt.dataset.path = w.path;
         const wh = el('div', 'wt-head' + (cur?.worktree === w.path ? ' cur' : ''));
         // the repo's own folder shows as ⌂ + branch; a worktree as ⎇ + folder (· branch when they differ)
         const home = w.home ?? w.path === p.path;
@@ -258,7 +258,7 @@ function renderTree() {
         for (const s of M.slots.filter((s) => s.worktree === w.path)) {
           n++;
           const t = top(s);
-          const row = el('div', 'slot' + (s.id === M.focused ? ' focused' : ''));
+          const row = el('div', 'slot' + (s.id === M.focused ? ' focused' : '')); row.dataset.slot = s.id;
           row.append(el('span', 'dot ' + (t ? statusOf(t) : 'exited')), logo(t?.kind), el('span', 'slot-title', slotTitle(s, t, w)));
           const a = t && M.agents[t.pty];
           const unread = a && M.unread[a.synapseId];
@@ -595,9 +595,122 @@ async function promptProject(mode) {
   if (mode === 'library') focusList?.(); // the modal was hidden while set() ran, so focus again now
 }
 
+// ---------------------------------------------------------------- right-click menus
+// items: { label, run, danger, sub: [items] } or '-' for a rule. Escape, a click elsewhere or losing focus closes it.
+let menuEl = null;
+function closeMenu() { menuEl?.remove(); menuEl = null; }
+function contextMenu(items, x, y) {
+  closeMenu();
+  const m = el('div', 'menu'); menuEl = m;
+  const rows = [];
+  const build = (box, list, depth) => {
+    for (const it of list) {
+      if (it === '-') { box.appendChild(el('div', 'menu-rule')); continue; }
+      const row = el('div', 'menu-item' + (it.danger ? ' danger' : '') + (it.sub ? ' has-sub' : ''));
+      row.appendChild(el('span', 'menu-label', it.label));
+      if (it.sub) { const sub = el('div', 'menu menu-sub'); build(sub, it.sub, depth + 1); row.appendChild(sub); }
+      else row.onclick = (e) => { e.stopPropagation(); closeMenu(); it.run(); };
+      if (!depth) rows.push({ row, it });
+      box.appendChild(row);
+    }
+  };
+  build(m, items, 0);
+  document.body.appendChild(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = `${Math.max(0, Math.min(x, innerWidth - r.width - 8))}px`;
+  m.style.top = `${Math.max(0, Math.min(y, innerHeight - r.height - 8))}px`;
+  let sel = -1;
+  const select = (i) => { rows[sel]?.row.classList.remove('sel'); sel = (i + rows.length) % rows.length; rows[sel].row.classList.add('sel'); };
+  m.tabIndex = -1; m.focus();
+  m.onkeydown = (e) => {
+    e.stopPropagation();
+    if (e.key === 'ArrowDown') select(sel + 1);
+    if (e.key === 'ArrowUp') select(sel - 1);
+    if (e.key === 'Enter' && rows[sel] && !rows[sel].it.sub) { closeMenu(); rows[sel].it.run(); }
+    if (e.key === 'Escape') closeMenu();
+  };
+}
+addEventListener('pointerdown', (e) => { if (menuEl && !menuEl.contains(e.target)) closeMenu(); }, true);
+addEventListener('keydown', (e) => { if (menuEl && e.key === 'Escape') { e.stopImmediatePropagation(); closeMenu(); } }, true);
+addEventListener('blur', closeMenu);
+
+// destructive actions ask first; uncommitted changes in the folder make the question louder
+const tilde = (p) => (M.home && p.startsWith(M.home) ? `~${p.slice(M.home.length)}` : p);
+async function confirmDirty(cwd, question, action, onOk) {
+  let dirty = 0;
+  try { dirty = await synapse.git.dirty(cwd); } catch {}
+  const text = dirty ? `${dirty} uncommitted change${dirty === 1 ? '' : 's'} in ${tilde(cwd)}. ${question}` : question;
+  confirm(text, onOk, { danger: dirty ? `${action} anyway` : action });
+}
+const slotsIn = (paths) => M.slots.filter((s) => paths.includes(s.worktree));
+const closeSlots = (slots) => { for (const s of slots) { const r = root(s); if (r) closeSession(s, r.id); } };
+// one session stack, with everything forked from it
+function closeSlotAsk(s) {
+  const t = top(s); if (!t) return;
+  const working = !t.exited && statusOf(t) === 'working';
+  confirmDirty(s.worktree, `Close "${t.title}"${working ? ', it is still working' : ''}?`, 'Close', () => closeSession(s, root(s).id));
+}
+// a checkout: git worktree remove, forced only after the uncommitted-changes question was answered
+function removeWorktreeAsk(project, w) {
+  const open = slotsIn([w.path]);
+  confirmDirty(w.path, `Delete worktree ${w.name}${open.length ? ` and close ${open.length} session${open.length === 1 ? '' : 's'} in it` : ''}? The folder is removed.`, 'Delete', async () => {
+    closeSlots(open);
+    try { await synapse.worktree.remove({ repo: project.path, dir: w.path, force: true }); toast(`worktree ${w.name} removed`); }
+    catch (e) { toast(e.message, true); }
+    await refresh();
+  });
+}
+// forget a checkout (or a whole project): app.json only, files and library links stay
+async function removeFromSidebar(paths, label) {
+  const open = slotsIn(paths);
+  const go = async () => {
+    closeSlots(open);
+    for (const p of paths) { try { await synapse.project.remove(p); } catch (e) { toast(e.message, true); } }
+    toast(`${label} removed from the sidebar · still in the library`);
+    await refresh();
+  };
+  if (open.length) confirm(`${open.length} session${open.length === 1 ? '' : 's'} run in ${label}. Close them and remove it from the sidebar?`, go, { danger: 'Remove' });
+  else go();
+}
+// an agent that may or may not be one of ours: ours close the normal way, others get SIGTERM by pid
+function killAgentAsk(a) {
+  const ptyId = Object.keys(M.agents).find((k) => M.agents[k].synapseId === a.id);
+  const mine = ptyId && M.slots.find((s) => s.sessions.some((x) => x.pty === ptyId));
+  if (mine) return closeSlotAsk(mine);
+  if (!a.pid) return toast(`${a.name} has no pid to kill`, true);
+  confirmDirty(a.cwd || '', `Kill ${a.name} (pid ${a.pid})? It runs outside this app.`, 'Kill', async () => {
+    try { await synapse.agent.kill(a.pid); toast(`sent SIGTERM to ${a.name}`); } catch (e) { toast(e.message, true); }
+  });
+}
+const agentMenu = (worktreePath) => profileOrder().map((k) => ({ label: M.profiles[k].label || k, run: () => newSlot(worktreePath, k) }));
+// the sidebar: project tab, checkout row, session row, or the empty pane
+$('.side').addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  const slotRow = e.target.closest('.slot'), wtRow = e.target.closest('.wt'), projBox = e.target.closest('.proj');
+  const p = projBox && M.projects.find((x) => x.key === projBox.dataset.key);
+  const w = p && wtRow && p.worktrees.find((x) => x.path === wtRow.dataset.path);
+  const s = slotRow && slot(Number(slotRow.dataset.slot));
+  const items = [];
+  if (s && w) {
+    items.push({ label: 'Fork', run: () => { M.focused = s.id; render(); promptFork(); } });
+    items.push('-', { label: 'Close session', danger: true, run: () => closeSlotAsk(s) });
+  } else if (w) {
+    items.push({ label: 'New agent', sub: agentMenu(w.path) }, { label: 'New worktree', run: () => promptWorktree(p) }, '-');
+    if (!(w.home ?? w.path === p.path)) items.push({ label: 'Remove worktree', danger: true, run: () => removeWorktreeAsk(p, w) });
+    items.push({ label: 'Remove from sidebar', run: () => removeFromSidebar([w.path], w.name) });
+  } else if (p) {
+    const first = p.worktrees[0]?.path;
+    if (first) items.push({ label: 'New agent', sub: agentMenu(first) });
+    items.push({ label: 'New worktree', run: () => promptWorktree(p) }, '-', { label: 'Remove from sidebar', run: () => removeFromSidebar(p.worktrees.map((x) => x.path), p.label) });
+  } else {
+    items.push({ label: 'New workspace', run: () => promptProject() });
+  }
+  contextMenu(items, e.clientX, e.clientY);
+});
+
 // ---------------------------------------------------------------- settings
 const SHORTCUTS = [
-  ['app', [['⌘T', 'shell'], ['⌃1 ⌃2 …', 'claude, codex, …'], ['⌘N', 'agent picker'], ['⇧⌘N', 'worktree'], ['⇧⌘F', 'fork'], ['⌘E', 'fork tree'], ['⌘W', 'close session'], ['⇧⌘⌫', 'pop fork'], ['⌘[ ⌘]', 'switch session'], ['⌘1-9', 'nth session'], ['⌃Tab ⌘G', 'node view'], ['⌘,', 'settings']]],
+  ['app', [['right-click', 'menu: agents, worktrees, remove, kill'], ['⌘T', 'shell'], ['⌃1 ⌃2 …', 'claude, codex, …'], ['⌘N', 'agent picker'], ['⇧⌘N', 'worktree'], ['⇧⌘F', 'fork'], ['⌘E', 'fork tree'], ['⌘W', 'close session'], ['⇧⌘⌫', 'pop fork'], ['⌘[ ⌘]', 'switch session'], ['⌘1-9', 'nth session'], ['⌃Tab ⌘G', 'node view'], ['⌘,', 'settings']]],
   ['terminal', [['⌘⌫', 'clear line'], ['⌘← ⌘→', 'line start / end'], ['⌥⌫', 'delete word']]],
   ['node view', [['⌘F /', 'search'], ['drag ring', 'link'], ['drag', 'move agent or project'], ['dbl-click', 'rename'], ['⌘-click', 'open its session'], ['scroll', 'zoom'], ['F', 'fit'], ['A', 'arrange'], ['⌫', 'unlink'], ['esc', 'back to terminals']]],
 ];

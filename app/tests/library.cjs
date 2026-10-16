@@ -117,6 +117,46 @@ const config = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'u
   assert.ok((await js(`document.querySelector('#modal-body').textContent`)).includes('⌘T'), 'shortcuts are listed in settings');
   assert.deepEqual(errors, []);
   console.log('PASS library tab and settings modal');
+  await js(`document.querySelector('#modal').hidden = true`);
+
+  // right-click menus in the sidebar
+  const rightClick = (sel) => js(`(() => { const t = document.querySelector(${JSON.stringify(sel)}); const r = t.getBoundingClientRect(); t.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 5, clientY: r.top + 5 })); })()`);
+  const menuLabels = () => js(`[...document.querySelector('.menu:not(.menu-sub)').querySelectorAll(':scope > .menu-item > .menu-label')].map((e) => e.textContent)`);
+  const clickItem = (label) => js(`[...document.querySelectorAll('.menu .menu-item')].find((e) => e.firstChild.textContent === ${JSON.stringify(label)}).click()`);
+  await rightClick('.side-foot');
+  assert.deepEqual(await menuLabels(), ['New workspace'], 'empty pane: new workspace');
+  await clickItem('New workspace');
+  await until(() => js(`!document.querySelector('#modal').hidden && document.querySelector('#modal-title').textContent === 'add workspace'`), 'workspace modal from the menu');
+  await js(`document.querySelector('#modal').hidden = true`);
+  await rightClick('#tree .wt-head');
+  assert.deepEqual(await menuLabels(), ['New agent', 'New worktree', 'Remove from sidebar'], 'the repo folder itself cannot be removed as a worktree');
+  await js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+  await until(() => js(`!document.querySelector('.menu')`), 'escape closes the menu');
+  await rightClick('#tree .slot');
+  assert.deepEqual(await menuLabels(), ['Fork', 'Close session']);
+  await clickItem('Close session');
+  await until(() => js(`!document.querySelector('#modal').hidden && document.querySelector('#modal-title').textContent === 'sure?'`), 'closing asks first');
+  assert.equal(await js(`document.querySelector('#modal .btn.danger').textContent`), 'Close', 'clean folder: plain confirm');
+  await js(`document.querySelector('#modal').hidden = true`);
+
+  // a dirty worktree: the question names the uncommitted changes and the button says "anyway"; confirming deletes it
+  await js(`synapse.project.add(${JSON.stringify(feature)})`);
+  fs.writeFileSync(path.join(feature, 'wip.txt'), 'not committed');
+  const featureReal = fs.realpathSync(feature);
+  const acmeBox = `document.querySelector('#tree .proj[data-key=' + CSS.escape(${JSON.stringify(fs.realpathSync(acme))}) + ']')`;
+  await until(() => js(`!!${acmeBox}`), 'acme project in the sidebar');
+  await js(`(() => { const b = ${acmeBox}; if (b.classList.contains('closed')) b.querySelector('.proj-head').click(); })()`); // a project without sessions starts collapsed
+  await until(() => js(`[...document.querySelectorAll('#tree .wt')].some((w) => w.dataset.path === ${JSON.stringify(fs.realpathSync(feature))})`), 'feature worktree in the sidebar');
+  await js(`(() => { const w = [...document.querySelectorAll('#tree .wt')].find((w) => w.dataset.path === ${JSON.stringify(fs.realpathSync(feature))}); const t = w.querySelector('.wt-head'); const r = t.getBoundingClientRect(); t.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 5, clientY: r.top + 5 })); })()`);
+  assert.deepEqual(await menuLabels(), ['New agent', 'New worktree', 'Remove worktree', 'Remove from sidebar']);
+  await clickItem('Remove worktree');
+  await until(() => js(`!document.querySelector('#modal').hidden && document.querySelector('#modal .hint').textContent.includes('1 uncommitted change')`), 'dirty warning');
+  assert.equal(await js(`document.querySelector('#modal .btn.danger').textContent`), 'Delete anyway');
+  await js(`document.querySelector('#modal .btn.danger').click()`);
+  await until(() => !fs.existsSync(feature), 'worktree folder removed');
+  await until(() => !config().workspaces.includes(featureReal), 'worktree gone from app.json');
+  assert.deepEqual(errors, []);
+  console.log('PASS right-click menus, dirty check, worktree removal');
 })().catch((error) => { console.error(error); process.exitCode = 1; }).finally(() => {
   app.once('will-quit', () => { fs.rmSync(fixture, { recursive: true, force: true }); app.exit(process.exitCode || 0); });
   app.quit();

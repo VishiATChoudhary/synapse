@@ -223,6 +223,16 @@ kbd { font: 10.5px var(--mono); color: var(--ink-2); padding: 1px 5px; border: 1
 .modal .lib .opt .k { width: 160px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modal .lib .opt .n { border: 0; color: var(--sig); font-size: 8px; }
 .opt.set .k { width: 150px; flex: none; }
+/* right-click menu */
+.menu { position: fixed; z-index: 40; min-width: 200px; background: var(--paper); border: 1px solid var(--ink); font: 11px var(--mono); text-transform: uppercase; color: var(--ink-2); outline: 0; animation: fade .1s ease-out; }
+.menu-item { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 8px 14px; cursor: pointer; white-space: nowrap; }
+.menu-item:hover, .menu-item.sel { background: var(--ink); color: var(--paper); }
+.menu-item.danger { color: var(--sig); }
+.menu-item.danger:hover, .menu-item.danger.sel { background: var(--sig); color: #fff; }
+.menu-item.has-sub::after { content: '›'; opacity: .6; }
+.menu-sub { display: none; position: absolute; left: 100%; top: -1px; }
+.menu-item.has-sub:hover > .menu-sub, .menu-item.has-sub.sel > .menu-sub { display: block; }
+.menu-rule { height: 1px; background: var(--rule); margin: 4px 0; }
 .modal .sub { padding: 10px 18px 2px; font: 10.5px var(--mono); text-transform: uppercase; color: var(--ink-3); border-top: 1px solid var(--rule); }
 .modal .keys { display: flex; flex-wrap: wrap; gap: 2px 16px; padding: 4px 18px 10px; }
 .modal .keys span { display: inline-flex; align-items: center; gap: 7px; font: 10.5px var(--mono); text-transform: uppercase; color: var(--ink-2); padding: 3px 0; }
@@ -259,3 +269,23 @@ kbd { font: 10.5px var(--mono); color: var(--ink-2); padding: 1px 5px; border: 1
 .canvas iframe { width: 100%; height: 100%; border: 0; display: block; }
 .canvas.loading::after { content: 'starting synapse…'; position: absolute; inset: 0; display: grid; place-items: center; font: 10.5px var(--mono); text-transform: uppercase; color: var(--ink-3); }
 #btn-canvas.on { background: var(--ink); color: var(--paper); }
+
+/* Branch picker and PR status: distinct shapes as well as colors. */
+.git-icon { display: inline-flex; width: 16px; height: 16px; flex: none; vertical-align: middle; }
+.git-icon svg { width: 100%; height: 100%; }
+.pr-status.open { color: #2f9e58; }
+.pr-status.closed { color: #d64545; }
+.pr-status.merged { color: #a371e8; }
+.wt-delete { display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; color: var(--ink-3); }
+.wt-delete:hover, .wt-delete:focus-visible { color: var(--sig); background: var(--wash); }
+.wt-delete:disabled { opacity: .35; cursor: default; }
+.wt-head .wt-delete { opacity: 0; }
+.wt-head:hover .wt-delete, .wt-head:focus-within .wt-delete { opacity: 1; }
+.branch-option { display: flex; align-items: center; border-top: 1px solid var(--rule); }
+.branch-option.sel { background: var(--wash); }
+.branch-open { flex: 1; min-width: 0; text-align: left; border: 0; }
+.modal .branch-list .branch-open .k { flex: 1; width: auto; min-width: 0; text-transform: none; }
+.branch-open .c { flex: none; }
+.branch-open:disabled { opacity: .4; cursor: default; }
+.branch-open:focus-visible, .branch-option .wt-delete:focus-visible { outline: 1px solid var(--sig); outline-offset: -2px; }
+.branch-option > .wt-delete { margin-right: 12px; }

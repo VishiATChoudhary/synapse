@@ -437,5 +437,14 @@ handle('settings:get', () => ({ autoSymlink: !!config().autoSymlink }));
 handle('settings:set', (patch) => { const c = config(); if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink; writeJSON(FILES.app, c); if (c.autoSymlink) scanLibrary(true); return { autoSymlink: !!c.autoSymlink }; });
 handle('worktree:add', ({ repo, name, base }) => addWorktree(repo, name, base));
 handle('worktree:remove', ({ repo, dir, force }) => removeWorktree(repo, dir, force));
+handle('project:remove', ({ path: p }) => { const c = config(); c.workspaces = c.workspaces.filter((w) => w !== p); writeJSON(FILES.app, c); });
+// how many uncommitted changes a folder has (0 when it is not a repo); the renderer asks before anything destructive
+handle('git:dirty', ({ cwd }) => { try { return git(cwd, ['status', '--porcelain']).split('\n').filter(Boolean).length; } catch { return 0; } });
+// end an agent the app did not start; only pids Synapse knows as agents, never anything else
+handle('agent:kill', ({ pid }) => {
+  pid = Number(pid);
+  if (!listAgents().some((a) => a.pid === pid)) throw new Error('that is not a running agent');
+  process.kill(pid, 'SIGTERM');
+});
 handle('synapse', ({ args, as }) => execFileSync(process.execPath.includes('Electron') ? 'node' : process.execPath, [path.join(ROOT, '..', 'cli.mjs'), ...args], { encoding: 'utf8', env: { ...process.env, SYNAPSE_AGENT: as || '' }, timeout: 8000 }));
 handle('linked', ({ a, b }) => linked(readJSON(FILES.edges, []), a, b));
