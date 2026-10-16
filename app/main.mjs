@@ -254,7 +254,10 @@ function cleanEnv() {
 function spawnPty({ cwd, kind, command, cols = 120, rows = 36, extraEnv = {} }) {
   const id = String(nextPty++);
   const env = {
-    ...cleanEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'synapse', LANG: process.env.LANG || 'en_US.UTF-8',
+    ...cleanEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor',
+    // Claude Code and friends pick their richer layout (input pinned at the bottom, more key support) only in
+    // terminals they know. Superset introduces itself as kitty for the same reason; SYNAPSE_APP still says who we are.
+    TERM_PROGRAM: 'kitty', TERM_PROGRAM_VERSION: '0.42.0', LANG: process.env.LANG || 'en_US.UTF-8',
     SYNAPSE_APP: '1', SYNAPSE_SESSION: id, ...extraEnv,
   };
   // exec so the pty's pid is the agent's own pid, which is how Synapse identifies it
