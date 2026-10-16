@@ -126,6 +126,7 @@ async function newSlot(worktreePath, kind) {
   const s = { id: nextId++, worktree: worktreePath, sessions: [], path: [] };
   M.slots.push(s);
   M.focused = s.id;
+  const home = worktreeOf(worktreePath); if (home) M.open.add(home.project.key); // a new session unfolds its project, once
   const name = worktreeOf(worktreePath)?.worktree.name || worktreePath.split('/').pop();
   try {
     await makeSession(s, { kind, title: name, spawn: (cols, rows) => synapse.pty.spawn({ cwd: worktreePath, kind, command: prof.command, cols, rows }) });
@@ -876,7 +877,6 @@ window.addEventListener('resize', () => { const t = top(focusedSlot()); if (t) t
 async function refresh() { apply(await synapse.state()); }
 function apply(st) {
   M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo;
-  for (const p of M.projects) if (p.worktrees.some((w) => M.slots.some((s) => s.worktree === w.path))) M.open.add(p.key);
   render();
 }
 synapse.onState(apply);

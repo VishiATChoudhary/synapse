@@ -58,6 +58,14 @@ const config = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'u
   assert.equal(wtName, 'alpha');
   assert.match(slotTitle, /shell/i, 'session row names what runs, not the folder again');
 
+  // folding a project with running sessions sticks: the one-second state push must not reopen it
+  await js(`document.querySelector('#tree .proj-head').click()`);
+  assert.equal(await js(`document.querySelector('#tree .proj').classList.contains('closed')`), true, 'project folds on click');
+  await sleep(2300);
+  assert.equal(await js(`document.querySelector('#tree .proj').classList.contains('closed')`), true, 'still folded after state pushes');
+  await js(`document.querySelector('#tree .proj-head').click()`);
+  assert.equal(await js(`document.querySelector('#tree .proj').classList.contains('closed')`), false, 'unfolds again');
+
   // ⌃1 starts the first agent profile (claude) in the focused worktree; the shell is not on a digit
   const slotsBefore = await js(`document.querySelectorAll('#tree .slot').length`);
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode: '1', modifiers: ['control'] });
