@@ -72,29 +72,90 @@ function addWorkspace(p) {
   return dir;
 }
 
-// Symlink a workspace into WS_HOME under its folder name (-2, -3 when that name points elsewhere).
+// Symlink a workspace into WS_HOME: a repo under its name, a worktree as <repo>@<folder>, with -2, -3
+// when the name points elsewhere. One link per target: an older link to the same place is renamed.
 // Returns the link, or null when nothing was made. Off with "autoSymlink": false (settings, ⌘,).
 function linkIntoLibrary(dir) {
-  if (!config().autoSymlink || (dir + '/').startsWith(WS_HOME + '/')) return null;
+  if (!config().autoSymlink || (dir + '/').startsWith(WS_HOME + '/') || dir === os.homedir()) return null;
   fs.mkdirSync(WS_HOME, { recursive: true });
-  const base = path.basename(dir);
+  const base = libraryName(dir);
+  const links = libraryLinks();
   for (let i = 1; i < 100; i++) {
     const link = path.join(WS_HOME, i === 1 ? base : `${base}-${i}`);
-    let st = null;
-    try { st = fs.lstatSync(link); } catch {}
-    if (!st) { fs.symlinkSync(dir, link); return link; }
-    if (st.isSymbolicLink() && path.resolve(WS_HOME, fs.readlinkSync(link)) === dir) return link; // already there
+    if (links.get(link) === dir) return link; // already there
+    if (links.has(link) || fs.existsSync(link)) continue; // a link to somewhere else, or a real folder
+    const old = [...links].find(([, target]) => target === dir)?.[0];
+    if (old) fs.renameSync(old, link); else fs.symlinkSync(dir, link);
+    return link;
   }
   return null;
 }
-
-// Every workspace already in app.json gets its link too, so nothing added before this existed is left out.
-function backfillLibrary() {
-  for (const ws of config().workspaces) if (fs.existsSync(ws)) try { linkIntoLibrary(ws); } catch {}
+// every symlink in WS_HOME and where it points
+function libraryLinks() {
+  const out = new Map();
+  let names = [];
+  try { names = fs.readdirSync(WS_HOME); } catch {}
+  for (const n of names) {
+    const p = path.join(WS_HOME, n);
+    try { if (fs.lstatSync(p).isSymbolicLink()) out.set(p, path.resolve(WS_HOME, fs.readlinkSync(p))); } catch {}
+  }
+  return out;
+}
+function libraryName(dir) {
+  try {
+    const repo = git(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']).replace(/\/\.git\/?$/, '');
+    if (repo !== dir) return `${path.basename(repo)}@${path.basename(dir)}`;
+  } catch {}
+  return path.basename(dir);
 }
 
+// Where workspaces already live on this machine: Superset's repos and worktrees, Synapse's own
+// worktrees, the workspaces in app.json, the folders agents run in, and the repos those belong to.
+const SUPERSET_HOME = process.env.SUPERSET_HOME || path.join(os.homedir(), '.superset');
+function knownWorkspaces() {
+  const seen = new Set();
+  const sub = (dir, depth) => {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { return; }
+    for (const n of names) {
+      if (n.startsWith('.')) continue;
+      const p = path.join(dir, n);
+      try { if (!fs.statSync(p).isDirectory()) continue; } catch { continue; }
+      if (depth) sub(p, depth - 1); else seen.add(p);
+    }
+  };
+  sub(path.join(SUPERSET_HOME, 'projects'), 0);
+  sub(path.join(SUPERSET_HOME, 'worktrees'), 1);
+  sub(path.join(DATA, 'worktrees'), 1);
+  for (const ws of config().workspaces) seen.add(ws);
+  try { for (const a of listAgents()) if (a.cwd) seen.add(a.cwd); } catch {}
+  const out = new Set();
+  for (const p of seen) {
+    try { if (!fs.statSync(p).isDirectory()) continue; } catch { continue; }
+    let top = p;
+    try { top = git(p, ['rev-parse', '--show-toplevel']); } catch {}
+    out.add(top);
+    try {
+      const repo = git(top, ['rev-parse', '--path-format=absolute', '--git-common-dir']).replace(/\/\.git\/?$/, '');
+      if (repo !== top && fs.existsSync(repo)) out.add(repo);
+    } catch {}
+  }
+  out.delete(os.homedir());
+  return [...out];
+}
+
+// Link everything known into the library. Runs a second after start, when the library tab opens
+// (at most once a minute) and when the setting is switched on.
+let lastScan = 0;
+function scanLibrary(force) {
+  if (!config().autoSymlink || (!force && Date.now() - lastScan < 60_000)) return;
+  lastScan = Date.now();
+  for (const ws of knownWorkspaces()) try { linkIntoLibrary(ws); } catch {}
+}
+setTimeout(() => scanLibrary(true), 1000);
 // What the library tab lists: every folder in WS_HOME, links resolved, dangling ones skipped.
 function library() {
+  scanLibrary();
   let names = [];
   try { names = fs.readdirSync(WS_HOME); } catch { return []; }
   const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
@@ -109,7 +170,6 @@ function library() {
   }
   return out;
 }
-backfillLibrary();
 
 const safeName = (n) => {
   const s = String(n || '').trim().replace(/[^\w.-]+/g, '-').replace(/^[-.]+|-+$/g, '');
@@ -372,7 +432,7 @@ handle('project:clone', ({ url, name }) => cloneWorkspace(url, name));
 handle('project:pick', () => pickFolder());
 handle('project:library', () => library());
 handle('settings:get', () => ({ autoSymlink: !!config().autoSymlink }));
-handle('settings:set', (patch) => { const c = config(); if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink; writeJSON(FILES.app, c); return { autoSymlink: !!c.autoSymlink }; });
+handle('settings:set', (patch) => { const c = config(); if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink; writeJSON(FILES.app, c); if (c.autoSymlink) scanLibrary(true); return { autoSymlink: !!c.autoSymlink }; });
 handle('worktree:add', ({ repo, name, base }) => addWorktree(repo, name, base));
 handle('worktree:remove', ({ repo, dir, force }) => removeWorktree(repo, dir, force));
 handle('synapse', ({ args, as }) => execFileSync(process.execPath.includes('Electron') ? 'node' : process.execPath, [path.join(ROOT, '..', 'cli.mjs'), ...args], { encoding: 'utf8', env: { ...process.env, SYNAPSE_AGENT: as || '' }, timeout: 8000 }));

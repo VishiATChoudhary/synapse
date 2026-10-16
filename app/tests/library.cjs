@@ -8,14 +8,21 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { execFileSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '../..');
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-library-'));
 const state = path.join(fixture, 'state');
 const lib = path.join(state, 'workspaces');
 const dir = (...p) => { const d = path.join(fixture, ...p); fs.mkdirSync(d, { recursive: true }); return d; };
-const alpha = dir('code', 'alpha'), beta = dir('code', 'beta'), beta2 = dir('other', 'beta'), gamma = dir('code', 'gamma');
+const alpha = dir('code', 'alpha'), beta = dir('code', 'beta'), beta2 = dir('other', 'beta'), gamma = dir('code', 'gamma'), epsilon = dir('code', 'epsilon');
 fs.mkdirSync(state);
+// a Superset-style layout: a repo in projects/ with a worktree in worktrees/<repo>/<branch>
+const superset = dir('superset'), acme = dir('superset', 'projects', 'acme'), feature = path.join(superset, 'worktrees', 'acme', 'feature');
+const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { stdio: 'pipe' });
+git(acme, 'init', '-q'); git(acme, 'commit', '-q', '--allow-empty', '-m', 'init');
+fs.mkdirSync(path.dirname(feature), { recursive: true }); git(acme, 'worktree', 'add', '-q', '-b', 'feature', feature);
+process.env.SUPERSET_HOME = superset;
 fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [alpha], profiles: { shell: { command: 'cat', label: 'Shell' } } }));
 process.env.SYNAPSE_HOME = state;
 process.env.SYNAPSE_DEMO = '1';
@@ -42,8 +49,10 @@ const config = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'u
   win.show(); win.focus();
   await until(() => js(`!!document.querySelector('.term.visible .xterm-helper-textarea')`), 'first session');
 
-  // a workspace that was already in app.json is linked on startup
-  assert.equal(linkOf('alpha'), alpha, 'backfill links existing workspaces');
+  // a second after start, everything known gets linked: app.json entries, Superset repos and worktrees
+  await until(() => linkOf('alpha') === alpha, 'startup scan links app.json workspaces');
+  assert.equal(linkOf('acme'), fs.realpathSync(acme), 'Superset repo linked under its name');
+  assert.equal(linkOf('acme@feature'), fs.realpathSync(feature), 'worktree linked as repo@folder');
   assert.equal(config().autoSymlink, true, 'setting defaults to on');
 
   // adding a folder links it; a second folder with the same name gets a suffix; adding twice makes no second link
@@ -54,12 +63,20 @@ const config = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'u
   await js(`synapse.project.add(${JSON.stringify(beta)})`);
   assert.equal(fs.readdirSync(lib).filter((n) => n.startsWith('beta')).length, 2, 'no duplicate link for the same target');
 
+  // an older link to the same place is renamed rather than doubled
+  fs.symlinkSync(epsilon, path.join(lib, 'eps-old'));
+  await js(`synapse.project.add(${JSON.stringify(epsilon)})`);
+  assert.equal(linkOf('epsilon'), epsilon, 'link renamed to the folder name');
+  assert.equal(linkOf('eps-old'), null, 'old link gone');
+
   // the library lists real folders and links alike, resolved, and knows which are already added
   fs.mkdirSync(path.join(lib, 'delta'));
   fs.symlinkSync(path.join(fixture, 'nowhere'), path.join(lib, 'dangling'));
   const listed = await js(`synapse.project.library()`);
-  assert.deepEqual(listed.map((w) => [w.name, w.added, w.link]), [['alpha', true, true], ['beta', true, true], ['beta-2', true, true], ['delta', false, false]]);
-  assert.equal(listed[2].path, fs.realpathSync(beta2), 'paths come back resolved');
+  assert.deepEqual(listed.map((w) => [w.name, w.added, w.link]), [
+    ['acme', false, true], ['acme@feature', false, true], ['alpha', true, true], ['beta', true, true], ['beta-2', true, true], ['delta', false, false], ['epsilon', true, true],
+  ]);
+  assert.equal(listed[4].path, fs.realpathSync(beta2), 'paths come back resolved');
 
   // turning the setting off stops new links and the backfill; existing links stay
   assert.deepEqual(await js(`synapse.settings.set({ autoSymlink: false })`), { autoSymlink: false });
@@ -72,7 +89,7 @@ const config = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'u
   // the + workspace modal opens on the library tab when it has entries, and picking an entry adds it
   await js(`document.querySelector('#add-project').click()`);
   await until(() => js(`!document.querySelector('#modal').hidden && document.querySelector('.modal .seg button.on')?.textContent === 'library'`), 'library tab');
-  await until(() => js(`document.querySelectorAll('.modal .lib .opt').length === 4`), 'four library rows');
+  await until(() => js(`document.querySelectorAll('.modal .lib .opt').length === 7`), 'seven library rows');
   await js(`[...document.querySelectorAll('.modal .lib .opt')].find((o) => o.textContent.includes('delta')).click()`);
   await until(() => config().workspaces.includes(fs.realpathSync(path.join(lib, 'delta'))), 'delta added from the library');
   await until(() => js(`document.querySelector('#modal').hidden`), 'modal closed');
