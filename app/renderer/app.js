@@ -590,6 +590,13 @@ async function promptProject(mode) {
 }
 
 // ---------------------------------------------------------------- settings
+const SHORTCUTS = [
+  ['app', [['⌘T', 'shell'], ['⌘N', 'agent'], ['⇧⌘N', 'worktree'], ['⇧⌘F', 'fork'], ['⌘E', 'fork tree'], ['⌘W', 'close session'], ['⇧⌘⌫', 'pop fork'], ['⌘[ ⌘]', 'switch session'], ['⌘1-9', 'nth session'], ['⌃Tab ⌘G', 'node view'], ['⌘,', 'settings']]],
+  ['terminal', [['⌘⌫', 'clear line'], ['⌘← ⌘→', 'line start / end'], ['⌥⌫', 'delete word']]],
+  ['node view', [['⌘F /', 'search'], ['drag ring', 'link'], ['drag', 'move agent or project'], ['dbl-click', 'rename'], ['⌘-click', 'open its session'], ['scroll', 'zoom'], ['F', 'fit'], ['A', 'arrange'], ['⌫', 'unlink'], ['esc', 'back to terminals']]],
+];
+// the gear in the node view asks for the same modal
+addEventListener('message', (ev) => { if (ev.source === $('#canvas-frame').contentWindow && ev.data?.type === 'synapse:settings' && $('#modal').hidden) openSettings(); });
 async function openSettings() {
   let s = {};
   try { s = await synapse.settings.get(); } catch {}
@@ -606,6 +613,11 @@ async function openSettings() {
       catch (e) { cb.checked = !cb.checked; toast(e.message, true); }
     };
     body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow);
+    for (const [title, keys] of SHORTCUTS) {
+      const box = el('div', 'keys');
+      for (const [k, what] of keys) { const row = el('span'); row.append(el('kbd', '', k), what); box.appendChild(row); }
+      body.append(el('div', 'sub', title), box);
+    }
     body.tabIndex = 0; body.onkeydown = (e) => { if (e.key === 'Escape') close(); };
   });
 }

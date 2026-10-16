@@ -35,6 +35,7 @@
   .bar { position: fixed; top: 0; left: 0; right: 0; height: 48px; z-index: 6; display: flex; align-items: stretch; background: var(--paper); border-bottom: 1px solid var(--rule); font-size: 11px; text-transform: uppercase; }
   .bar > * { display: flex; align-items: center; border-right: 1px solid var(--rule); }
   .brand { gap: 10px; padding: 0 18px; user-select: none; }
+  html.in-app .brand { display: none; }
   .brand b { font: 500 24px/1 var(--display); letter-spacing: .02em; }
   .brand span { color: var(--ink-3); }
   .stats { margin-left: auto; border-left: 1px solid var(--rule); }
@@ -67,10 +68,14 @@
   .res mark { background: none; color: inherit; text-decoration: underline; text-underline-offset: 3px; }
   .res.none { color: var(--ink-3); cursor: default; }
 
-  .hints { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; background: var(--paper); border: 1px solid var(--rule);
+  .gear { position: fixed; right: 16px; bottom: 16px; z-index: 6; width: 34px; height: 34px; display: grid; place-items: center; background: var(--paper); border: 1px solid var(--rule); color: var(--ink-2); font-size: 15px; cursor: pointer; transition: background-color .15s ease-out, color .15s ease-out; }
+  .gear:hover, .gear.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .hints { position: fixed; right: 16px; bottom: 58px; z-index: 6; display: none; flex-direction: column; min-width: 240px; background: var(--paper); border: 1px solid var(--rule);
     font-size: 10.5px; text-transform: uppercase; color: var(--ink-2); white-space: nowrap; user-select: none; }
-  .hints span { padding: 7px 12px; border-right: 1px solid var(--rule); }
-  .hints span:last-child { border-right: 0; }
+  .hints.show { display: flex; }
+  .hints .head { padding: 8px 12px; border-bottom: 1px solid var(--rule); color: var(--ink-3); }
+  .hints span { display: flex; justify-content: space-between; gap: 18px; padding: 6px 12px; border-bottom: 1px solid var(--rule); }
+  .hints span:last-child { border-bottom: 0; }
 
   .empty { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; text-align: center; opacity: 0; transition: opacity .3s ease-out; }
   .empty.show { opacity: 1; }
@@ -170,6 +175,7 @@
 </style>
 </head>
 <body>
+<script>if (window.parent !== window) document.documentElement.classList.add('in-app');</script>
 <canvas id="c"></canvas>
 <div class="grain" aria-hidden="true"></div>
 
@@ -194,15 +200,17 @@
   <button class="mode" id="mode" type="button" aria-label="Toggle dark mode"></button>
 </div>
 <div class="empty" id="empty"><div><h2>No agents yet</h2><p>Start a <code>claude</code> or <code>codex</code> session and it shows up here.</p></div></div>
+<button class="gear" id="gear" type="button" title="shortcuts and settings" aria-label="Shortcuts and settings">⚙</button>
 <div class="hints" id="hints">
-  <span><kbd>⌘F</kbd>search</span>
-  <span><kbd>drag ring</kbd>link</span>
-  <span><kbd>drag</kbd>move agent or project</span>
-  <span><kbd>dbl-click</kbd>rename agent or project</span>
-  <span><kbd>scroll</kbd>zoom</span>
-  <span><kbd>F</kbd>fit</span>
-  <span><kbd>A</kbd>arrange</span>
-  <span><kbd>⌫</kbd>unlink</span>
+  <div class="head">Shortcuts</div>
+  <span>search<kbd>⌘F</kbd></span>
+  <span>link<kbd>drag ring</kbd></span>
+  <span>move agent or project<kbd>drag</kbd></span>
+  <span>rename agent or project<kbd>dbl-click</kbd></span>
+  <span>zoom<kbd>scroll</kbd></span>
+  <span>fit<kbd>F</kbd></span>
+  <span>arrange<kbd>A</kbd></span>
+  <span>unlink<kbd>⌫</kbd></span>
 </div>
 <div class="legend" id="legend"></div>
 <aside class="panel" id="panel"></aside>
@@ -531,13 +539,17 @@ cv.addEventListener('dblclick', (ev) => {
   if (h.type === 'node') { selected = { type: 'node', id: h.id }; renderPanel(true).then(startRename); revealSelected(); }
   if (h.type === 'group') startProjectRename(h.key);
 });
+$('gear').onclick = () => {
+  if (window.parent !== window) return window.parent.postMessage({ type: 'synapse:settings' }, '*');
+  const on = $('hints').classList.toggle('show'); $('gear').classList.toggle('on', on);
+};
 addEventListener('keydown', (ev) => {
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'f') { ev.preventDefault(); $('q').focus(); $('q').select(); return; }
   if (ev.target.tagName === 'INPUT') return;
   if (ev.key === '/') { ev.preventDefault(); $('q').focus(); return; }
   if (ev.key === 'f' || ev.key === 'F') fit();
   if (ev.key === 'a' || ev.key === 'A') { arrange(); toast('Arranged by project'); }
-  if (ev.key === 'Escape') { selected = null; closePanel(); }
+  if (ev.key === 'Escape') { selected = null; closePanel(); $('hints').classList.remove('show'); $('gear').classList.remove('on'); }
   if ((ev.key === 'Backspace' || ev.key === 'Delete') && selected?.type === 'edge') removeEdge(selected.id);
 });
 

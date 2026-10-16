@@ -98,6 +98,7 @@ const config = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'u
   await js(`dispatchEvent(new KeyboardEvent('keydown', { key: ',', metaKey: true, bubbles: true }))`);
   await until(() => js(`!document.querySelector('#modal').hidden && document.querySelector('#modal-title').textContent === 'settings'`), 'settings modal');
   assert.equal(await js(`document.querySelector('#modal input[type=checkbox]').checked`), false);
+  assert.ok((await js(`document.querySelector('#modal-body').textContent`)).includes('⌘T'), 'shortcuts are listed in settings');
   assert.deepEqual(errors, []);
   console.log('PASS library tab and settings modal');
 })().catch((error) => { console.error(error); process.exitCode = 1; }).finally(() => {
