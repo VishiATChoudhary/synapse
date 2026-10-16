@@ -54,9 +54,13 @@ const spawns = [];
   win.show(); win.focus();
   await until(() => js(`!!document.querySelector('.term.visible .xterm-helper-textarea')`), 'first session');
 
-  // the first session is created at the size it is shown at, not xterm's default 80x24
-  const fits = await js(`(() => { const w = document.querySelector('.term.visible'); const cs = getComputedStyle(w); const cell = w.querySelector('.xterm-rows').firstElementChild.getBoundingClientRect().height; return Math.floor((w.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)) / cell); })()`);
-  assert.ok(spawns.length >= 1 && Math.abs(spawns[0].rows - fits) <= 1, `first pty spawned with ${spawns[0]?.rows} rows, the view fits ${fits}`);
+  // the first pty gets the rows the view shows (not xterm's default 24), and that number holds still:
+  // a container sized by its own content once made fit() add a row on every refresh
+  const viewRows = () => js(`document.querySelector('.term.visible .xterm-rows').children.length`);
+  const shown = await viewRows();
+  assert.ok(spawns.length >= 1 && spawns[0].rows === shown && shown > 24, `first pty spawned with ${spawns[0]?.rows} rows, the view shows ${shown}`);
+  await sleep(2500);
+  assert.equal(await viewRows(), shown, 'rows do not creep between refreshes');
 
   // the whole theme button is clickable: nothing lies over its top half
   const hits = await js(`(() => { const r = document.querySelector('#theme').getBoundingClientRect(); const x = r.left + r.width / 2; return [r.top + 6, r.bottom - 6].map((y) => document.elementFromPoint(x, y).id || document.elementFromPoint(x, y).className); })()`);
