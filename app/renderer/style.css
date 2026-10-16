@@ -168,9 +168,10 @@ body.sidebar-collapsed .main > .top { padding-left: 86px; }
 .logo.none { display: grid; place-items: center; font: 9px var(--mono); border: 1px solid currentColor; }
 .slot .logo, .card .logo { width: 13px; height: 13px; }
 .stage { flex: 1; position: relative; background: var(--term-bg); overflow: hidden; }
-/* inset: 0 matters. Without it the box is sized by its content, fit() reads that box back, and the terminal
-   grows by a row on every refresh. */
-.term { position: absolute; inset: 0; display: none; padding: 14px 10px 10px 18px; }
+/* The spacing is inset, not padding: fit() sizes the terminal to this box and only subtracts xterm's own
+   padding, so padding here would hand out rows and columns that end up clipped. And the inset must be
+   there at all: without it the box is sized by its content, fit() reads that back and grows a row per refresh. */
+.term { position: absolute; inset: 14px 10px 10px 18px; display: none; }
 .term.visible { display: block; }
 .stage.split .term { border: 1px solid var(--rule); }
 .stage.split .term.active { border-color: var(--sig); }

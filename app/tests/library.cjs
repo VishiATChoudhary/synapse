@@ -61,6 +61,10 @@ const spawns = [];
   assert.ok(spawns.length >= 1 && spawns[0].rows === shown && shown > 24, `first pty spawned with ${spawns[0]?.rows} rows, the view shows ${shown}`);
   await sleep(2500);
   assert.equal(await viewRows(), shown, 'rows do not creep between refreshes');
+  // and everything xterm draws lies inside its box: the last row and column are not under the stage's edge
+  const box = await js(`(() => { const w = document.querySelector('.term.visible').getBoundingClientRect(); const sc = document.querySelector('.term.visible .xterm-screen').getBoundingClientRect(); const st = document.querySelector('#stage').getBoundingClientRect(); return { over: Math.round(Math.max(0, sc.bottom - w.bottom, sc.right - w.right, sc.bottom - st.bottom, sc.right - st.right)), slack: Math.round(w.bottom - sc.bottom) }; })()`);
+  assert.equal(box.over, 0, 'xterm screen overflows its box');
+  assert.ok(box.slack < 40, `too much unused space below the terminal: ${box.slack}px`);
 
   // the whole theme button is clickable: nothing lies over its top half
   const hits = await js(`(() => { const r = document.querySelector('#theme').getBoundingClientRect(); const x = r.left + r.width / 2; return [r.top + 6, r.bottom - 6].map((y) => document.elementFromPoint(x, y).id || document.elementFromPoint(x, y).className); })()`);
