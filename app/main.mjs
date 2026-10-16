@@ -56,7 +56,8 @@ function projects() {
   }
   // the order they were dragged into in the sidebar, then the rest by name
   const order = config().projectOrder || [];
-  const rank = (g) => { const i = order.indexOf(g.key); return i < 0 ? Infinity : i; };
+  // a repo's own folder used to be keyed project:<name>; an order saved then still counts
+  const rank = (g) => { let i = order.indexOf(g.key); if (i < 0) i = order.indexOf(`project:${path.basename(g.key)}`); return i < 0 ? Infinity : i; };
   return [...groups.values()].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
 }
 

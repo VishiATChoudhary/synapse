@@ -399,7 +399,12 @@ function render() {
 // its process runs there. The tree redraws every second from state, which would pull the row out from
 // under the pointer, so it holds still while a drag is on.
 let drag = null; // { type: 'proj', key } | { type: 'slot', id, worktree }
-function dropSide(e, node) { const r = node.getBoundingClientRect(); return e.clientY < r.top + r.height / 2 ? 'before' : 'after'; }
+// a workspace's tab sits above its box (and a collapsed box is only a rule), so the tab counts as its top
+function dropSide(e, node) {
+  const r = node.getBoundingClientRect(), head = node.querySelector(':scope > .proj-head')?.getBoundingClientRect();
+  const topY = head ? Math.min(head.top, r.top) : r.top;
+  return e.clientY < (topY + r.bottom) / 2 ? 'before' : 'after';
+}
 function clearDrop() { for (const n of document.querySelectorAll('.drop-before, .drop-after')) n.classList.remove('drop-before', 'drop-after'); }
 function draggable(handle, what, target, accepts, onDrop) {
   handle.draggable = true;
