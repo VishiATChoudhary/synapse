@@ -81,6 +81,16 @@ process.argv.push('--demo');
   await js(`(() => { const i = document.querySelector('#modal input'); i.value = 'measure it'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
   await until(() => js(`document.querySelectorAll('.term').length === 6`), 'sixth session');
   assert.equal(await js(`document.querySelector('#deck .depth').textContent`), '⑂ 3/6');
+
+  // the fork's pty has the rows the view shows, like any other session (it used to start at the 120x36 default)
+  const viewRows = await js(`document.querySelector('.term.visible .xterm-rows').children.length`);
+  await sleep(800);
+  await js(`document.querySelector('.term.visible .xterm-helper-textarea').focus()`);
+  for (const ch of 'stty size; echo SIZE_DONE\r') win.webContents.sendInputEvent(ch === '\r' ? { type: 'keyDown', keyCode: 'Return' } : { type: 'char', keyCode: ch });
+  await until(() => js(`[...document.querySelectorAll('.term.visible .xterm-rows > div')].some((d) => d.textContent.trim().startsWith('SIZE_DONE'))`), 'stty answered');
+  const stty = await js(`(() => { const t = [...document.querySelectorAll('.term.visible .xterm-rows > div')].map((d) => d.textContent.trim()); const i = t.findIndex((l) => l.startsWith('SIZE_DONE')); return t.slice(0, i).reverse().find((l) => /^[0-9]+ [0-9]+$/.test(l)); })()`);
+  const tail = await js(`[...document.querySelectorAll('.term.visible .xterm-rows > div')].map((d) => d.textContent.trim()).filter(Boolean).slice(-6)`);
+  assert.equal(Number(stty?.split(' ')[0]), viewRows, `fork pty rows ${stty} vs view rows ${viewRows}; screen tail: ${JSON.stringify(tail)}`);
   assert.deepEqual(errors, []);
   console.log('PASS fork stack');
 })().catch((error) => { console.error(error, JSON.stringify(errors)); process.exitCode = 1; }).finally(() => {

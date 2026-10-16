@@ -322,7 +322,7 @@ function forkCommand(kind, agent, question, profiles) {
   }
 }
 
-function spawnFork({ parentPty, question, requestId }) {
+function spawnFork({ parentPty, question, requestId, cols, rows }) {
   const t = ptys.get(parentPty);
   if (!t) throw new Error('parent session is gone');
   const agent = agentsByPty()[parentPty];
@@ -330,7 +330,7 @@ function spawnFork({ parentPty, question, requestId }) {
   if (DEMO && !agent) command = ''; // demo: fork a shell into another shell, so the tree can be tried without agents
   else if (!agent) throw new Error('that session is not a known agent (shells cannot fork)');
   else command = forkCommand(agent.kind, agent, question, config().profiles);
-  const r = spawnPty({ cwd: t.cwd, kind: t.kind, command, extraEnv: { SYNAPSE_FORK_OF: agent?.synapseId || '', SYNAPSE_FORK_Q: question } });
+  const r = spawnPty({ cwd: t.cwd, kind: t.kind, command, cols, rows, extraEnv: { SYNAPSE_FORK_OF: agent?.synapseId || '', SYNAPSE_FORK_Q: question } }); // the renderer's size, not the 120x36 default
   if (agent?.synapseId) try { recordFork(r.pid, agent.synapseId, question); } catch {} // the canvas draws the fork tree from this
   if (requestId) {
     const reqs = readJSON(FILES.forks, []);

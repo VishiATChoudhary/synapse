@@ -83,6 +83,7 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
   fit.fit();
   if (!wasVisible) wrap.classList.remove('visible'); // renderStage() decides what is shown
   const { id: pty } = await spawn(term.cols, term.rows);
+  synapse.pty.resize(pty, term.cols, term.rows); // whatever the spawner defaulted to, the pty and the view agree from the first frame
   const x = { id: nextId++, pty, kind, title, question, parent, exited: false, term, fit, el: wrap };
   term.onData(sforkFilter(() => x));
   term.onResize(({ cols, rows }) => synapse.pty.resize(pty, cols, rows));
