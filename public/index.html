@@ -290,6 +290,40 @@ const flows = new Map();  // edge id -> burst intensity 0..1
 const packets = [];       // messages in flight {from, to, born}
 let query = '', matches = null, resultIdx = 0;
 
+// Collapsing is presentation only: nodes, links and running agents are preserved.
+const collapsedBranches = new Set();
+let sessionHidden = new Set();
+const forkChildren = (id) => [...agents.values()].filter((n) => !n.dying && n.a?.forkOf === id);
+function updateBranchVisibility() {
+  for (const [id, n] of agents) {
+    const seen = new Set();
+    n.hidden = false;
+    for (let cur = id; cur && !seen.has(cur); cur = agents.get(cur)?.a?.forkOf) {
+      seen.add(cur);
+      if (sessionHidden.has(cur) || collapsedBranches.has(cur)) { n.hidden = true; break; }
+    }
+  }
+  if (selected?.type === 'node' && agents.get(selected.id)?.hidden) { selected = null; closePanel(); }
+  if (agents.get(hover?.id)?.hidden) hover = null;
+}
+function expandBranch(id) {
+  const todo = [id], seen = new Set();
+  while (todo.length) {
+    const cur = todo.pop();
+    if (seen.has(cur)) continue;
+    seen.add(cur); collapsedBranches.delete(cur);
+    todo.push(...forkChildren(cur).map((n) => n.a.id));
+  }
+}
+function branchActions(id) {
+  const kids = forkChildren(id), out = [];
+  if (kids.some((n) => !n.hidden)) out.push(['Collapse all children', () => doAction({ action: 'collapse-children', id })]);
+  if (kids.some((n) => n.hidden)) out.push(['Expand all children', () => doAction({ action: 'expand-children', id })]);
+  for (const n of kids) out.push([`${n.hidden ? 'Expand' : 'Collapse'} child: ${n.a.forkQ || n.a.name}`, () => doAction({ action: n.hidden ? 'expand-branch' : 'collapse-branch', id: n.a.id })]);
+  if (agents.get(id)?.a?.forkOf) out.push(['Collapse this child', () => doAction({ action: 'collapse-branch', id })]);
+  return out;
+}
+
 // ---------- helpers ----------
 function rgba(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }
 // theme tokens from CSS; signal = light, night = dark, following the system until you pick one
@@ -432,6 +466,7 @@ function applyState(s) {
     n.a = a; n.color = a.color; n.dying = 0;
   });
   for (const [id, n] of agents) if (!seen.has(id) && !n.dying) n.dying = performance.now();
+  updateBranchVisibility();
   assignShades();
   edges = s.edges;
   const live = [...agents.values()].filter((n) => !n.dying);
@@ -533,7 +568,7 @@ async function removeEdge(id) {
 // ---------- geometry ----------
 function edgeGeom(e) {
   const a = agents.get(e.from), b = agents.get(e.to);
-  if (!a || !b) return null;
+  if (!a || !b || a.hidden || b.hidden) return null;
   const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
   const nx = -dy / len, ny = dx / len, bend = Math.min(60, len * 0.14);
   const cx = (a.x + b.x) / 2 + nx * bend, cy = (a.y + b.y) / 2 + ny * bend;
@@ -555,7 +590,7 @@ function tAtDist(g, fromEnd, d) {
 function hitTest(wx, wy) {
   let best = null;
   for (const [id, n] of agents) {
-    if (n.dying) continue;
+    if (n.dying || n.hidden) continue;
     const d = Math.max(Math.abs(n.x - wx), Math.abs(n.y - wy));
     if (d <= R + 2) return { type: 'node', id };
     if (d <= R + RING + 4 && (!best || d < best.d)) best = { type: 'ring', id, d };
@@ -584,6 +619,12 @@ let cmenu = null;
 const closeCmenu = () => { cmenu?.remove(); cmenu = null; };
 function doAction(d) {
   const n = d.id && agents.get(d.id);
+  if (d.action === 'session-visibility') { sessionHidden = new Set(d.hidden); updateBranchVisibility(); }
+  if (d.action === 'collapse-branch' && n) collapsedBranches.add(d.id);
+  if (d.action === 'expand-branch' && n) expandBranch(d.id);
+  if (d.action === 'collapse-children' && n) for (const child of forkChildren(d.id)) collapsedBranches.add(child.a.id);
+  if (d.action === 'expand-children' && n) for (const child of forkChildren(d.id)) expandBranch(child.a.id);
+  if (/^(collapse|expand)-/.test(d.action)) updateBranchVisibility();
   if (d.action === 'rename' && n) { selected = { type: 'node', id: d.id }; renderPanel(true).then(startRename); revealSelected(); }
   if (d.action === 'rename-project' && d.key) startProjectRename(d.key);
   if (d.action === 'unlink' && n) for (const e of edges.filter((e) => e.from === d.id || e.to === d.id)) removeEdge(e.id);
@@ -600,12 +641,12 @@ cv.addEventListener('contextmenu', (ev) => {
     const a = n?.a, mate = g?.outer ? { cwd: g.project.startsWith('/') ? g.project : undefined } : g?.nodes[0]?.[1]?.a;
     window.parent.postMessage({ type: 'synapse:menu', x: ev.clientX, y: ev.clientY,
       hit: n ? 'node' : g ? 'group' : 'background',
-      agent: a ? { id: a.id, name: a.name, pid: a.pid, kind: a.kind, cwd: a.cwd } : null,
+      agent: a ? { id: a.id, name: a.name, pid: a.pid, kind: a.kind, cwd: a.cwd, parentId: a.forkOf, children: forkChildren(a.id).map((n) => ({ id: n.a.id, name: n.a.forkQ || n.a.name, hidden: n.hidden })) } : null,
       group: g ? { key: g.key, project: g.project, label: g.label, cwd: mate?.cwd, count: g.nodes.length } : null }, '*');
     return;
   }
   closeCmenu();
-  const items = n ? [['Rename', () => doAction({ action: 'rename', id: n.a.id })], ['Unlink all', () => doAction({ action: 'unlink', id: n.a.id })]]
+  const items = n ? [...branchActions(n.a.id), ['Rename', () => doAction({ action: 'rename', id: n.a.id })], ['Unlink all', () => doAction({ action: 'unlink', id: n.a.id })]]
     : g ? [['Rename project', () => doAction({ action: 'rename-project', key: g.key })]]
     : [['Arrange', () => doAction({ action: 'arrange' })], ['Fit', () => doAction({ action: 'fit' })]];
   cmenu = document.createElement('div'); cmenu.className = 'cmenu';
@@ -675,7 +716,7 @@ addEventListener('pointerup', () => {
 function linkTarget() {
   let best = null, bd = Infinity;
   for (const [id, n] of agents) {
-    if (n.dying || id === drag?.id) continue;
+    if (n.dying || n.hidden || id === drag?.id) continue;
     const d = Math.hypot(n.x - mouse.wx, n.y - mouse.wy);
     if (d < R + 34 && d < bd) { bd = d; best = id; }
   }
@@ -695,6 +736,25 @@ cv.addEventListener('dblclick', (ev) => {
   if (h.type === 'node') { selected = { type: 'node', id: h.id }; renderPanel(true).then(foreign ? null : startRename); revealSelected(); }
   if (h.type === 'group' && !String(h.key).startsWith('remote:')) startProjectRename(h.key);
 });
+// The desktop owns Escape navigation; capture it before search and rename handlers.
+// Standalone canvas keeps its local Escape behavior.
+addEventListener('keydown', (ev) => {
+  if (window.parent === window || ev.key !== 'Escape') return;
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  document.querySelector('.frame-rename')?.dispatchEvent(new Event('synapse:cancel-edit'));
+  document.querySelector('input.rename')?.dispatchEvent(new Event('synapse:cancel-edit'));
+  window.parent.postMessage({ type: 'synapse:close' }, '*');
+}, true);
+addEventListener('keydown', (ev) => {
+  if (window.parent === window || !ev.metaKey || !/^[1-9\[\]]$/.test(ev.key)) return;
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  window.parent.postMessage({ type: 'synapse:switch', key: ev.key }, '*');
+}, true);
+for (const type of ['mouseup', 'auxclick']) addEventListener(type, (ev) => {
+  if (window.parent === window || (ev.button !== 3 && ev.button !== 4)) return;
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  if (type === 'mouseup') window.parent.postMessage({ type: ev.button === 3 ? 'synapse:close' : 'synapse:forward' }, '*');
+}, true);
 $('gear').onclick = () => {
   if (window.parent !== window) return window.parent.postMessage({ type: 'synapse:settings' }, '*');
   const on = $('hints').classList.toggle('show'); $('gear').classList.toggle('on', on);
@@ -715,7 +775,7 @@ function revealSelected() {
   if (sx > limit) cam.tx -= sx - limit + 40;
 }
 function fit(instant) {
-  const live = [...agents.values()].filter((n) => !n.dying);
+  const live = [...agents.values()].filter((n) => !n.dying && !n.hidden);
   if (!live.length) return;
   const xs = live.map((n) => n.x), ys = live.map((n) => n.y);
   const minX = Math.min(...xs) - 120, maxX = Math.max(...xs) + 120, minY = Math.min(...ys) - 110, maxY = Math.max(...ys) + 130;
@@ -745,7 +805,7 @@ function searchAgents(q) {
   if (!words.length) return [];
   const out = [];
   for (const [id, n] of agents) {
-    if (n.dying) continue;
+    if (n.dying || n.hidden) continue;
     // every word has to match some field; highlight the matches on the best field
     let total = 0, top = null;
     const idx = {};
@@ -955,6 +1015,7 @@ function startRename() {
     renderPanel(false);
   };
   input.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Enter') finish(true); if (ev.key === 'Escape') finish(false); });
+  input.addEventListener('synapse:cancel-edit', () => finish(false));
   input.addEventListener('blur', () => finish(true));
 }
 
@@ -984,6 +1045,7 @@ function startProjectRename(key) {
     else toast(name ? `Renamed to ${out.label}` : `Back to ${out.label}`);
   };
   input.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Enter') finish(true); if (ev.key === 'Escape') finish(false); });
+  input.addEventListener('synapse:cancel-edit', () => finish(false));
   input.addEventListener('blur', () => finish(true));
 }
 
@@ -1072,6 +1134,7 @@ function drawEdge(e, t) {
 }
 
 function drawNode(id, n, t) {
+  if (n.hidden) return;
   const a = n.a, c = V.ink;
   const appear = ease(clamp((t - n.born) / 700, 0, 1));
   const vanish = n.dying ? 1 - clamp((t - n.dying) / 600, 0, 1) : 1;
@@ -1139,7 +1202,8 @@ function drawNode(id, n, t) {
   knockout(name, 0, R + 22);
   ctx.fillStyle = V.ink; ctx.fillText(name, 0, R + 22);
   ctx.font = '10px "Fragment Mono", ui-monospace, monospace';
-  const sub = `${busy ? '■' : '□'} ${a.kind} · ${a.forkQ ? `⑂ ${short(a.forkQ, 22)}` : short(a.frame, 22)}`.toUpperCase();
+  const hiddenKids = forkChildren(id).filter((child) => child.hidden).length;
+  const sub = hiddenKids ? `+${hiddenKids} children collapsed · right-click` : `${busy ? '■' : '□'} ${a.kind} · ${a.forkQ ? `⑂ ${short(a.forkQ, 22)}` : short(a.frame, 22)}`.toUpperCase();
   knockout(sub, 0, R + 38);
   ctx.fillStyle = busy ? V.sig : rgba(V.ink, 0.5);
   ctx.fillText(sub, 0, R + 38);
@@ -1191,7 +1255,7 @@ function drawLinkPreview(t) {
 function projectGroups() {
   const groups = new Map();
   for (const [id, n] of agents) {
-    if (n.dying || !n.a) continue;
+    if (n.dying || n.hidden || !n.a) continue;
     const g = groups.get(n.a.frameKey) || { label: n.a.frame, project: n.a.projectKey, projectLabel: n.a.project, shade: shadeOf(n), nodes: [] };
     g.nodes.push([id, n]); groups.set(n.a.frameKey, g);
   }
@@ -1318,7 +1382,7 @@ function saveAll() {
 
 function physics() {
   // soft separation so nodes never overlap
-  const list = [...agents.entries()].filter(([, n]) => !n.dying);
+  const list = [...agents.entries()].filter(([, n]) => !n.dying && !n.hidden);
   for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
     const [ia, a] = list[i], [ib, b] = list[j];
     const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 0.01, min = 215;

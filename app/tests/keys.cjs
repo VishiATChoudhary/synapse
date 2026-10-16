@@ -12,7 +12,7 @@ const root = path.resolve(__dirname, '../..');
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-keys-'));
 const state = path.join(fixture, 'state');
 fs.mkdirSync(state);
-fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], profiles: { shell: { command: 'cat', label: 'Shell' }, claude: { command: 'cat', label: 'Claude Code' } } }));
+fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], profiles: { shell: { command: 'cat', label: 'Shell' }, claude: { command: 'cat', label: 'Fixture agent' } } }));
 process.env.SYNAPSE_HOME = state;
 process.env.SYNAPSE_DEMO = '1';
 process.env.SHELL = '/bin/sh';
@@ -51,6 +51,8 @@ async function press(keyCode, modifiers = []) {
 
   const got = {
     enter: await press('Enter'),
+    shiftEnter: await press('Enter', ['shift']),
+    altEnter: await press('Enter', ['alt']),
     backspace: await press('Backspace'),
     metaEnter: await press('Enter', ['meta']),
     metaBackspace: await press('Backspace', ['meta']),
@@ -68,6 +70,8 @@ async function press(keyCode, modifiers = []) {
   got.agentEnter = await press('Enter');
   console.log('bytes', JSON.stringify(got));
   assert.equal(got.enter, '\r', 'Enter sends CR');
+  assert.equal(got.shiftEnter, '\x1b\r', 'Shift+Enter sends the multiline-input sequence, not submit');
+  assert.equal(got.shiftEnter, got.altEnter, 'Shift+Enter matches Option+Enter');
   assert.equal(got.backspace, '\x7f', 'Backspace sends DEL');
   assert.equal(got.metaEnter, '\r', '⌘Enter submits like Enter');
   assert.equal(got.metaBackspace, '\x15', '⌘⌫ clears the line (^U)');
@@ -78,6 +82,17 @@ async function press(keyCode, modifiers = []) {
   assert.equal(got.agentShiftEnter, '\x1b[13;2u', '⇧Enter in an agent tab is a newline (CSI u)');
   assert.equal(got.agentEnter, '\r', 'Enter in an agent tab still submits');
   assert.equal(await js(`document.querySelector('#toast').textContent`), 'nothing to pop', '⇧⌘⌫ pops');
+  // Multiline prompts must not accidentally trigger the single-line /sfork interceptor.
+  let forks = 0;
+  ipcMain.removeHandler('fork:spawn');
+  ipcMain.handle('fork:spawn', () => { forks++; return { ok: false, error: 'unexpected fork' }; });
+  await js(`document.querySelector('#launch .launch-item').click()`);
+  await until(() => js(`document.querySelectorAll('.term').length === 2 && document.querySelector('.term.visible')?.contains(document.activeElement)`), 'fixture agent focus');
+  await win.webContents.insertText('/sfork first line');
+  assert.equal(await press('Enter', ['shift']), '\x1b\r');
+  await win.webContents.insertText('second line');
+  assert.equal(await press('Enter'), '\r');
+  assert.equal(forks, 0, 'multiline prompt is passed to the agent');
   assert.deepEqual(errors, []);
   console.log('PASS terminal keys');
 })().catch((error) => { console.error(error); process.exitCode = 1; }).finally(() => {
