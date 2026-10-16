@@ -57,7 +57,10 @@ function projects() {
     try { real = fs.realpathSync(ws); } catch {}
     g.worktrees.push({ path: ws, branch, name: path.basename(ws), home: ws === g.path || real === g.path }); // the repo's own folder, not a worktree
   }
-  return [...groups.values()].sort((a, b) => a.label.localeCompare(b.label));
+  // the order they were dragged into in the sidebar, then the rest by name
+  const order = config().projectOrder || [];
+  const rank = (g) => { const i = order.indexOf(g.key); return i < 0 ? Infinity : i; };
+  return [...groups.values()].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
 }
 
 // Repos Synapse makes for you (cloned or created from a name) live here, and workspaces added from
@@ -477,6 +480,7 @@ handle('settings:get', () => ({ autoSymlink: !!config().autoSymlink }));
 handle('settings:set', (patch) => { const c = config(); if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink; writeJSON(FILES.app, c); if (c.autoSymlink) scanLibrary(true); return { autoSymlink: !!c.autoSymlink }; });
 handle('worktree:add', ({ repo, name, base }) => addWorktree(repo, name, base));
 handle('worktree:remove', ({ repo, dir, force }) => removeWorktree(repo, dir, force));
+handle('project:order', ({ keys }) => { const c = config(); c.projectOrder = keys.filter((k) => typeof k === 'string'); writeJSON(FILES.app, c); });
 handle('project:remove', ({ path: p }) => { const c = config(); c.workspaces = c.workspaces.filter((w) => w !== p); writeJSON(FILES.app, c); });
 // how many uncommitted changes a folder has (0 when it is not a repo); the renderer asks before anything destructive
 handle('git:dirty', ({ cwd }) => { try { return git(cwd, ['status', '--porcelain']).split('\n').filter(Boolean).length; } catch { return 0; } });

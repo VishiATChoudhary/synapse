@@ -315,3 +315,11 @@ body.sidebar-collapsed .main > .top { padding-left: 86px; }
 .branch-open:disabled { opacity: .4; cursor: default; }
 .branch-open:focus-visible, .branch-option .wt-delete:focus-visible { outline: 1px solid var(--sig); outline-offset: -2px; }
 .branch-option > .wt-delete { margin-right: 12px; }
+
+/* drag to rearrange: an orange rule where the dragged workspace or agent will land */
+.proj.drop-before::after, .proj.drop-after::after { content: ''; position: absolute; left: -1px; right: -1px; height: 2px; background: var(--sig); pointer-events: none; }
+.proj.drop-before::after { top: -26px; }
+.proj.drop-after::after { bottom: -11px; }
+.slot.drop-before { box-shadow: inset 0 2px 0 var(--sig); }
+.slot.drop-after { box-shadow: inset 0 -2px 0 var(--sig); }
+.proj-head[draggable], .slot[draggable] { -webkit-user-drag: element; }

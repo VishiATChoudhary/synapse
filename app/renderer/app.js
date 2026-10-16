@@ -296,10 +296,49 @@ function render() {
   scheduleSave();
 }
 
+// ---------------------------------------------------------------- drag to rearrange
+
+// Workspaces (project boxes) and agent rows reorder by dragging. An agent stays in its own folder, since
+// its process runs there. The tree redraws every second from state, which would pull the row out from
+// under the pointer, so it holds still while a drag is on.
+let drag = null; // { type: 'proj', key } | { type: 'slot', id, worktree }
+function dropSide(e, node) { const r = node.getBoundingClientRect(); return e.clientY < r.top + r.height / 2 ? 'before' : 'after'; }
+function clearDrop() { for (const n of document.querySelectorAll('.drop-before, .drop-after')) n.classList.remove('drop-before', 'drop-after'); }
+function draggable(handle, what, target, accepts, onDrop) {
+  handle.draggable = true;
+  handle.addEventListener('dragstart', (e) => { drag = what; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', ''); e.stopPropagation(); });
+  handle.addEventListener('dragend', () => { drag = null; clearDrop(); render(); });
+  target.addEventListener('dragover', (e) => {
+    if (!drag || !accepts(drag)) return;
+    e.preventDefault(); e.stopPropagation();
+    clearDrop(); target.classList.add('drop-' + dropSide(e, target));
+  });
+  target.addEventListener('drop', (e) => {
+    if (!drag || !accepts(drag)) return;
+    e.preventDefault(); e.stopPropagation();
+    const d = drag, side = dropSide(e, target);
+    drag = null; clearDrop();
+    onDrop(d, side);
+    render();
+  });
+}
+function moveItem(list, item, target, side) {
+  if (item === target) return list;
+  const out = list.filter((x) => x !== item);
+  out.splice(out.indexOf(target) + (side === 'after' ? 1 : 0), 0, item);
+  return out;
+}
+function moveProject(key, targetKey, side) {
+  const by = (k) => M.projects.find((p) => p.key === k);
+  M.projects = moveItem(M.projects, by(key), by(targetKey), side);
+  synapse.project.order(M.projects.map((p) => p.key)).catch((e) => toast(e.message, true));
+}
+
 // a session named after its folder would repeat the checkout row above it: say what runs in it instead
 const slotTitle = (s, t, w) => (!t ? 'gone' : t.title === w.name && s.path.length < 2 ? (M.profiles[t.kind]?.label || t.kind) : t.title);
 function renderTree() {
   const tree = $('#tree');
+  if (drag) return;
   tree.replaceChildren();
   const cur = focusedSlot();
   let n = 0;
@@ -313,6 +352,7 @@ function renderTree() {
     add.onclick = (e) => { e.stopPropagation(); promptWorktree(p); };
     head.appendChild(add);
     head.onclick = () => { if (M.open.has(p.key)) M.open.delete(p.key); else M.open.add(p.key); render(); };
+    draggable(head, { type: 'proj', key: p.key }, box, (d) => d.type === 'proj' && d.key !== p.key, (d, side) => moveProject(d.key, p.key, side));
     box.appendChild(head);
     if (M.open.has(p.key)) {
       for (const w of p.worktrees) {
@@ -340,6 +380,8 @@ function renderTree() {
           row.appendChild(el('span', 'slot-kind', t?.kind || ''));
           row.title = `⌘${n}`;
           row.onclick = () => { M.focused = s.id; render(); };
+          draggable(row, { type: 'slot', id: s.id, worktree: w.path }, row, (d) => d.type === 'slot' && d.worktree === w.path && d.id !== s.id,
+            (d, side) => { M.slots = moveItem(M.slots, slot(d.id), s, side); });
           wt.appendChild(row);
         }
         box.appendChild(wt);

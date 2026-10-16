@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('synapse', {
     pick: () => call('project:pick'),
     library: () => call('project:library'),
     remove: (p) => call('project:remove', { path: p }),
+    order: (keys) => call('project:order', { keys }),
     onCloneProgress: (fn) => on('clone:progress', fn),
   },
   worktree: { add: (a) => call('worktree:add', a), remove: (a) => call('worktree:remove', a) },
