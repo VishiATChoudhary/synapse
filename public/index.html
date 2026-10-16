@@ -396,7 +396,7 @@ function nearParent(pn) {
 }
 function spawnPoint(i, key) {
   // next to agents of the same project if there are any, else a golden-angle spiral round the centre
-  const mates = [...agents.values()].filter((o) => !o.dying && o.a?.projectKey === key);
+  const mates = [...agents.values()].filter((o) => !o.dying && o.a?.frameKey === key);
   if (mates.length) {
     const cx = mates.reduce((v, o) => v + o.x, 0) / mates.length, cy = mates.reduce((v, o) => v + o.y, 0) / mates.length;
     for (let n = 0; n < 60; n++) {
@@ -418,11 +418,13 @@ function applyState(s) {
   layout = s.layout || {};
   const seen = new Set();
   s.agents.forEach((a, i) => {
+    // a server started before frames existed sends none: frame by project
+    a.frameKey ??= a.projectKey; a.frame ??= a.project;
     seen.add(a.id);
     let n = agents.get(a.id);
     if (!n) {
       const parent = a.forkOf && agents.get(a.forkOf);
-      const p = layout[a.id] || (parent ? nearParent(parent) : spawnPoint(agents.size, a.projectKey));
+      const p = layout[a.id] || (parent ? nearParent(parent) : spawnPoint(agents.size, a.frameKey));
       n = { x: p.x, y: p.y, vx: 0, vy: 0, born: performance.now(), color: a.color, phase: Math.random() * 6.28, dying: 0 };
       if (!layout[a.id]) setTimeout(() => agents.has(a.id) && saveLayout(a.id), 1500);
       agents.set(a.id, n);
@@ -568,7 +570,7 @@ function hitTest(wx, wy) {
       if (Math.hypot(p.x - wx, p.y - wy) < 7 / cam.k + 2) return { type: 'edge', id: e.id };
     }
   }
-  for (const g of groupRects()) if (wx >= g.x0 && wx <= g.x1 && wy >= g.top && wy <= g.y1) return { type: 'group', key: g.key };
+  for (const g of groupRects().reverse()) if (wx >= g.x0 && wx <= g.x1 && wy >= g.top && wy <= g.y1) return { type: 'group', key: g.key };
   return null;
 }
 
@@ -594,11 +596,12 @@ cv.addEventListener('contextmenu', (ev) => {
   const n = h?.type === 'node' || h?.type === 'ring' ? agents.get(h.id) : null;
   const g = h?.type === 'group' ? groupRects().find((r) => r.key === h.key) : null;
   if (EMBEDDED) {
-    const a = n?.a, mate = g?.nodes[0]?.[1]?.a;
+    // a repo's outer frame starts agents in the repo's own folder
+    const a = n?.a, mate = g?.outer ? { cwd: g.project.startsWith('/') ? g.project : undefined } : g?.nodes[0]?.[1]?.a;
     window.parent.postMessage({ type: 'synapse:menu', x: ev.clientX, y: ev.clientY,
       hit: n ? 'node' : g ? 'group' : 'background',
       agent: a ? { id: a.id, name: a.name, pid: a.pid, kind: a.kind, cwd: a.cwd } : null,
-      group: g ? { key: g.key, label: g.label, cwd: mate?.cwd, count: g.nodes.length } : null }, '*');
+      group: g ? { key: g.key, project: g.project, label: g.label, cwd: mate?.cwd, count: g.nodes.length } : null }, '*');
     return;
   }
   closeCmenu();
@@ -639,7 +642,7 @@ addEventListener('pointermove', (ev) => {
     n.x = w.x - drag.ox; n.y = w.y - drag.oy; n.vx = n.vy = 0;
   } else if (drag?.mode === 'group') {
     if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) > 3) drag.moved = true;
-    const g = projectGroups().get(drag.key);
+    const g = groupRects().find((r) => r.key === drag.key);
     if (g) for (const [, n] of g.nodes) { n.x += w.x - drag.wx; n.y += w.y - drag.wy; n.vx = n.vy = 0; delete n.goal; }
     drag.wx = w.x; drag.wy = w.y;
   } else if (drag?.mode === 'pan') {
@@ -775,7 +778,7 @@ function runSearch() {
     <div class="res ${i === resultIdx ? 'on' : ''}" data-id="${r.id}">
       <span class="sw" style="${cssShade(shadeOf(r.n))}"></span>
       <span class="nm">${highlight(r.n.a.name, r.idxAll.name || [])}</span>
-      <span class="meta">${highlight(r.n.a.kind, r.idxAll.kind || [])} · ${highlight(short(r.n.a.project, 18), r.idxAll.project || [])}</span>
+      <span class="meta">${highlight(r.n.a.kind, r.idxAll.kind || [])} · ${highlight(short(r.n.a.frame, 18), r.idxAll.project || [])}</span>
     </div>`).join('') || '<div class="res none">No agents match</div>';
   $('results').querySelectorAll('[data-id]').forEach((el) => el.onmousedown = (e) => { e.preventDefault(); focusAgent(el.dataset.id); });
   return res;
@@ -844,8 +847,8 @@ function md(src) {
 function renderLegend(live) {
   const groups = new Map();
   for (const n of live) {
-    const g = groups.get(n.a.projectKey) || { label: n.a.project, shade: shadeOf(n), n: 0 };
-    g.n++; groups.set(n.a.projectKey, g);
+    const g = groups.get(n.a.frameKey) || { label: n.a.frame, shade: shadeOf(n), n: 0 };
+    g.n++; groups.set(n.a.frameKey, g);
   }
   // skip identical rewrites so a hovered list does not flicker or lose its scroll position
   const html = groups.size ? `<div class="head">Projects<span class="n">${groups.size}</span></div><div class="list">` + [...groups.entries()].sort(([, a], [, b]) => b.n - a.n).map(([key, g]) =>
@@ -901,7 +904,7 @@ async function renderPanel(fetchFeed) {
         <span class="tag">${esc(a.kind)}</span>
         <span class="tag"><span class="sq ${a.status === 'busy' ? 'busy' : ''}"></span>${a.status === 'busy' ? 'working' : a.status === 'offline' ? 'offline' : 'idle'}</span>
         <span class="tag">active ${ago(a.lastActivity)}</span>
-        <span class="tag"><span class="sq" style="${shade}"></span>${esc(a.project)}</span>
+        <span class="tag"><span class="sq" style="${shade}"></span>${esc(a.frame)}</span>
         ${a.remote ? `<span class="tag">⇄ on ${esc(a.remote.owner)}'s machine</span>` : `<span class="tag">pid ${a.pid}</span>
         <button class="tag ren" id="renP" type="button">rename</button>`}
       </div>
@@ -961,7 +964,7 @@ function startProjectRename(key) {
   const g = groupRects().find((r) => r.key === key);
   if (!g || renamingGroup) return;
   const input = document.createElement('input');
-  input.className = 'frame-rename'; input.value = g.label; input.maxLength = 48; input.spellcheck = false;
+  input.className = 'frame-rename'; input.value = g.projectLabel; input.maxLength = 48; input.spellcheck = false;
   // sized like the tab at the current zoom
   const k = cam.k;
   input.style.left = `${cam.x + g.x0 * k}px`; input.style.top = `${cam.y + (g.y0 - 20) * k}px`;
@@ -974,8 +977,8 @@ function startProjectRename(key) {
     if (done) return; done = true;
     const name = input.value.trim();
     input.remove(); renamingGroup = null;
-    if (!save || name === g.label) return;
-    const r = await fetch('/api/projects/name', { method: 'POST', body: JSON.stringify({ key, name }) });
+    if (!save || name === g.projectLabel) return;
+    const r = await fetch('/api/projects/name', { method: 'POST', body: JSON.stringify({ key: g.project, name }) });
     const out = await r.json().catch(() => ({}));
     if (!r.ok) toast(out.error || 'Could not rename');
     else toast(name ? `Renamed to ${out.label}` : `Back to ${out.label}`);
@@ -1136,7 +1139,7 @@ function drawNode(id, n, t) {
   knockout(name, 0, R + 22);
   ctx.fillStyle = V.ink; ctx.fillText(name, 0, R + 22);
   ctx.font = '10px "Fragment Mono", ui-monospace, monospace';
-  const sub = `${busy ? '■' : '□'} ${a.kind} · ${a.forkQ ? `⑂ ${short(a.forkQ, 22)}` : short(a.project, 22)}`.toUpperCase();
+  const sub = `${busy ? '■' : '□'} ${a.kind} · ${a.forkQ ? `⑂ ${short(a.forkQ, 22)}` : short(a.frame, 22)}`.toUpperCase();
   knockout(sub, 0, R + 38);
   ctx.fillStyle = busy ? V.sig : rgba(V.ink, 0.5);
   ctx.fillText(sub, 0, R + 38);
@@ -1189,18 +1192,33 @@ function projectGroups() {
   const groups = new Map();
   for (const [id, n] of agents) {
     if (n.dying || !n.a) continue;
-    const g = groups.get(n.a.projectKey) || { label: n.a.project, shade: shadeOf(n), nodes: [] };
-    g.nodes.push([id, n]); groups.set(n.a.projectKey, g);
+    const g = groups.get(n.a.frameKey) || { label: n.a.frame, project: n.a.projectKey, projectLabel: n.a.project, shade: shadeOf(n), nodes: [] };
+    g.nodes.push([id, n]); groups.set(n.a.frameKey, g);
   }
   return groups;
 }
-// a project's frame: around its agents, with room for labels below and the tab on top
+// a project's frame: around its agents, with room for labels below and the tab on top.
+// A repo whose agents sit in more than one worktree gets a larger frame around the worktrees' frames
+// (key `<project>#`, listed first so it draws behind them); each inner frame then carries its `parent`.
 function groupRects() {
-  return [...projectGroups()].map(([key, g]) => {
+  const inner = [...projectGroups()].map(([key, g]) => {
     const xs = g.nodes.map(([, n]) => n.x), ys = g.nodes.map(([, n]) => n.y);
     const y0 = Math.min(...ys) - R - 30;
     return { key, ...g, x0: Math.min(...xs) - R - 62, x1: Math.max(...xs) + R + 62, y0, top: y0 - 20, y1: Math.max(...ys) + R + 54 };
   });
+  const byProject = new Map();
+  for (const r of inner) byProject.set(r.project, [...(byProject.get(r.project) || []), r]);
+  const outer = [];
+  for (const [project, kids] of byProject) {
+    if (kids.length < 2) continue;
+    const P = 18, y0 = Math.min(...kids.map((r) => r.top)) - P;
+    const o = { key: `${project}#`, outer: true, project, label: kids[0].projectLabel, projectLabel: kids[0].projectLabel, shade: kids[0].shade,
+      nodes: kids.flatMap((r) => r.nodes), x0: Math.min(...kids.map((r) => r.x0)) - P, x1: Math.max(...kids.map((r) => r.x1)) + P,
+      y0, top: y0 - 20, y1: Math.max(...kids.map((r) => r.y1)) + P };
+    for (const r of kids) { r.parent = o.key; r.label = r.nodes[0][1].a.frameSub || r.label; }
+    outer.push(o);
+  }
+  return [...outer, ...inner];
 }
 function drawGroups() {
   const s = 1 / cam.k;
@@ -1239,7 +1257,11 @@ function framesOverlap() {
   return false;
 }
 function arrange() {
-  const groups = [...projectGroups().values()].sort((a, b) => b.nodes.length - a.nodes.length);
+  // biggest repo first, a repo's worktrees side by side
+  const size = new Map();
+  for (const g of projectGroups().values()) size.set(g.project, (size.get(g.project) || 0) + g.nodes.length);
+  const groups = [...projectGroups().values()].sort((a, b) => size.get(b.project) - size.get(a.project)
+    || String(a.project).localeCompare(String(b.project)) || b.nodes.length - a.nodes.length);
   if (!groups.length) return;
   const CW = 230, CH = 150, GAP = 110;
   const blocks = groups.map((g) => { const cols = Math.ceil(Math.sqrt(g.nodes.length)), rows = Math.ceil(g.nodes.length / cols); return { g, cols, w: cols * CW, h: rows * CH }; });
@@ -1258,22 +1280,28 @@ function arrange() {
 
 // frames never overlap: overlapping pairs are pushed apart along the shorter axis.
 // The frame you are dragging (or whose agent you are dragging) holds still and the other one yields.
+// A repo's outer frame moves as one against other projects; inside it its worktree frames keep apart.
 function separateFrames() {
   if ([...agents.values()].some((n) => n.goal)) return;
-  const rs = groupRects(), GAP = 28;
-  const held = drag?.mode === 'group' ? drag.key : drag?.mode === 'move' ? agents.get(drag.id)?.a.projectKey : null;
+  const rs = groupRects();
+  const heldIds = new Set(drag?.mode === 'move' ? [drag.id] : drag?.mode === 'group' ? (rs.find((r) => r.key === drag.key)?.nodes || []).map(([id]) => id) : []);
+  const holds = (r) => r.nodes.some(([id]) => heldIds.has(id));
   let moved = false;
-  for (let i = 0; i < rs.length; i++) for (let j = i + 1; j < rs.length; j++) {
-    const a = rs[i], b = rs[j];
-    const ox = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) + GAP, oy = Math.min(a.y1, b.y1) - Math.max(a.top, b.top) + GAP;
-    if (ox <= 0 || oy <= 0) continue;
-    const horiz = ox < oy, amt = Math.min(horiz ? ox : oy, 60) * 0.35;
-    const dir = horiz ? Math.sign((b.x0 + b.x1) - (a.x0 + a.x1)) || 1 : Math.sign((b.top + b.y1) - (a.top + a.y1)) || 1;
-    const sa = a.key === held ? 0 : b.key === held ? 1 : 0.5, sb = 1 - sa;
-    shiftGroup(a, horiz ? -dir * amt * sa : 0, horiz ? 0 : -dir * amt * sa);
-    shiftGroup(b, horiz ? dir * amt * sb : 0, horiz ? 0 : dir * amt * sb);
-    moved = true;
-  }
+  const apart = (list, GAP) => {
+    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+      const a = list[i], b = list[j];
+      const ox = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) + GAP, oy = Math.min(a.y1, b.y1) - Math.max(a.top, b.top) + GAP;
+      if (ox <= 0 || oy <= 0) continue;
+      const horiz = ox < oy, amt = Math.min(horiz ? ox : oy, 60) * 0.35;
+      const dir = horiz ? Math.sign((b.x0 + b.x1) - (a.x0 + a.x1)) || 1 : Math.sign((b.top + b.y1) - (a.top + a.y1)) || 1;
+      const ha = holds(a), hb = holds(b), sa = ha && !hb ? 0 : hb && !ha ? 1 : 0.5, sb = 1 - sa;
+      shiftGroup(a, horiz ? -dir * amt * sa : 0, horiz ? 0 : -dir * amt * sa);
+      shiftGroup(b, horiz ? dir * amt * sb : 0, horiz ? 0 : dir * amt * sb);
+      moved = true;
+    }
+  };
+  apart(rs.filter((r) => !r.parent), 28);
+  for (const o of rs.filter((r) => r.outer)) apart(rs.filter((r) => r.parent === o.key), 16);
   if (moved) scheduleSave();
 }
 function shiftGroup(g, dx, dy) {
@@ -1294,7 +1322,7 @@ function physics() {
   for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
     const [ia, a] = list[i], [ib, b] = list[j];
     const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 0.01, min = 215;
-    if (a.a.projectKey !== b.a.projectKey) continue; // across projects the frames keep the distance
+    if (a.a.frameKey !== b.a.frameKey) continue; // across projects the frames keep the distance
     if (d < min) {
       const f = (min - d) * 0.04, ux = dx / d, uy = dy / d;
       if (drag?.id !== ia) { a.vx -= ux * f; a.vy -= uy * f; }
@@ -1303,10 +1331,17 @@ function physics() {
   }
   // pull each agent gently toward the middle of its project, so projects form clusters
   const mid = new Map();
-  for (const [, n] of list) { const m = mid.get(n.a.projectKey) || { x: 0, y: 0, c: 0 }; m.x += n.x; m.y += n.y; m.c++; mid.set(n.a.projectKey, m); }
+  for (const [, n] of list) { const m = mid.get(n.a.frameKey) || { x: 0, y: 0, c: 0 }; m.x += n.x; m.y += n.y; m.c++; mid.set(n.a.frameKey, m); }
   for (const [id, n] of list) {
-    const m = mid.get(n.a.projectKey);
+    const m = mid.get(n.a.frameKey);
     if (m.c > 1 && drag?.id !== id) { n.vx += (m.x / m.c - n.x) * 0.0016; n.vy += (m.y / m.c - n.y) * 0.0016; }
+  }
+  // and, more gently, toward the middle of their repo, so a repo's worktree frames stay together
+  const repo = new Map();
+  for (const [, n] of list) { const m = repo.get(n.a.projectKey) || { x: 0, y: 0, c: 0, f: new Set() }; m.x += n.x; m.y += n.y; m.c++; m.f.add(n.a.frameKey); repo.set(n.a.projectKey, m); }
+  for (const [id, n] of list) {
+    const m = repo.get(n.a.projectKey);
+    if (m.f.size > 1 && drag?.id !== id) { n.vx += (m.x / m.c - n.x) * 0.0008; n.vy += (m.y / m.c - n.y) * 0.0008; }
   }
   for (const [id, n] of list) {
     if (drag?.id === id && drag.mode === 'move') continue;

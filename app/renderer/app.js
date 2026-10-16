@@ -780,8 +780,11 @@ function canvasMenu({ hit, agent, group, x, y }) {
     items.push({ label: 'Rename', run: () => tellCanvas({ action: 'rename', id: agent.id }) }, { label: 'Unlink all', run: () => tellCanvas({ action: 'unlink', id: agent.id }) }, '-');
     items.push({ label: mine ? 'Close session' : 'Kill agent', danger: true, run: () => killAgentAsk(agent) });
   } else if (hit === 'group' && group) {
-    const p = M.projects.find((q) => q.key === group.key);
-    const cwd = p?.worktrees[0]?.path || group.cwd;
+    const p = M.projects.find((q) => q.key === (group.project || group.key));
+    // a worktree's frame starts agents in that worktree, the repo's frame in its first checkout
+    const inside = (w) => group.cwd === w.path || group.cwd?.startsWith(`${w.path}/`);
+    const own = p?.worktrees.filter(inside).sort((x, y) => y.path.length - x.path.length)[0];
+    const cwd = (own || p?.worktrees[0])?.path || group.cwd;
     if (cwd) items.push({ label: `New agent in ${group.label}`, sub: agentMenuIn(cwd) });
     if (p) items.push({ label: 'New worktree', run: () => promptWorktree(p) });
     items.push({ label: 'Rename project', run: () => tellCanvas({ action: 'rename-project', key: group.key }) }, '-');

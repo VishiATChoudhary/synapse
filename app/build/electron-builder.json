@@ -12,6 +12,7 @@
   "files": [
     "lib.mjs",
     "ops.mjs",
+    "remote.mjs",
     "hook.mjs",
     "mcp.mjs",
     "cli.mjs",

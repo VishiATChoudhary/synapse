@@ -430,26 +430,31 @@ export function findAgent(agents, query) {
 
 // Group sessions by real project: worktrees share their main repo's git dir.
 // `label` is what is shown (a name given in the canvas or with `synapse rename-project` wins),
-// `autoLabel` is the generated one.
+// `autoLabel` is the generated one. `worktree` is set when cwd is in a linked worktree.
 const projectCache = new Map();
 export function projectOf(cwd) {
   let p = projectCache.get(cwd);
   if (!p) {
-    let key = cwd, label = path.basename(cwd);
+    let key = null, label = path.basename(cwd), worktree = null;
     try {
-      const common = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).trim();
+      const [top, common] = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).trim().split('\n');
       key = common.replace(/\/\.git\/?$/, '');
       label = path.basename(key);
+      if (top && top !== key) worktree = { path: top, name: path.basename(top) }; // a linked worktree, not the repo's own folder
     } catch {}
     const wt = cwd.match(/\/worktrees\/([^/]+)\//); // e.g. ~/.superset/worktrees/<Project>/<branch>
     if (wt) label = wt[1];
-    if (key === cwd) key = `project:${label}`; // not a git repo: group by name
-    p = { key, autoLabel: label };
+    if (!key) key = `project:${label}`; // not a git repo: group by name
+    else if (!worktree) { // a repo's own folder was once keyed by name: carry its given name over
+      const given = readJSON(FILES.projects, {}), old = `project:${label}`;
+      if (given[old] && !given[key]) { given[key] = given[old]; delete given[old]; writeJSON(FILES.projects, given); }
+    }
+    p = { key, autoLabel: label, worktree };
     projectCache.set(cwd, p);
   }
   const given = readJSON(FILES.projects, {})[p.key];
-  return { key: p.key, label: given || p.autoLabel, autoLabel: p.autoLabel };
+  return { key: p.key, label: given || p.autoLabel, autoLabel: p.autoLabel, worktree: p.worktree };
 }
 
 // A friend's agents are grouped by friend and project, apart from this machine's projects.

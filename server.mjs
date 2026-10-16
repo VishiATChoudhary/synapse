@@ -10,6 +10,10 @@ import { createEdge, removeEdge } from './ops.mjs';
 import * as remote from './remote.mjs';
 
 const PORT = Number(process.env.PORT || 4747);
+// the branch a repo's own folder has checked out, or null (not a repo, detached HEAD)
+const branchOf = (dir) => {
+  try { return fs.readFileSync(path.join(dir, '.git', 'HEAD'), 'utf8').match(/^ref: refs\/heads\/(.+)/)?.[1].trim() || null; } catch { return null; }
+};
 
 // Seed the demo state once: links and a few messages between the fixture agents.
 if (process.env.SYNAPSE_DEMO && !fs.existsSync(FILES.edges)) {
@@ -42,8 +46,12 @@ function agents() {
         previewCache.set(a.id, { mtime, preview });
       }
     }
-    const proj = projectOfAgent(a);
-    return { ...a, project: proj.label, projectAuto: proj.autoLabel, projectKey: proj.key, color: colorOf(proj.key), lastActivity, preview };
+    const proj = projectOfAgent(a), wt = proj.worktree;
+    // the canvas frames each worktree apart (same colour as its repo), labelled "repo / worktree";
+    // inside the repo's frame each worktree's own frame is labelled `frameSub` (worktree name, or the checkout's branch)
+    return { ...a, project: proj.label, projectAuto: proj.autoLabel, projectKey: proj.key, color: colorOf(proj.key),
+      frameKey: wt ? `${proj.key}#${wt.path}` : proj.key, frame: wt ? `${proj.label} / ${wt.name}` : proj.label,
+      frameSub: wt ? wt.name : a.remote ? null : branchOf(proj.key), lastActivity, preview };
   });
 }
 
