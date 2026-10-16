@@ -36,6 +36,7 @@
   .bar > * { display: flex; align-items: center; border-right: 1px solid var(--rule); }
   .brand { gap: 10px; padding: 0 18px; user-select: none; }
   html.in-app .brand { display: none; }
+  html.in-app .mode { display: none; } /* inside the app the app's own toggle drives the theme */
   .brand b { font: 500 24px/1 var(--display); letter-spacing: .02em; }
   .brand span { color: var(--ink-3); }
   .stats { margin-left: auto; border-left: 1px solid var(--rule); }
@@ -312,6 +313,9 @@ readVars();
   btn.onclick = () => { const k = document.documentElement.dataset.theme === 'night' ? 'signal' : 'night'; localStorage.setItem('synapse-mode', k); apply(k); };
   dark.addEventListener('change', (e) => { if (!localStorage.getItem('synapse-mode')) apply(e.matches ? 'night' : 'signal'); });
   apply(document.documentElement.dataset.theme);
+  // inside the app: the app says which theme to use (its localStorage is another origin, so it cannot be read here)
+  addEventListener('message', (ev) => { if (ev.source === window.parent && ev.data?.type === 'synapse:theme' && ['night', 'signal'].includes(ev.data.theme)) apply(ev.data.theme); });
+  if (window.parent !== window) window.parent.postMessage({ type: 'synapse:ready' }, '*');
 })();
 const short = (s, n = 26) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
 const lerp = (a, b, t) => a + (b - a) * t;

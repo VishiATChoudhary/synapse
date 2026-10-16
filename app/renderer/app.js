@@ -596,7 +596,11 @@ const SHORTCUTS = [
   ['node view', [['⌘F /', 'search'], ['drag ring', 'link'], ['drag', 'move agent or project'], ['dbl-click', 'rename'], ['⌘-click', 'open its session'], ['scroll', 'zoom'], ['F', 'fit'], ['A', 'arrange'], ['⌫', 'unlink'], ['esc', 'back to terminals']]],
 ];
 // the gear in the node view asks for the same modal
-addEventListener('message', (ev) => { if (ev.source === $('#canvas-frame').contentWindow && ev.data?.type === 'synapse:settings' && $('#modal').hidden) openSettings(); });
+addEventListener('message', (ev) => {
+  if (ev.source !== $('#canvas-frame').contentWindow) return;
+  if (ev.data?.type === 'synapse:ready') sendTheme();
+  if (ev.data?.type === 'synapse:settings' && $('#modal').hidden) openSettings();
+});
 async function openSettings() {
   let s = {};
   try { s = await synapse.settings.get(); } catch {}
@@ -699,7 +703,11 @@ function toggleTheme() {
   document.documentElement.dataset.theme = next;
   localStorage.setItem('synapse-mode', next);
   for (const sl of M.slots) for (const x of sl.sessions) x.term.options.theme = termTheme();
+  sendTheme();
 }
+// the node view runs on another origin and cannot read our choice: tell it when it loads and whenever it changes
+const sendTheme = () => $('#canvas-frame').contentWindow?.postMessage({ type: 'synapse:theme', theme: document.documentElement.dataset.theme }, '*');
+$('#canvas-frame').addEventListener('load', sendTheme);
 
 $('#theme').onclick = toggleTheme;
 $('#settings').onclick = openSettings;
