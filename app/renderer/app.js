@@ -219,7 +219,7 @@ function renderLaunch() {
 function render() {
   renderLaunch();
   renderTree();
-  renderDeck();
+  renderStack();
   renderStage();
   renderBar();
 }
@@ -291,6 +291,40 @@ function renderDeck() {
     deck.appendChild(c);
   });
   if (s.sessions.length > 1) deck.appendChild(el('span', 'deck-tag', `⑂ ${s.sessions.length} in tree · hover ⌘E`));
+}
+
+// the deck: one chip for the session on top; hover it and the whole fork tree unfolds beneath, root first,
+// each generation indented, the current path marked. Click the chip to pin it open.
+function renderStack() {
+  const deck = $('#deck');
+  deck.replaceChildren();
+  const s = focusedSlot(); if (!s) return;
+  const cur = top(s); if (!cur) return;
+  const deep = s.sessions.length > 1;
+  const stack = el('div', 'stack' + (deep ? ' deep' : '') + (deck.dataset.pin === String(s.id) ? ' pin' : ''));
+  const chip = el('div', 'card top');
+  chip.append(el('span', 'dot ' + statusOf(cur)), logo(cur.kind), el('span', 'label', cur.question || cur.title));
+  if (deep) chip.appendChild(el('span', 'depth', `⑂ ${s.path.length}/${s.sessions.length}`));
+  chip.title = deep ? 'hover: fork tree · click: keep it open' : cur.title;
+  chip.onclick = () => { if (!deep) return; deck.dataset.pin = deck.dataset.pin === String(s.id) ? '' : String(s.id); renderStack(); };
+  stack.appendChild(chip);
+  if (deep) {
+    const list = el('div', 'stack-list');
+    const walk = (parentId, depth) => {
+      for (const x of s.sessions.filter((y) => y.parent === parentId)) {
+        const row = el('div', 'srow' + (s.path.includes(x.id) ? ' on-path' : '') + (x.id === cur.id ? ' cur' : ''));
+        row.style.paddingLeft = `${14 + depth * 18}px`;
+        row.append(el('span', 'dot ' + statusOf(x)), logo(x.kind), el('span', 'label', depth ? x.question || x.title : x.title), el('span', 'kind', x.exited ? 'exited' : statusOf(x)));
+        row.onclick = () => { delete deck.dataset.pin; focusPath(s, x.id); render(); };
+        list.appendChild(row);
+        walk(x.id, depth + 1);
+      }
+    };
+    walk(null, 0);
+    list.appendChild(el('div', 'stack-hint', '⇧⌘F fork · ⇧⌘⌫ pop · ⌘E full tree'));
+    stack.appendChild(list);
+  }
+  deck.appendChild(stack);
 }
 
 let shownSession = null;
@@ -423,10 +457,7 @@ function closeFan() { fanOpen = false; $('#fan').hidden = true; top(focusedSlot(
 $('#fan-esc').onclick = closeFan;
 $('#fan').addEventListener('click', (e) => { if (e.target === $('#fan') || e.target === $('#fan-inner')) closeFan(); });
 
-// hover the deck for 300 ms to fan out
 let hoverTimer = null;
-$('#deck').addEventListener('mouseenter', () => { if (M.noHover || (focusedSlot()?.sessions.length || 0) < 2) return; $('#deck').classList.add('hover-arm'); hoverTimer = setTimeout(openFan, 300); });
-$('#deck').addEventListener('mouseleave', () => { $('#deck').classList.remove('hover-arm'); clearTimeout(hoverTimer); });
 
 // ---------------------------------------------------------------- modals
 

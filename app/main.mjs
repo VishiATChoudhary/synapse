@@ -8,7 +8,7 @@ import os from 'node:os';
 import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
-import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked } from '../lib.mjs';
+import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, recordFork } from '../lib.mjs';
 
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
 const SHELL = process.env.SHELL || '/bin/zsh';
@@ -331,6 +331,7 @@ function spawnFork({ parentPty, question, requestId }) {
   else if (!agent) throw new Error('that session is not a known agent (shells cannot fork)');
   else command = forkCommand(agent.kind, agent, question, config().profiles);
   const r = spawnPty({ cwd: t.cwd, kind: t.kind, command, extraEnv: { SYNAPSE_FORK_OF: agent?.synapseId || '', SYNAPSE_FORK_Q: question } });
+  if (agent?.synapseId) try { recordFork(r.pid, agent.synapseId, question); } catch {} // the canvas draws the fork tree from this
   if (requestId) {
     const reqs = readJSON(FILES.forks, []);
     const req = reqs.find((x) => x.id === requestId);

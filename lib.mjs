@@ -24,6 +24,7 @@ export const FILES = {
   names: path.join(DATA, 'names.json'),
   projects: path.join(DATA, 'projects.json'),
   forks: path.join(DATA, 'forks.json'),
+  lineage: path.join(DATA, 'lineage.json'),
   app: path.join(DATA, 'app.json'),
 };
 
@@ -326,7 +327,23 @@ export function listAgents() {
   const found = DEMO ? DEMO.demoAgents() : [...claudeAgents(), ...processAgents()];
   // names given in the canvas or with `synapse rename` win over the generated ones
   const names = readJSON(FILES.names, {});
-  return found.map((a) => (names[a.id] ? { ...a, name: names[a.id], autoName: a.name } : a));
+  // forks: which agent each one was forked from and the question it was given (the app records it by pid)
+  const lineage = readJSON(FILES.lineage, {});
+  return found.map((a) => {
+    const n = names[a.id] ? { ...a, name: names[a.id], autoName: a.name } : a;
+    const f = lineage[a.pid];
+    return f ? { ...n, forkOf: f.parent, forkQ: f.question } : n;
+  });
+}
+
+// Remember that the process `pid` was forked from agent `parent` to look into `question`. Entries for
+// processes that are gone are dropped on the way, so the file never grows past what is running.
+const processAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+export function recordFork(pid, parent, question) {
+  const lineage = readJSON(FILES.lineage, {});
+  for (const k of Object.keys(lineage)) if (!processAlive(Number(k))) delete lineage[k];
+  lineage[pid] = { parent, question: String(question || ''), at: Date.now() };
+  writeJSON(FILES.lineage, lineage);
 }
 
 // Rename an agent; an empty name goes back to the generated one. Links keep the new name too.
