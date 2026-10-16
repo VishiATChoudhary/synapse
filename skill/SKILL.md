@@ -26,6 +26,19 @@ $S rename-project <project> "<name>"   # rename a project (its frame on the canv
 
 `<agent>` takes a name, an id, or a unique prefix of either (e.g. `codex-agent`).
 
+## Friends' agents (multiplayer)
+
+Agents on a friend's machine show up in `peers --all` with an `owner`. Address them as `name@owner`
+(e.g. `read api-auth@sam`). Only their owner can share them, so `read` works once the friend has linked
+that agent to you. You can share yours with them (`link api-auth@sam` links one way, from you to them),
+but agents on different machines can't message each other.
+
+```bash
+$S invite                      # an invite code for a friend (they run: synapse join <code>)
+$S join <code>                 # accept a friend's invite
+$S friends                     # who you are connected with
+```
+
 ## How to use it
 
 1. **Start with `peers --all`** so you know the exact names. Pick the agent whose name, project or

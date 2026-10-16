@@ -8,10 +8,11 @@ import crypto from 'node:crypto';
 import {
   FILES, readJSON, writeJSON, listAgents, readAgentMessages, formatMessages, takeInbox, logEvent, agentForProcess,
 } from './lib.mjs';
+import { isConnected, sync } from './remote.mjs';
 
 const BUDGET = Number(process.env.SYNAPSE_BUDGET || 8000);
 
-function main() {
+async function main() {
   const input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
   const event = input.hook_event_name || 'UserPromptSubmit';
   // Claude's session_id is its Synapse id; Codex's is not, so find ourselves in the process tree
@@ -57,7 +58,9 @@ function main() {
   const blocks = [];
   const seen = []; // for the line shown to the user
 
-  const incoming = edgesAll.filter((e) => e.to === me);
+  // multiplayer: collect what friends shared (and send ours) first; never hold the prompt up for long
+  if (isConnected()) await sync({ timeout: 2500 }).catch(() => {});
+  const incoming = readJSON(FILES.edges, []).filter((e) => e.to === me);
   if (incoming.length) {
     const agents = new Map(listAgents().map((a) => [a.id, a]));
     const cursors = readJSON(FILES.cursors, {});
@@ -70,11 +73,14 @@ function main() {
       if (!messages.length) continue;
       const body = formatMessages(messages, BUDGET);
       blocks.push(
-        `<linked-agent name="${src.name}" kind="${src.kind}" cwd="${src.cwd}" transcript="${src.transcript}">\n` +
-        `${first ? 'Recent context' : 'New activity since your last prompt'} from agent "${src.name}".\n\n${body}\n</linked-agent>`
+        (src.remote
+          ? `<linked-agent name="${src.name}" kind="${src.kind}" owner="${src.remote.owner}" project="${src.remote.project}" machine="remote">\n` +
+            `${first ? 'Recent context' : 'New activity since your last prompt'} from agent "${src.name}", which runs on ${src.remote.owner}'s machine and is shared with you by them. You cannot message it.\n\n${body}\n</linked-agent>`
+          : `<linked-agent name="${src.name}" kind="${src.kind}" cwd="${src.cwd}" transcript="${src.transcript}">\n` +
+            `${first ? 'Recent context' : 'New activity since your last prompt'} from agent "${src.name}".\n\n${body}\n</linked-agent>`)
       );
       logEvent({ type: 'context', edge: e.id, chars: body.length });
-      seen.push(`${src.name} (${messages.length} msg${messages.length === 1 ? '' : 's'}, ${(body.length / 1000).toFixed(1)}k chars)`);
+      seen.push(`${src.remote ? `${src.name}@${src.remote.owner}` : src.name} (${messages.length} msg${messages.length === 1 ? '' : 's'}, ${(body.length / 1000).toFixed(1)}k chars)`);
     }
     writeJSON(FILES.cursors, cursors);
   }
@@ -104,4 +110,4 @@ function main() {
   }));
 }
 
-try { main(); } catch {} // never block the user's prompt
+main().catch(() => {}); // never block the user's prompt

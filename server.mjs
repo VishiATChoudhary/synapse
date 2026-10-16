@@ -5,8 +5,9 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { exec } from 'node:child_process';
-import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, projectOf, colorOf, renameAgent, renameProject } from './lib.mjs';
+import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, projectOfAgent, colorOf, renameAgent, renameProject } from './lib.mjs';
 import { createEdge, removeEdge } from './ops.mjs';
+import * as remote from './remote.mjs';
 
 const PORT = Number(process.env.PORT || 4747);
 
@@ -41,7 +42,7 @@ function agents() {
         previewCache.set(a.id, { mtime, preview });
       }
     }
-    const proj = projectOf(a.cwd);
+    const proj = projectOfAgent(a);
     return { ...a, project: proj.label, projectAuto: proj.autoLabel, projectKey: proj.key, color: colorOf(proj.key), lastActivity, preview };
   });
 }
@@ -60,6 +61,14 @@ setInterval(() => {
   const sig = JSON.stringify([s.agents.map((a) => [a.id, a.status, a.name, a.lastActivity]), s.edges]);
   if (sig !== lastSig) { lastSig = sig; broadcast('state', s); }
 }, 1000);
+
+// Multiplayer: exchange agents and shared context with friends' machines every few seconds.
+// The state loop above notices what changed (their agents, links they drew) and pushes it to the canvas.
+let syncError = null;
+setInterval(() => {
+  if (!remote.isConnected()) return;
+  remote.sync().then(() => { syncError = null; }, (e) => { syncError = e.message; });
+}, Number(process.env.SYNAPSE_SYNC_MS || 3000));
 
 // Context flow events written by the hook become edge pulses in the UI.
 let eventsSize = fs.existsSync(FILES.events) ? fs.statSync(FILES.events).size : 0;
@@ -116,12 +125,31 @@ const server = http.createServer(async (req, res) => {
     const live = agents();
     const src = live.find((a) => a.id === from), dst = live.find((a) => a.id === to);
     if (!src || !dst || from === to) return json(res, 400, { error: 'bad endpoints' });
-    const { edge, created } = createEdge(src, dst);
+    let made;
+    try { made = createEdge(src, dst); } catch (e) { return json(res, 400, { error: e.message }); }
+    const { edge, created } = made;
     if (!created) return json(res, 409, { error: 'exists' });
     lastSig = '';
     broadcast('state', state());
     return json(res, 201, edge);
   }
+  // ---- multiplayer
+  if (p === '/api/remote' && req.method === 'GET') return json(res, 200, { ...remote.friends(), syncError });
+  if (p === '/api/remote/invite' && req.method === 'POST') {
+    try { return json(res, 200, await remote.invite({ name: (await body(req)).name })); }
+    catch (e) { return json(res, 502, { error: e.message }); }
+  }
+  if (p === '/api/remote/join' && req.method === 'POST') {
+    const b = await body(req);
+    try { const out = await remote.join(b.code, { name: b.name }); lastSig = ''; return json(res, 200, out); }
+    catch (e) { return json(res, 400, { error: e.message }); }
+  }
+  if (p === '/api/remote/name' && req.method === 'POST') return json(res, 200, remote.setName((await body(req)).name));
+  if (p === '/api/remote/unfriend' && req.method === 'POST') {
+    try { const out = remote.unfriend((await body(req)).machineId); lastSig = ''; broadcast('state', state()); return json(res, 200, out); }
+    catch (e) { return json(res, 404, { error: e.message }); }
+  }
+
   const del = p.match(/^\/api\/edges\/([\w-]+)$/);
   if (del && req.method === 'DELETE') {
     removeEdge(del[1]);

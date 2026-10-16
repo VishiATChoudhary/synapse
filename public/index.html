@@ -171,6 +171,32 @@
   .toast.show { opacity: 1; transform: translate(-50%, 0); }
   .toast b { color: var(--sig); font-weight: 400; }
 
+  /* multiplayer: friends popover under the top bar */
+  .friends-btn { gap: 8px; padding: 0 14px; background: none; border: 0; cursor: pointer; text-transform: uppercase; color: var(--ink-2); font: 11px var(--mono); }
+  .friends-btn:hover, .friends-btn.on { background: var(--ink); color: var(--paper); }
+  .friends-btn .dot { width: 7px; height: 7px; border: 1px solid currentColor; }
+  .friends-btn .dot.live { background: var(--sig); border-color: var(--sig); }
+  .friends { position: fixed; top: 56px; right: 16px; width: 360px; z-index: 7; background: var(--paper); border: 1px solid var(--ink); display: none; font-size: 12.5px; }
+  .friends.show { display: block; }
+  .friends section { padding: 12px 14px; border-bottom: 1px solid var(--rule); }
+  .friends section:last-child { border-bottom: 0; }
+  .friends h3 { margin: 0 0 8px; font: 10.5px var(--mono); text-transform: uppercase; color: var(--ink-3); font-weight: 400; }
+  .friends p { margin: 0 0 8px; color: var(--ink-2); line-height: 1.45; }
+  .friends .row { display: flex; gap: 6px; align-items: center; }
+  .friends input, .friends textarea { flex: 1; min-width: 0; font: 11.5px var(--mono); color: var(--ink); background: var(--wash); border: 1px solid var(--rule); outline: 0; padding: 6px 8px; }
+  .friends input:focus, .friends textarea:focus { border-color: var(--ink); }
+  .friends textarea { width: 100%; height: 64px; resize: none; word-break: break-all; margin-top: 8px; }
+  .friends button { font: 10.5px var(--mono); text-transform: uppercase; padding: 6px 10px; background: none; border: 1px solid var(--ink); cursor: pointer; white-space: nowrap; }
+  .friends button:hover { background: var(--ink); color: var(--paper); }
+  .friends button:disabled { opacity: .4; cursor: default; background: none; color: inherit; }
+  .friends .fr { display: flex; align-items: center; gap: 9px; padding: 5px 0; }
+  .friends .fr .nm { flex: 1; }
+  .friends .fr .meta { font: 10.5px var(--mono); color: var(--ink-3); text-transform: uppercase; }
+  .friends .fr button { padding: 2px 6px; border-color: var(--rule); opacity: 0; }
+  .friends .fr:hover button { opacity: 1; }
+  .friends .err { color: var(--sig); font: 11px var(--mono); margin-top: 6px; }
+  .friends .err:empty { display: none; }
+
   .grain { position: fixed; inset: -50%; width: 200%; height: 200%; z-index: 20; pointer-events: none; opacity: var(--grain); mix-blend-mode: var(--blend);
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .5 0 0 0 0 .5 0 0 0 0 .5 0 0 0 1.5 -.25'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
     animation: grain .8s steps(5) infinite; }
@@ -202,7 +228,29 @@
     <div class="stat idle"><span class="sq"></span><b id="nIdle">0</b> idle</div>
     <div class="stat links"><b id="nEdges">0</b> links</div>
   </div>
+  <button class="friends-btn" id="friendsBtn" type="button" title="Share agents with friends on other machines"><span class="dot" id="friendsDot"></span><span id="friendsLbl">friends</span></button>
   <button class="mode" id="mode" type="button" aria-label="Toggle dark mode"></button>
+</div>
+<div class="friends" id="friends">
+  <section>
+    <h3>You appear to friends as</h3>
+    <div class="row"><input id="fName" maxlength="40" spellcheck="false"><button id="fNameSave" type="button">save</button></div>
+  </section>
+  <section>
+    <h3>Invite a friend</h3>
+    <p>They paste the code into their Synapse (or run <code>synapse join &lt;code&gt;</code>). Then drag from one of your agents onto one of theirs to share it. They can read it; nothing is shared until you draw a link.</p>
+    <button id="fInvite" type="button">create invite code</button>
+    <textarea id="fCode" readonly hidden></textarea>
+  </section>
+  <section>
+    <h3>Join a friend</h3>
+    <div class="row"><input id="fJoin" placeholder="synapse-invite:…" spellcheck="false"><button id="fJoinGo" type="button">join</button></div>
+  </section>
+  <section>
+    <h3>Friends</h3>
+    <div id="fList"></div>
+    <div class="err" id="fErr"></div>
+  </section>
 </div>
 <div class="empty" id="empty"><div><h2>No agents yet</h2><p>Start a <code>claude</code> or <code>codex</code> session and it shows up here.</p></div></div>
 <button class="gear" id="gear" type="button" title="shortcuts and settings" aria-label="Shortcuts and settings">⚙</button>
@@ -393,6 +441,51 @@ function applyState(s) {
   if (selected?.type === 'node') renderPanel(false);
 }
 
+// ---------- friends (multiplayer) ----------
+// Invite or join a friend; their agents then show up in dashed frames marked ⇄.
+const fpanel = $('friends');
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: 'POST', body: JSON.stringify(body) } : {});
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(out.error || 'something went wrong');
+  return out;
+}
+async function loadFriends() {
+  let f;
+  try { f = await api('/api/remote'); } catch { return; }
+  const online = f.friends.filter((x) => x.online).length;
+  $('friendsLbl').textContent = f.friends.length ? `friends ${online}/${f.friends.length}` : 'friends';
+  $('friendsDot').classList.toggle('live', online > 0);
+  if (document.activeElement !== $('fName')) $('fName').value = f.name || '';
+  $('fList').innerHTML = f.friends.map((x) => `<div class="fr"><span class="sq ${x.online ? 'busy' : ''}"></span><span class="nm">${esc(x.name)}</span>
+    <span class="meta">${x.online ? `${x.agents} agents` : x.lastSeen ? `seen ${ago(x.lastSeen)}` : 'not seen yet'}</span>
+    <button data-unfriend="${esc(x.machineId)}" type="button">remove</button></div>`).join('') || '<p>No one yet. Invite a friend, or join with their code.</p>';
+  $('fErr').textContent = f.syncError ? `Relay: ${f.syncError}` : '';
+  fpanel.querySelectorAll('[data-unfriend]').forEach((b) => (b.onclick = async () => {
+    try { const out = await api('/api/remote/unfriend', { machineId: b.dataset.unfriend }); toast(`Removed ${out.removed}`); loadFriends(); }
+    catch (e) { $('fErr').textContent = e.message; }
+  }));
+}
+$('friendsBtn').onclick = () => { const on = fpanel.classList.toggle('show'); $('friendsBtn').classList.toggle('on', on); if (on) loadFriends(); };
+fpanel.addEventListener('keydown', (ev) => ev.stopPropagation()); // typing here is not a canvas shortcut
+$('fNameSave').onclick = async () => { const out = await api('/api/remote/name', { name: $('fName').value }); $('fName').value = out.name; toast(`Friends see you as ${out.name}`); };
+$('fInvite').onclick = async () => {
+  $('fInvite').disabled = true; $('fErr').textContent = '';
+  try {
+    const out = await api('/api/remote/invite', { name: $('fName').value });
+    const box = $('fCode'); box.hidden = false; box.value = out.code; box.select();
+    navigator.clipboard?.writeText(out.code).then(() => toast('Invite code copied'), () => {});
+  } catch (e) { $('fErr').textContent = e.message; }
+  $('fInvite').disabled = false;
+};
+$('fJoinGo').onclick = async () => {
+  $('fJoinGo').disabled = true; $('fErr').textContent = '';
+  try { const out = await api('/api/remote/join', { code: $('fJoin').value, name: $('fName').value }); $('fJoin').value = ''; toast(`Connected with ${out.friend}`); loadFriends(); }
+  catch (e) { $('fErr').textContent = e.message; }
+  $('fJoinGo').disabled = false;
+};
+loadFriends(); setInterval(loadFriends, 10000);
+
 const es = new EventSource('/api/events');
 let firstState = true;
 es.addEventListener('state', (ev) => {
@@ -408,9 +501,12 @@ es.addEventListener('flow', (ev) => {
     if (selected?.type === 'node' && (selected.id === f.from || selected.id === f.to)) renderPanel(true);
     return;
   }
+  if (f.type === 'friend') { toast(`Connected with ${f.name}`); loadFriends(); return; }
   flows.set(f.edge, 1);
   const e = edges.find((x) => x.id === f.edge);
   const from = e && agents.get(e.from), to = e && agents.get(e.to);
+  if (f.type === 'shared') return toast(`${f.owner} shared ${e?.fromName || 'an agent'} with ${e?.toName || 'you'}`);
+  if (f.type === 'remote-context') { if (to) to.ping = performance.now(); return toast(`New context from ${f.owner}: ${from?.a.name || e?.fromName} → ${to?.a.name || e?.toName}`); }
   if (from && to) toast(`Context flowed: ${from.a.name} → ${to.a.name}`);
 });
 
@@ -421,10 +517,11 @@ function saveLayout(id) {
 async function addEdge(from, to) {
   const r = await fetch('/api/edges', { method: 'POST', body: JSON.stringify({ from, to }) });
   if (r.status === 409) return toast('Already linked');
-  if (!r.ok) return toast('Could not link');
+  if (!r.ok) return toast((await r.json().catch(() => ({}))).error || 'Could not link');
   const e = await r.json();
   flows.set(e.id, 1);
-  toast(`${agents.get(to).a.name} can now see ${agents.get(from).a.name}`);
+  const dst = agents.get(to).a;
+  toast(dst.remote ? `${dst.name} on ${dst.remote.owner}'s machine can now see ${agents.get(from).a.name}` : `${dst.name} can now see ${agents.get(from).a.name}`);
 }
 async function removeEdge(id) {
   await fetch(`/api/edges/${id}`, { method: 'DELETE' });
@@ -591,8 +688,9 @@ cv.addEventListener('wheel', (ev) => {
 cv.addEventListener('dblclick', (ev) => {
   const w = toWorld(ev.clientX, ev.clientY), h = hitTest(w.x, w.y);
   if (!h) return fit();
-  if (h.type === 'node') { selected = { type: 'node', id: h.id }; renderPanel(true).then(startRename); revealSelected(); }
-  if (h.type === 'group') startProjectRename(h.key);
+  const foreign = h.type === 'node' && agents.get(h.id)?.a.remote;
+  if (h.type === 'node') { selected = { type: 'node', id: h.id }; renderPanel(true).then(foreign ? null : startRename); revealSelected(); }
+  if (h.type === 'group' && !String(h.key).startsWith('remote:')) startProjectRename(h.key);
 });
 $('gear').onclick = () => {
   if (window.parent !== window) return window.parent.postMessage({ type: 'synapse:settings' }, '*');
@@ -801,11 +899,11 @@ async function renderPanel(fetchFeed) {
       <div class="cwd">${esc(a.cwd)}</div>
       <div class="meta">
         <span class="tag">${esc(a.kind)}</span>
-        <span class="tag"><span class="sq ${a.status === 'busy' ? 'busy' : ''}"></span>${a.status === 'busy' ? 'working' : 'idle'}</span>
+        <span class="tag"><span class="sq ${a.status === 'busy' ? 'busy' : ''}"></span>${a.status === 'busy' ? 'working' : a.status === 'offline' ? 'offline' : 'idle'}</span>
         <span class="tag">active ${ago(a.lastActivity)}</span>
         <span class="tag"><span class="sq" style="${shade}"></span>${esc(a.project)}</span>
-        <span class="tag">pid ${a.pid}</span>
-        <button class="tag ren" id="renP" type="button">rename</button>
+        ${a.remote ? `<span class="tag">⇄ on ${esc(a.remote.owner)}'s machine</span>` : `<span class="tag">pid ${a.pid}</span>
+        <button class="tag ren" id="renP" type="button">rename</button>`}
       </div>
       <button class="close" id="closeP" aria-label="Close">×</button>
     </header>
@@ -815,8 +913,7 @@ async function renderPanel(fetchFeed) {
     ${keepFeed}`;
   panel.classList.add('open');
   $('closeP').onclick = () => { selected = null; closePanel(); };
-  $('renP').onclick = startRename;
-  $('pName').ondblclick = startRename;
+  if (!a.remote) { $('renP').onclick = startRename; $('pName').ondblclick = startRename; }
   panel.querySelectorAll('[data-rm]').forEach((b) => (b.onclick = () => removeEdge(b.dataset.rm)));
   panel.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => { selected = { type: 'node', id: b.dataset.go }; renderPanel(true); revealSelected(); }));
   if (fetchFeed) {
@@ -828,7 +925,7 @@ async function renderPanel(fetchFeed) {
     const acts = r.messages.slice().reverse().map((m, i) =>
       `<div class="msg ${m.role} ${m.tool ? 'tool' : ''}" style="animation-delay:${i * 30}ms"><span class="who">${m.role === 'user' ? 'you' : m.tool ? 'tool' : 'agent'}</span>${m.tool ? esc(m.text) : `<div class="md">${md(m.text)}</div>`}</div>`).join('');
     panel.querySelector('.feed').innerHTML = (chat ? `<h3>Agent messages</h3>${chat}` : '')
-      + `<h3>Recent activity</h3>${acts || `<div class="none" style="padding-top:4px">${a.transcript ? 'No messages yet.' : `No transcript readable for ${esc(a.kind)}. Linked agents can still message it.`}</div>`}`;
+      + `<h3>Recent activity</h3>${acts || `<div class="none" style="padding-top:4px">${a.transcript ? 'No messages yet.' : a.remote ? `${esc(a.remote.owner)} has not shared this agent with you. Its activity shows here once they link it to one of yours.` : `No transcript readable for ${esc(a.kind)}. Linked agents can still message it.`}</div>`}`;
   }
 }
 setInterval(() => { if (selected?.type === 'node' && panel.classList.contains('open') && !panel.matches(':hover')) renderPanel(true); }, 5000);
@@ -975,7 +1072,7 @@ function drawNode(id, n, t) {
   const a = n.a, c = V.ink;
   const appear = ease(clamp((t - n.born) / 700, 0, 1));
   const vanish = n.dying ? 1 - clamp((t - n.dying) / 600, 0, 1) : 1;
-  const vis = appear * vanish;
+  const vis = appear * vanish * (a.status === 'offline' ? 0.45 : 1);
   if (vis <= 0) return;
   const busy = a.status === 'busy';
   const isHover = hover?.id === id && (hover.type === 'node' || hover.type === 'ring');
@@ -1020,7 +1117,9 @@ function drawNode(id, n, t) {
 
   // body
   ctx.fillStyle = shadePattern(shadeOf(n)); sqPath(r); ctx.fill();
-  ctx.strokeStyle = V.ink; ctx.lineWidth = isSel ? 2 : 1; ctx.stroke();
+  if (a.remote) ctx.setLineDash([4, 3]); // a friend's agent: dashed outline
+  ctx.strokeStyle = V.ink; ctx.lineWidth = isSel ? 2 : 1.4; ctx.stroke();
+  ctx.setLineDash([]);
 
   // working: a tick running round the frame
   if (busy) {
@@ -1111,14 +1210,17 @@ function drawGroups() {
     const dim = matches && !g.nodes.some(([id]) => matches.has(id));
     ctx.globalAlpha = dim ? 0.3 : 1;
     ctx.fillStyle = rgba(V.ink, hot ? 0.05 : 0.025); ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
-    ctx.strokeStyle = rgba(V.ink, hot ? 0.7 : 0.28); ctx.lineWidth = s; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    const foreign = String(g.key).startsWith('remote:');
+    if (foreign) ctx.setLineDash([6 * s, 4 * s]); // a friend's project: dashed frame
+    ctx.strokeStyle = rgba(V.ink, hot ? 0.7 : foreign ? 0.5 : 0.28); ctx.lineWidth = s; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.setLineDash([]);
     const pp = groupPing?.key === g.key ? (performance.now() - groupPing.t) / 1400 : 1;
     if (pp < 1) { // just flown to: an orange frame that fades out
       ctx.strokeStyle = rgba(V.sig, 1 - pp); ctx.lineWidth = (2.5 * (1 - pp) + 1) * s; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0); ctx.lineWidth = s;
     }
     // tab: shade swatch, project name, agent count
     ctx.font = '10.5px "Fragment Mono", ui-monospace, monospace'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
-    const text = `${g.label.toUpperCase()}  ${g.nodes.length}`, tw = ctx.measureText(text).width + 30;
+    const text = `${foreign ? '⇄ ' : ''}${g.label.toUpperCase()}  ${g.nodes.length}`, tw = ctx.measureText(text).width + 30;
     ctx.fillStyle = hot ? V.ink : V.paper; ctx.fillRect(x0, y0 - 20, tw, 20);
     ctx.strokeRect(x0, y0 - 20, tw, 20);
     ctx.fillStyle = shadePattern(g.shade); ctx.fillRect(x0 + 7, y0 - 14, 8, 8);

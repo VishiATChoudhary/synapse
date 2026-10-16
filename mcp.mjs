@@ -4,8 +4,10 @@
 import readline from 'node:readline';
 import { agentForProcess } from './lib.mjs';
 import * as ops from './ops.mjs';
+import * as remote from './remote.mjs';
 
-const INSTRUCTIONS = `Synapse connects you to other coding agents running on this machine (Claude, Codex, Gemini, ...).
+const INSTRUCTIONS = `Synapse connects you to other coding agents running on this machine (Claude, Codex, Gemini, ...),
+and to agents on friends' machines that they share with you (multiplayer; those show an "owner" and can only be read).
 The user links agents on the Synapse canvas, or you can link yourself with synapse_link.
 - Call synapse_inbox at the start of each task and after finishing a step: other agents may have messaged you.
 - Use synapse_peers to see who you are linked to, synapse_read to read a linked agent's recent work,
@@ -39,7 +41,7 @@ const self = () => {
 
 const write = (msg) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...msg })}\n`);
 
-readline.createInterface({ input: process.stdin }).on('line', (line) => {
+readline.createInterface({ input: process.stdin }).on('line', async (line) => {
   let req;
   try { req = JSON.parse(line); } catch { return; }
   const { id, method, params } = req;
@@ -59,7 +61,10 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       const tool = TOOLS.find((t) => t.name === params?.name);
       if (!tool) return write({ id, error: { code: -32602, message: `Unknown tool ${params?.name}` } });
       try {
-        const out = tool.run(self(), params.arguments || {});
+        const me = self();
+        // a friend's agent: fetch what their machine sent since the last sync before reading it
+        if (tool.name === 'synapse_read' && remote.isConnected()) await remote.sync({ timeout: 4000 }).catch(() => {});
+        const out = tool.run(me, params.arguments || {});
         const text = typeof out?.context === 'string'
           ? `# ${out.agent.name} (${out.agent.kind}, ${out.agent.cwd})\n\n${out.context}`
           : JSON.stringify(out, null, 2);
