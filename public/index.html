@@ -78,10 +78,20 @@
   .empty p { margin: 18px 0 0; color: var(--ink-2); }
   .empty code { font-family: var(--mono); color: var(--ink); }
 
-  .legend { position: fixed; left: 16px; bottom: 16px; min-width: 180px; max-height: 45vh; overflow: hidden; background: var(--paper); border: 1px solid var(--rule); user-select: none; }
-  .legend .head { padding: 7px 10px; font-size: 10.5px; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--rule); }
-  .legend .item { display: flex; align-items: center; gap: 9px; padding: 5px 10px; font-size: 11.5px; color: var(--ink-2); }
-  .legend .item:hover { color: var(--ink); background: var(--wash); }
+  /* projects: a chip under the top bar that expands on hover; clicking a project flies the camera to it */
+  .legend { position: fixed; left: 16px; top: 64px; min-width: 180px; background: var(--paper); border: 1px solid var(--rule); user-select: none; display: flex; flex-direction: column; z-index: 5; }
+  .legend:empty { display: none; }
+  .legend .head { display: flex; gap: 8px; padding: 7px 10px; font-size: 10.5px; text-transform: uppercase; color: var(--ink-3); cursor: default; }
+  .legend .head .n { margin-left: auto; }
+  .legend .head::after { content: '▾'; }
+  .legend .list { max-height: 0; overflow: hidden auto; transition: max-height .18s ease-out; scrollbar-width: thin; }
+  .legend:hover { border-color: var(--ink); }
+  .legend:hover .head { color: var(--ink); border-bottom: 1px solid var(--rule); }
+  .legend:hover .head::after { content: '▴'; }
+  .legend:hover .list { max-height: 55vh; }
+  .legend .item { display: flex; align-items: center; gap: 9px; padding: 5px 10px; font-size: 11.5px; color: var(--ink-2); cursor: pointer; }
+  .legend .item:hover { color: var(--paper); background: var(--ink); }
+  .legend .item:hover .n { color: var(--paper); }
   .legend .sw { width: 9px; height: 9px; flex: none; }
   .legend .n { margin-left: auto; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
@@ -541,8 +551,8 @@ function fit(instant) {
   if (!live.length) return;
   const xs = live.map((n) => n.x), ys = live.map((n) => n.y);
   const minX = Math.min(...xs) - 120, maxX = Math.max(...xs) + 120, minY = Math.min(...ys) - 110, maxY = Math.max(...ys) + 130;
-  // leave room for the projects legend on the left and the panel on the right
-  const left = W > 900 ? 210 : 0, availW = W - left - (selected?.type === 'node' ? 390 : 0);
+  // leave room for the panel on the right (the projects legend is a small chip now)
+  const left = 0, availW = W - left - (selected?.type === 'node' ? 390 : 0);
   const k = clamp(Math.min(availW / (maxX - minX), (H - 160) / (maxY - minY)), 0.35, 1.25);
   cam.tk = k; cam.tx = left + availW / 2 - ((minX + maxX) / 2) * k; cam.ty = H / 2 + 20 - ((minY + maxY) / 2) * k;
   if (instant) Object.assign(cam, { x: cam.tx, y: cam.ty, k: cam.tk });
@@ -672,8 +682,26 @@ function renderLegend(live) {
     const g = groups.get(n.a.projectKey) || { label: n.a.project, shade: shadeOf(n), n: 0 };
     g.n++; groups.set(n.a.projectKey, g);
   }
-  $('legend').innerHTML = (groups.size ? '<div class="head">Projects</div>' : '') + [...groups.values()].sort((a, b) => b.n - a.n).map((g) =>
-    `<div class="item"><span class="sw" style="${cssShade(g.shade)}"></span>${esc(g.label)}<span class="n">${g.n}</span></div>`).join('');
+  // skip identical rewrites so a hovered list does not flicker or lose its scroll position
+  const html = groups.size ? `<div class="head">Projects<span class="n">${groups.size}</span></div><div class="list">` + [...groups.entries()].sort(([, a], [, b]) => b.n - a.n).map(([key, g]) =>
+    `<div class="item" data-key="${esc(key)}"><span class="sw" style="${cssShade(g.shade)}"></span>${esc(g.label)}<span class="n">${g.n}</span></div>`).join('') + '</div>' : '';
+  if (html === legendHTML) return;
+  const list = $('legend').querySelector('.list'), top = list?.scrollTop || 0;
+  $('legend').innerHTML = legendHTML = html;
+  const nl = $('legend').querySelector('.list'); if (nl) nl.scrollTop = top;
+}
+let legendHTML = '', legendHot = null, groupPing = null;
+$('legend').addEventListener('click', (ev) => { const it = ev.target.closest('.item'); if (it) flyToGroup(it.dataset.key); });
+$('legend').addEventListener('mouseover', (ev) => { legendHot = ev.target.closest('.item')?.dataset.key || null; });
+$('legend').addEventListener('mouseleave', () => { legendHot = null; });
+
+// move the camera so the whole project frame fills the middle of the view, then flash its frame
+function flyToGroup(key) {
+  const g = groupRects().find((r) => r.key === key); if (!g) return;
+  const w = g.x1 - g.x0, h = g.y1 - g.top;
+  const k = clamp(Math.min((W * 0.7) / w, (H * 0.6) / h), 0.45, 1.4);
+  cam.tk = k; cam.tx = W / 2 - ((g.x0 + g.x1) / 2) * k; cam.ty = H / 2 - ((g.top + g.y1) / 2) * k;
+  groupPing = { key, t: performance.now() };
 }
 
 // ---------- panel ----------
@@ -985,11 +1013,15 @@ function drawGroups() {
   const s = 1 / cam.k;
   for (const g of groupRects()) {
     const { x0, x1, y0, y1 } = g;
-    const hot = (hover?.type === 'group' && hover.key === g.key) || (drag?.mode === 'group' && drag.key === g.key);
+    const hot = (hover?.type === 'group' && hover.key === g.key) || (drag?.mode === 'group' && drag.key === g.key) || legendHot === g.key;
     const dim = matches && !g.nodes.some(([id]) => matches.has(id));
     ctx.globalAlpha = dim ? 0.3 : 1;
     ctx.fillStyle = rgba(V.ink, hot ? 0.05 : 0.025); ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
     ctx.strokeStyle = rgba(V.ink, hot ? 0.7 : 0.28); ctx.lineWidth = s; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    const pp = groupPing?.key === g.key ? (performance.now() - groupPing.t) / 1400 : 1;
+    if (pp < 1) { // just flown to: an orange frame that fades out
+      ctx.strokeStyle = rgba(V.sig, 1 - pp); ctx.lineWidth = (2.5 * (1 - pp) + 1) * s; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0); ctx.lineWidth = s;
+    }
     // tab: shade swatch, project name, agent count
     ctx.font = '10.5px "Fragment Mono", ui-monospace, monospace'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
     const text = `${g.label.toUpperCase()}  ${g.nodes.length}`, tw = ctx.measureText(text).width + 30;
