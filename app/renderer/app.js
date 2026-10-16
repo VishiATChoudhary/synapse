@@ -72,7 +72,7 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
   fit.fit();
   const { id: pty } = await spawn(term.cols, term.rows);
   const x = { id: nextId++, pty, kind, title, question, parent, exited: false, term, fit, el: wrap };
-  term.onData((d) => synapse.pty.write(pty, d));
+  term.onData(sforkFilter(() => x));
   term.onResize(({ cols, rows }) => synapse.pty.resize(pty, cols, rows));
   s.sessions.push(x);
   focusPath(s, x.id);
@@ -86,6 +86,32 @@ synapse.pty.onExit(({ id, code }) => {
 });
 
 // ---------------------------------------------------------------- actions
+
+// `/sfork <question>` typed into any agent. The app sees every keystroke, so it catches the line itself,
+// erases it with backspaces (every TUI understands those) and forks: no hook needed, works for all agents.
+const SFORK = /^\/sfork\s+(\S[\s\S]*)$/;
+const EDIT_KEY = /^(\x1b(\[|O)[ABCDHF]|\x1b\[[0-9;]*[ABCDHF~]|\x1b[bfdBF\x7f]|[\t\x01\x02\x05\x06\x0b\x0e\x10\x19])$/;
+function sforkFilter(get) {
+  let line = ''; // typed since the last Enter; null once cursor keys or control input make it unknowable
+  return (d) => {
+    const x = get();
+    if (d === '\r') {
+      const m = line !== null && x.kind !== 'shell' && SFORK.exec(line.trim());
+      const typed = line; line = '';
+      if (m) { synapse.pty.write(x.pty, '\x7f'.repeat(typed.length)); fork(m[1].trim(), { parentPty: x.pty }); return; }
+    } else if (line !== null) {
+      const t = d.replace(/\x1b\[20[01]~/g, ''); // bracketed paste markers
+      if (t === '\x7f' || t === '\b') line = line.slice(0, -1);
+      else if (t === '\x15' || t === '\x03') line = '';
+      else if (t === '\x17') line = line.replace(/\S+\s*$/, '');
+      else if (/^[^\x00-\x1f\x7f]+$/.test(t)) line += t;
+      // keys that move the cursor make the line unknowable; terminal reports (focus, cursor position,
+      // device attributes) also arrive here and are ignored
+      else if (EDIT_KEY.test(t)) line = null;
+    }
+    synapse.pty.write(x.pty, d);
+  };
+}
 
 async function newSlot(worktreePath, kind) {
   const prof = M.profiles[kind] || { command: kind };
@@ -264,7 +290,7 @@ function renderStage() {
   for (const sl of M.slots) for (const x of sl.sessions) x.el.classList.toggle('visible', x === t);
   // grab focus only when a different session comes to the front, so the 1 s state refresh never steals it from a dialog
   const changed = t !== shownSession; shownSession = t;
-  if (t) requestAnimationFrame(() => { t.fit.fit(); if (changed && $('#modal').hidden && !fanOpen) t.term.focus(); });
+  if (t) requestAnimationFrame(() => { t.fit.fit(); if (changed && $('#modal').hidden && !fanOpen && !canvasOpen) t.term.focus(); });
 }
 
 function renderBar() {
@@ -547,6 +573,25 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+// The Synapse canvas (links, messages, every agent on the machine) as an overlay over the terminals.
+let canvasOpen = false;
+async function toggleCanvas() {
+  if (!canvasOpen) {
+    const f = $('#canvas-frame');
+    if (!f.src) {
+      $('#canvas').hidden = false; $('#canvas').classList.add('loading');
+      try { f.src = await synapse.canvas(); } catch (e) { $('#canvas').hidden = true; return toast(e.message, true); }
+      finally { $('#canvas').classList.remove('loading'); }
+    }
+  }
+  canvasOpen = !canvasOpen;
+  $('#canvas').hidden = !canvasOpen;
+  $('#btn-canvas').classList.toggle('on', canvasOpen);
+  if (canvasOpen) $('#canvas-frame').focus(); else top(focusedSlot())?.term.focus();
+}
+$('#btn-canvas').onclick = toggleCanvas;
+synapse.onCanvasToggle(toggleCanvas);
+
 function toggleTheme() {
   const next = document.documentElement.dataset.theme === 'night' ? 'signal' : 'night';
   document.documentElement.dataset.theme = next;
@@ -576,7 +621,7 @@ synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { 
 
 (async () => {
   const flags = await synapse.flags();
-  M.noHover = flags.shot === 'main';
+  M.noHover = !!flags.shot && flags.shot !== 'fan'; // screenshots: the real mouse must not open the fork tree
   await refresh();
   // first run: the checkout we were started from is the sample workspace
   if (!M.projects.length) { try { await synapse.project.add(flags.cwd); await refresh(); } catch {} }
@@ -601,6 +646,10 @@ synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { 
   }, 800);
   if (flags.shot === 'worktree') setTimeout(() => promptWorktree(M.projects[0]), 800);
   if (flags.shot.endsWith('+light')) { document.documentElement.dataset.theme = 'signal'; flags.shot = flags.shot.slice(0, -6); for (const sl of M.slots) for (const x of sl.sessions) x.term.options.theme = termTheme(); }
+    const typeIn = async (text) => { for (const ch of text.replace(/\\n/g, '\r').replace(/\\e/g, '\x1b')) { top(focusedSlot())?.term.input(ch); await new Promise((r) => setTimeout(r, 25)); } };
+  // SYNAPSE_SHOT_STEPS='[[ms, "text"], ...]' types into the front session at those times (\n is Enter, \e is Esc)
+  for (const [at, text] of flags.steps) setTimeout(() => typeIn(text), at);
+  if (flags.shot === 'canvas') setTimeout(toggleCanvas, 800);
   if (flags.shot.startsWith('launch:')) setTimeout(() => $('#launch').children[flags.shot.split(':')[1] - 1]?.click(), 800);
   if (flags.shot.startsWith('picker')) setTimeout(() => {
     // picker[:<digit>] opens the agent picker, and with a digit presses it

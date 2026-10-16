@@ -5,6 +5,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electro
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
 import { FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked } from '../lib.mjs';
@@ -135,10 +136,21 @@ const ptys = new Map(); // id -> { p, cwd, kind, env }
 let nextPty = 1;
 let win = null;
 
+// Variables that tie a process to the session that launched it. If the app was started from inside an agent
+// (Claude Code, Superset, ...), passing these on makes every agent here think it is that session's child:
+// Claude then stops saving its transcript and never shows up in Synapse.
+const INHERITED = /^(CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_PLUGIN_DATA|AI_AGENT|CODEX_COMPANION_.*|SUPERSET_.*|SYNAPSE_AGENT|SYNAPSE_FORK_.*)$/;
+function cleanEnv() {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !INHERITED.test(k)));
+  // Superset's PATH wrappers report to Superset; agents started here should run as themselves
+  if (env.PATH) env.PATH = env.PATH.split(':').filter((p) => !p.includes('/.superset/bin')).join(':');
+  return env;
+}
+
 function spawnPty({ cwd, kind, command, cols = 120, rows = 36, extraEnv = {} }) {
   const id = String(nextPty++);
   const env = {
-    ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'synapse', LANG: process.env.LANG || 'en_US.UTF-8',
+    ...cleanEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'synapse', LANG: process.env.LANG || 'en_US.UTF-8',
     SYNAPSE_APP: '1', SYNAPSE_SESSION: id, ...extraEnv,
   };
   // exec so the pty's pid is the agent's own pid, which is how Synapse identifies it
@@ -146,7 +158,7 @@ function spawnPty({ cwd, kind, command, cols = 120, rows = 36, extraEnv = {} }) 
   const p = pty.spawn(SHELL, args, { name: 'xterm-256color', cols, rows, cwd, env });
   ptys.set(id, { p, cwd, kind, pid: p.pid });
   p.onData((data) => win?.webContents.send('pty:data', { id, data }));
-  p.onExit(({ exitCode }) => { ptys.delete(id); win?.webContents.send('pty:exit', { id, code: exitCode }); });
+  p.onExit(({ exitCode }) => { ptys.delete(id); if (!quitting) win?.webContents.send('pty:exit', { id, code: exitCode }); });
   return { id, pid: p.pid };
 }
 
@@ -195,11 +207,12 @@ function forkCommand(kind, agent, question, profiles) {
   const q = JSON.stringify(question);
   const flags = (profiles[kind]?.command || kind).split(' ').slice(1).join(' ');
   switch (kind) {
-    case 'claude': return `claude ${flags} --resume ${agent.synapseId} --fork-session ${q}`;
+    // a session with no turns yet has no transcript, so there is nothing to inherit: start fresh with the question
+    case 'claude': return agent.transcript && fs.existsSync(agent.transcript)
+      ? `claude ${flags} --resume ${agent.synapseId} --fork-session ${q}` : `claude ${flags} ${q}`;
     case 'codex': {
       const m = /rollout-.*-([0-9a-f-]{36})\.jsonl$/.exec(agent.transcript || '');
-      if (!m) throw new Error('could not find the Codex session id');
-      return `codex ${flags} fork ${m[1]} ${q}`;
+      return m ? `codex ${flags} fork ${m[1]} ${q}` : `codex ${flags} ${q}`; // no transcript yet: nothing to inherit
     }
     default: throw new Error(`no fork adapter for ${kind} yet`);
   }
@@ -222,6 +235,28 @@ function spawnFork({ parentPty, question, requestId }) {
   return r;
 }
 
+// ---------------------------------------------------------------- synapse canvas
+
+// The canvas is Synapse's own web UI. Reuse a server that is already up, otherwise start this checkout's.
+const CANVAS_PORT = Number(process.env.SYNAPSE_PORT || 4747);
+let canvasProc = null;
+const canvasUp = () => new Promise((resolve) => {
+  const req = http.get({ host: '127.0.0.1', port: CANVAS_PORT, path: '/', timeout: 800 }, (r) => { r.resume(); resolve(r.statusCode < 500); });
+  req.on('error', () => resolve(false));
+  req.on('timeout', () => { req.destroy(); resolve(false); });
+});
+async function ensureCanvas() {
+  if (await canvasUp()) return `http://127.0.0.1:${CANVAS_PORT}/`;
+  if (!canvasProc) {
+    canvasProc = spawn(process.execPath, [path.join(ROOT, '..', 'server.mjs')], {
+      env: { ...cleanEnv(), ELECTRON_RUN_AS_NODE: '1', PORT: String(CANVAS_PORT), NO_OPEN: '1' }, stdio: 'ignore',
+    });
+    canvasProc.on('exit', () => { canvasProc = null; });
+  }
+  for (let i = 0; i < 30; i++) { if (await canvasUp()) return `http://127.0.0.1:${CANVAS_PORT}/`; await new Promise((r) => setTimeout(r, 200)); }
+  throw new Error('the Synapse canvas server did not start');
+}
+
 // ---------------------------------------------------------------- window
 
 function createWindow() {
@@ -236,6 +271,10 @@ function createWindow() {
     win.webContents.on('console-message', (e) => { if (e.level === 'error' || e.level === 'warning' || process.env.SYNAPSE_DEBUG) console.log(`[renderer] ${e.message}`); });
     win.webContents.on('render-process-gone', (_e, d) => console.log('[renderer gone]', d.reason));
   }
+  // ⌘G toggles the canvas even while focus is inside it (the canvas is a separate page, its keys never reach ours)
+  win.webContents.on('before-input-event', (e, i) => {
+    if (i.type === 'keyDown' && i.meta && !i.shift && !i.alt && i.key.toLowerCase() === 'g') { e.preventDefault(); win.webContents.send('canvas:toggle'); }
+  });
   win.on('closed', () => { win = null; });
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
 }
@@ -246,6 +285,7 @@ app.whenReady().then(() => {
   if (process.env.SYNAPSE_SHOT) {
     setTimeout(async () => {
       win.show(); win.focus();
+      if (process.env.SYNAPSE_DEBUG) console.log('[bar]', await win.webContents.executeJavaScript(`document.querySelector('#bar-left').textContent + ' | deck: ' + [...document.querySelectorAll('#deck .card')].map((c) => c.textContent).join(' > ')`));
       if (process.env.SYNAPSE_DEBUG) console.log('[focus]', await win.webContents.executeJavaScript('document.activeElement.outerHTML.slice(0, 120)'));
       const img = await win.webContents.capturePage();
       fs.writeFileSync(process.env.SYNAPSE_SHOT, img.toPNG());
@@ -256,19 +296,30 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => app.quit());
 // Kill every session's whole process group (agent wrappers spawn helpers that outlive a plain SIGHUP), then exit
 // without Node's handle cleanup: node-pty's exit-watcher threads otherwise block shutdown forever.
-app.on('before-quit', () => { for (const [, t] of ptys) { try { process.kill(-t.pid, 'SIGKILL'); } catch {} try { t.p.kill('SIGKILL'); } catch {} } });
-app.on('will-quit', () => process.exit(0));
+// Kill every session's whole process group (agent wrappers spawn helpers that outlive a plain SIGHUP) and quit
+// only once node-pty has seen them all exit: its exit-watcher threads otherwise block or crash Node's shutdown.
+let quitting = false;
+app.on('before-quit', (e) => {
+  try { canvasProc?.kill(); } catch {}
+  if (quitting || !ptys.size) return;
+  e.preventDefault();
+  quitting = true;
+  for (const [, t] of ptys) { try { process.kill(-t.pid, 'SIGKILL'); } catch {} try { t.p.kill('SIGKILL'); } catch {} }
+  const started = Date.now();
+  const wait = setInterval(() => { if (!ptys.size || Date.now() - started > 2000) { clearInterval(wait); app.quit(); } }, 30);
+});
 
 // ---------------------------------------------------------------- ipc
 
 const handle = (ch, fn) => ipcMain.handle(ch, async (_e, a) => { try { return { ok: true, value: await fn(a || {}) }; } catch (e) { return { ok: false, error: e.message }; } });
 handle('state', () => state());
-handle('flags', () => ({ demo: DEMO, shot: process.env.SYNAPSE_SHOT_VIEW || '', cwd: process.cwd(), home: os.homedir() }));
+handle('flags', () => ({ demo: DEMO, shot: process.env.SYNAPSE_SHOT_VIEW || '', steps: JSON.parse(process.env.SYNAPSE_SHOT_STEPS || '[]'), cwd: process.cwd(), home: os.homedir() }));
 handle('pty:spawn', (a) => spawnPty(a));
 handle('pty:write', ({ id, data }) => { ptys.get(id)?.p.write(data); });
 handle('pty:resize', ({ id, cols, rows }) => { try { ptys.get(id)?.p.resize(cols, rows); } catch {} });
 handle('pty:kill', ({ id }) => { ptys.get(id)?.p.kill(); });
 handle('fork:spawn', (a) => spawnFork(a));
+handle('canvas', () => ensureCanvas());
 handle('project:add', ({ path: p }) => addWorkspace(p));
 handle('project:create', ({ name }) => createWorkspace(name));
 handle('project:clone', ({ url, name }) => cloneWorkspace(url, name));

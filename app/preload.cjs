@@ -26,4 +26,6 @@ contextBridge.exposeInMainWorld('synapse', {
   },
   worktree: { add: (a) => call('worktree:add', a), remove: (a) => call('worktree:remove', a) },
   cli: (args, as) => call('synapse', { args, as }),
+  canvas: () => call('canvas'),
+  onCanvasToggle: (fn) => on('canvas:toggle', fn),
 });

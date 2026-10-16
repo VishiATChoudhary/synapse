@@ -257,6 +257,10 @@ function codexTranscript(id, cwd, start) {
       try { files = fs.readdirSync(dir).filter((f) => f.startsWith('rollout-')); } catch { continue; }
       for (const f of files) {
         const p = path.join(dir, f);
+        // the name carries the session's creation time (local); a session created before this process started
+        // belongs to an earlier run, even if Codex touched the file since (it rewrites old rollouts on startup)
+        const born = /^rollout-(\d{4})-(\d\d)-(\d\d)T(\d\d)-(\d\d)-(\d\d)/.exec(f);
+        if (born && new Date(+born[1], born[2] - 1, +born[3], +born[4], +born[5], +born[6]).getTime() < start - 2000) continue;
         const st = fs.statSync(p);
         if (st.mtimeMs < start - 60_000) continue;
         try {
