@@ -74,6 +74,9 @@
   .hints { position: fixed; right: 16px; bottom: 58px; z-index: 6; display: none; flex-direction: column; min-width: 240px; background: var(--paper); border: 1px solid var(--rule);
     font-size: 10.5px; text-transform: uppercase; color: var(--ink-2); white-space: nowrap; user-select: none; }
   .hints.show { display: flex; }
+  .cmenu { position: fixed; z-index: 8; min-width: 180px; background: var(--paper); border: 1px solid var(--ink); font: 11px var(--mono); text-transform: uppercase; }
+  .cmenu div { padding: 8px 14px; cursor: pointer; white-space: nowrap; }
+  .cmenu div:hover { background: var(--ink); color: var(--paper); }
   .hints .head { padding: 8px 12px; border-bottom: 1px solid var(--rule); color: var(--ink-3); }
   .hints span { display: flex; justify-content: space-between; gap: 18px; padding: 6px 12px; border-bottom: 1px solid var(--rule); }
   .hints span:last-child { border-bottom: 0; }
@@ -465,6 +468,43 @@ function hitTest(wx, wy) {
 // Inside the Synapse desktop app the canvas is an iframe: ⌘-click on a node asks the app to open that session.
 const EMBEDDED = window.parent !== window;
 if (EMBEDDED) $('hints').insertAdjacentHTML('afterbegin', '<span><kbd>⌘ click</kbd>open session</span>');
+// Right-click. Inside the app the app draws the menu (it can start agents, add workspaces, kill
+// processes) and tells us what to do here; standalone we offer what the canvas itself can do.
+let cmenu = null;
+const closeCmenu = () => { cmenu?.remove(); cmenu = null; };
+function doAction(d) {
+  const n = d.id && agents.get(d.id);
+  if (d.action === 'rename' && n) { selected = { type: 'node', id: d.id }; renderPanel(true).then(startRename); revealSelected(); }
+  if (d.action === 'rename-project' && d.key) startProjectRename(d.key);
+  if (d.action === 'unlink' && n) for (const e of edges.filter((e) => e.from === d.id || e.to === d.id)) removeEdge(e.id);
+  if (d.action === 'arrange') { arrange(); toast('Arranged by project'); }
+  if (d.action === 'fit') fit();
+}
+cv.addEventListener('contextmenu', (ev) => {
+  ev.preventDefault();
+  const w = toWorld(ev.clientX, ev.clientY), h = hitTest(w.x, w.y);
+  const n = h?.type === 'node' || h?.type === 'ring' ? agents.get(h.id) : null;
+  const g = h?.type === 'group' ? groupRects().find((r) => r.key === h.key) : null;
+  if (EMBEDDED) {
+    const a = n?.a, mate = g?.nodes[0]?.[1]?.a;
+    window.parent.postMessage({ type: 'synapse:menu', x: ev.clientX, y: ev.clientY,
+      hit: n ? 'node' : g ? 'group' : 'background',
+      agent: a ? { id: a.id, name: a.name, pid: a.pid, kind: a.kind, cwd: a.cwd } : null,
+      group: g ? { key: g.key, label: g.label, cwd: mate?.cwd, count: g.nodes.length } : null }, '*');
+    return;
+  }
+  closeCmenu();
+  const items = n ? [['Rename', () => doAction({ action: 'rename', id: n.a.id })], ['Unlink all', () => doAction({ action: 'unlink', id: n.a.id })]]
+    : g ? [['Rename project', () => doAction({ action: 'rename-project', key: g.key })]]
+    : [['Arrange', () => doAction({ action: 'arrange' })], ['Fit', () => doAction({ action: 'fit' })]];
+  cmenu = document.createElement('div'); cmenu.className = 'cmenu';
+  for (const [label, run] of items) { const d = document.createElement('div'); d.textContent = label; d.onclick = () => { closeCmenu(); run(); }; cmenu.appendChild(d); }
+  document.body.appendChild(cmenu);
+  const r = cmenu.getBoundingClientRect();
+  cmenu.style.left = `${Math.min(ev.clientX, innerWidth - r.width - 8)}px`; cmenu.style.top = `${Math.min(ev.clientY, innerHeight - r.height - 8)}px`;
+});
+addEventListener('pointerdown', (ev) => { if (cmenu && !cmenu.contains(ev.target)) closeCmenu(); }, true);
+addEventListener('message', (ev) => { if (ev.source === window.parent && ev.data?.type === 'synapse:do') doAction(ev.data); });
 cv.addEventListener('pointerdown', (ev) => {
   cv.setPointerCapture(ev.pointerId);
   const w = toWorld(ev.clientX, ev.clientY);
@@ -553,7 +593,7 @@ addEventListener('keydown', (ev) => {
   if (ev.key === '/') { ev.preventDefault(); $('q').focus(); return; }
   if (ev.key === 'f' || ev.key === 'F') fit();
   if (ev.key === 'a' || ev.key === 'A') { arrange(); toast('Arranged by project'); }
-  if (ev.key === 'Escape') { selected = null; closePanel(); $('hints').classList.remove('show'); $('gear').classList.remove('on'); }
+  if (ev.key === 'Escape') { selected = null; closePanel(); closeCmenu(); $('hints').classList.remove('show'); $('gear').classList.remove('on'); }
   if ((ev.key === 'Backspace' || ev.key === 'Delete') && selected?.type === 'edge') removeEdge(selected.id);
 });
 

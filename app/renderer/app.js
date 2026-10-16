@@ -719,7 +719,39 @@ addEventListener('message', (ev) => {
   if (ev.source !== $('#canvas-frame').contentWindow) return;
   if (ev.data?.type === 'synapse:ready') sendTheme();
   if (ev.data?.type === 'synapse:settings' && $('#modal').hidden) openSettings();
+  if (ev.data?.type === 'synapse:menu' && $('#modal').hidden) canvasMenu(ev.data);
 });
+// right-click in the node view: the canvas reports what was hit, the menu is ours
+const tellCanvas = (d) => $('#canvas-frame').contentWindow?.postMessage({ type: 'synapse:do', ...d }, '*');
+// start an agent in a folder that may not be in the sidebar yet: add it first, so the session has a row
+async function agentIn(cwd, kind) {
+  try { const dir = await synapse.project.add(cwd); await refresh(); const wt = worktreeOf(dir); if (wt) M.open.add(wt.project.key); if (kind) newSlot(dir, kind); else toast(`${dir.split('/').pop()} added to the sidebar`); }
+  catch (e) { toast(e.message, true); }
+}
+const agentMenuIn = (cwd) => profileOrder().map((k) => ({ label: M.profiles[k].label || k, run: () => agentIn(cwd, k) }));
+function canvasMenu({ hit, agent, group, x, y }) {
+  const r = $('#canvas-frame').getBoundingClientRect();
+  const items = [];
+  if (hit === 'node' && agent) {
+    const ptyId = Object.keys(M.agents).find((k) => M.agents[k].synapseId === agent.id);
+    const mine = ptyId && M.slots.find((s) => s.sessions.some((z) => z.pty === ptyId));
+    if (mine) items.push({ label: 'Open session', run: () => { const z = mine.sessions.find((q) => q.pty === ptyId); M.focused = mine.id; focusPath(mine, z.id); if (canvasOpen) toggleCanvas(); render(); } });
+    if (agent.cwd) items.push({ label: 'New agent in this folder', sub: agentMenuIn(agent.cwd) });
+    items.push({ label: 'Rename', run: () => tellCanvas({ action: 'rename', id: agent.id }) }, { label: 'Unlink all', run: () => tellCanvas({ action: 'unlink', id: agent.id }) }, '-');
+    items.push({ label: mine ? 'Close session' : 'Kill agent', danger: true, run: () => killAgentAsk(agent) });
+  } else if (hit === 'group' && group) {
+    const p = M.projects.find((q) => q.key === group.key);
+    const cwd = p?.worktrees[0]?.path || group.cwd;
+    if (cwd) items.push({ label: `New agent in ${group.label}`, sub: agentMenuIn(cwd) });
+    if (p) items.push({ label: 'New worktree', run: () => promptWorktree(p) });
+    items.push({ label: 'Rename project', run: () => tellCanvas({ action: 'rename-project', key: group.key }) }, '-');
+    if (p) items.push({ label: 'Remove from sidebar', run: () => removeFromSidebar(p.worktrees.map((q) => q.path), p.label) });
+    else if (group.cwd) items.push({ label: 'Add to sidebar', run: () => agentIn(group.cwd, null) });
+  } else {
+    items.push({ label: 'New workspace', run: () => promptProject() }, '-', { label: 'Arrange', run: () => tellCanvas({ action: 'arrange' }) }, { label: 'Fit', run: () => tellCanvas({ action: 'fit' }) });
+  }
+  if (items.length) contextMenu(items, r.left + x, r.top + y);
+}
 async function openSettings() {
   let s = {};
   try { s = await synapse.settings.get(); } catch {}
