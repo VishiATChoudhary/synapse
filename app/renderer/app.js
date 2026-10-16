@@ -67,8 +67,15 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(wrap);
-  // app shortcuts pass through, everything else goes to the pty
-  term.attachCustomKeyEventHandler((e) => !(e.metaKey && e.type === 'keydown' && APP_KEYS.has(keyName(e))));
+  // app shortcuts pass through; the macOS editing keys xterm drops or mis-sends become their readline
+  // bytes (⌘⌫ clears the line, ⌘← / ⌘→ jump to its ends); everything else goes to the pty as is
+  term.attachCustomKeyEventHandler((e) => {
+    if (!e.metaKey || e.type !== 'keydown') return true;
+    if (APP_KEYS.has(keyName(e))) return false;
+    const bytes = !e.shiftKey && !e.altKey && !e.ctrlKey && META_EDIT[e.key];
+    if (!bytes) return true;
+    e.preventDefault(); term.input(bytes); return false;
+  });
   fit.fit();
   const { id: pty } = await spawn(term.cols, term.rows);
   const x = { id: nextId++, pty, kind, title, question, parent, exited: false, term, fit, el: wrap };
@@ -545,8 +552,10 @@ function toast(text, sig = false) {
 
 // ---------------------------------------------------------------- keys
 
-const keyName = (e) => (e.shiftKey ? 'shift+' : '') + (e.key.length === 1 ? e.key.toLowerCase() : e.key);
-const APP_KEYS = new Set(['t', 'n', 'shift+n', 'shift+f', 'e', 'w', '[', ']', 'backspace', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',']);
+const keyName = (e) => (e.shiftKey ? 'shift+' : '') + e.key.toLowerCase();
+const APP_KEYS = new Set(['t', 'n', 'shift+n', 'shift+f', 'e', 'w', '[', ']', 'shift+backspace', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',']);
+// ⌘ + editing key -> what a macOS terminal sends for it (iTerm's natural editing, Ghostty's defaults)
+const META_EDIT = { Backspace: '\x15', ArrowLeft: '\x01', ArrowRight: '\x05' };
 window.addEventListener('keydown', (e) => {
   if (!$('#modal').hidden) return;
   if (fanOpen && e.key === 'Escape') return closeFan();
@@ -562,7 +571,7 @@ window.addEventListener('keydown', (e) => {
     case 'shift+n': { const p = s ? worktreeOf(s.worktree)?.project : M.projects[0]; if (p) promptWorktree(p); break; }
     case 'shift+f': promptFork(); break;
     case 'e': fanOpen ? closeFan() : openFan(); break;
-    case 'backspace': pop(); break;
+    case 'shift+backspace': pop(); break;
     case 'w': { const t = top(s); if (!t) break; if (!t.exited && statusOf(t) === 'working') confirm(`"${t.title}" is still working. Close it?`, () => closeSession(s, t.id)); else closeSession(s, t.id); break; }
     case '[': moveFocus(-1); break;
     case ']': moveFocus(1); break;
