@@ -142,7 +142,11 @@ kbd { font: 10.5px var(--mono); color: var(--ink-2); padding: 1px 5px; border: 1
 
 .bar { height: 30px; flex: none; display: flex; align-items: stretch; justify-content: space-between; border-top: 1px solid var(--rule); font: 10.5px var(--mono); text-transform: uppercase; color: var(--ink-2); }
 .bar > span { display: flex; align-items: center; padding: 0 14px; white-space: nowrap; overflow: hidden; }
+.bar-left { flex: 1; }
 .bar-right { border-left: 1px solid var(--rule); color: var(--ink-3); }
+.bar-right:empty { display: none; }
+.bar .gear { width: 34px; display: grid; place-items: center; border-left: 1px solid var(--rule); font-size: 13px; color: var(--ink-2); cursor: pointer; transition: background-color .15s ease-out, color .15s ease-out; }
+.bar .gear:hover { background: var(--ink); color: var(--paper); }
 .bar .sig { color: var(--sig); }
 
 /* ---------------------------------------------------------------- fan-out: the canvas, for one fork tree */
