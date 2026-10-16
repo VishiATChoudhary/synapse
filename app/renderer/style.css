@@ -42,8 +42,8 @@ kbd { font: 10.5px var(--mono); color: var(--ink-2); padding: 1px 5px; border: 1
 
 /* ---------------------------------------------------------------- sidebar */
 .side { display: flex; flex-direction: column; border-right: 1px solid var(--rule); background: var(--paper); min-width: 0; position: relative; z-index: 2; }
-.drag { position: absolute; top: 0; left: 0; right: 0; height: 28px; -webkit-app-region: drag; }
-.side-head { height: var(--bar); flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--rule); padding-left: 86px; }
+/* the head is the window's drag strip (like .top); its buttons opt out, so nothing lies over them */
+.side-head { height: var(--bar); flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--rule); padding-left: 86px; -webkit-app-region: drag; }
 .wordmark { display: flex; align-items: center; gap: 9px; font: 500 24px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; user-select: none; flex: 1; }
 .wordmark::before { content: ''; width: 9px; height: 9px; background: var(--sig); }
 .side-head .icon { -webkit-app-region: no-drag; }
@@ -85,6 +85,15 @@ kbd { font: 10.5px var(--mono); color: var(--ink-2); padding: 1px 5px; border: 1
 .slot-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slot-kind { font: 10px var(--mono); text-transform: uppercase; color: var(--ink-3); }
 .slot-depth, .slot-unread { font: 10px var(--mono); color: var(--sig); }
+
+/* Mouse actions stay separate from row selection. Close is always visible. */
+.rename-button, .tab-close { flex: none; width: 20px; height: 22px; display: inline-grid; place-items: center; font: 15px var(--mono); color: inherit; border-radius: 2px; }
+.rename-button { opacity: .45; }
+.rename-button:hover, .rename-button:focus-visible, .tab-close:hover, .tab-close:focus-visible { opacity: 1; background: var(--sig); color: #fff; outline: 1px solid currentColor; }
+.proj-head .rename-button { width: 16px; height: 18px; font-size: 12px; }
+.slot { gap: 6px; }
+.deck .card { padding-right: 8px; gap: 6px; }
+.card .label { flex: 1; }
 
 /* status marks: squares, as on the canvas */
 .dot { width: 8px; height: 8px; flex: none; border: 1px solid var(--ink-2); position: relative; }
@@ -168,7 +177,7 @@ kbd { font: 10.5px var(--mono); color: var(--ink-2); padding: 1px 5px; border: 1
   transition: transform .28s cubic-bezier(.2, .8, .2, 1), opacity .28s ease-out, background-color .15s ease-out, color .15s ease-out; }
 .fcard .fq { display: flex; align-items: center; gap: 9px; font-size: 13px; overflow: hidden; }
 .fcard .fq span:last-child { overflow: hidden; text-overflow: ellipsis; }
-.fcard .fm { font: 10px var(--mono); text-transform: uppercase; color: var(--ink-3); }
+.fcard .fm { font: 10px var(--mono); text-transform: uppercase; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; }
 .fcard:not(.on-path) { border-style: dashed; color: var(--ink-2); }
 .fcard:hover { background: var(--ink); color: var(--paper); border-style: solid; }
 .fcard:hover .fm { color: var(--paper); opacity: .6; }

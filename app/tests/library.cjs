@@ -49,6 +49,10 @@ const config = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'u
   win.show(); win.focus();
   await until(() => js(`!!document.querySelector('.term.visible .xterm-helper-textarea')`), 'first session');
 
+  // the whole theme button is clickable: nothing lies over its top half
+  const hits = await js(`(() => { const r = document.querySelector('#theme').getBoundingClientRect(); const x = r.left + r.width / 2; return [r.top + 6, r.bottom - 6].map((y) => document.elementFromPoint(x, y).id || document.elementFromPoint(x, y).className); })()`);
+  assert.deepEqual(hits, ['theme', 'theme'], 'top and bottom of the theme button both hit the button');
+
   // a second after start, everything known gets linked: app.json entries, Superset repos and worktrees
   await until(() => linkOf('alpha') === alpha, 'startup scan links app.json workspaces');
   assert.equal(linkOf('acme'), fs.realpathSync(acme), 'Superset repo linked under its name');
