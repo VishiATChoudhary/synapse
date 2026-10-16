@@ -2,7 +2,6 @@
 // sidebar, the deck of cards, the terminals and the fan-out tree. PTYs live in the main process.
 import { Terminal } from '../node_modules/@xterm/xterm/lib/xterm.mjs';
 import { FitAddon } from '../node_modules/@xterm/addon-fit/lib/addon-fit.mjs';
-import { WebglAddon } from '../node_modules/@xterm/addon-webgl/lib/addon-webgl.mjs';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -68,7 +67,6 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(wrap);
-  try { term.loadAddon(new WebglAddon()); } catch {}
   // app shortcuts pass through, everything else goes to the pty
   term.attachCustomKeyEventHandler((e) => !(e.metaKey && e.type === 'keydown' && APP_KEYS.has(keyName(e))));
   fit.fit();
@@ -412,8 +410,8 @@ function promptFork() {
   promptText('⑂ fork', `a child of "${t.title}" with its full context. Nothing flows back unless you send it.`, 'what do you want to dig into?', (q) => fork(q));
 }
 function promptProject() {
-  promptText('add project', 'path to a git repo. Live agents add their projects by themselves.', '/path/to/repo', async (p) => {
-    try { await synapse.project.add(p); await refresh(); toast('project added'); } catch (e) { toast(e.message, true); }
+  promptText('add workspace', 'path to a repo or a worktree. Grouped by repo in the sidebar.', '~/code/repo', async (p) => {
+    try { await synapse.project.add(p); await refresh(); toast('workspace added'); } catch (e) { toast(e.message, true); }
   });
 }
 
@@ -482,7 +480,7 @@ synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { 
   const flags = await synapse.flags();
   M.noHover = flags.shot === 'main';
   await refresh();
-  // register the repo we were started from, so there is always something to open
+  // first run: the checkout we were started from is the sample workspace
   if (!M.projects.length) { try { await synapse.project.add(flags.cwd); await refresh(); } catch {} }
   const here = M.projects.flatMap((p) => p.worktrees).find((w) => flags.cwd.startsWith(w.path)) || M.projects[0]?.worktrees[0];
   if (here) { M.open.add(worktreeOf(here.path)?.project.key); await newSlot(here.path, 'shell'); }
