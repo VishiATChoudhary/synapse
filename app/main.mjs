@@ -246,6 +246,7 @@ app.whenReady().then(() => {
   if (process.env.SYNAPSE_SHOT) {
     setTimeout(async () => {
       win.show(); win.focus();
+      if (process.env.SYNAPSE_DEBUG) console.log('[focus]', await win.webContents.executeJavaScript('document.activeElement.outerHTML.slice(0, 120)'));
       const img = await win.webContents.capturePage();
       fs.writeFileSync(process.env.SYNAPSE_SHOT, img.toPNG());
       app.quit();

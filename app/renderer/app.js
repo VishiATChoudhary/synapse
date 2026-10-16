@@ -228,13 +228,16 @@ function renderDeck() {
   if (s.sessions.length > 1) deck.appendChild(el('span', 'deck-tag', `⑂ ${s.sessions.length} in tree · hover ⌘E`));
 }
 
+let shownSession = null;
 function renderStage() {
   const s = focusedSlot();
   const t = top(s);
   $('#empty').hidden = !!t;
   $('#stage').classList.toggle('exited', !!t?.exited);
   for (const sl of M.slots) for (const x of sl.sessions) x.el.classList.toggle('visible', x === t);
-  if (t) { requestAnimationFrame(() => { t.fit.fit(); t.term.focus(); }); }
+  // grab focus only when a different session comes to the front, so the 1 s state refresh never steals it from a dialog
+  const changed = t !== shownSession; shownSession = t;
+  if (t) requestAnimationFrame(() => { t.fit.fit(); if (changed && $('#modal').hidden && !fanOpen) t.term.focus(); });
 }
 
 function renderBar() {
@@ -567,5 +570,6 @@ synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { 
     promptProject(m);
     if (v.length) { const inp = $('#modal-body input'); inp.value = v.join(':'); inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); }
   }, 800);
+  if (flags.shot === 'worktree') setTimeout(() => promptWorktree(M.projects[0]), 800);
   if (flags.shot === 'picker') setTimeout(() => pickProfile(here?.path), 800);
 })();
