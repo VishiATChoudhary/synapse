@@ -14,7 +14,7 @@
     "start": "node server.mjs",
     "demo": "rm -rf /tmp/synapse-demo && SYNAPSE_DEMO=1 SYNAPSE_HOME=/tmp/synapse-demo PORT=${PORT:-4848} node server.mjs",
     "install-agents": "node install.mjs",
-    "app:build": "electron-builder --mac --arm64 --config app/build/electron-builder.json",
+    "app:build": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --arm64 --config app/build/electron-builder.json && codesign --force --deep --sign - dist/mac-arm64/Synapse.app && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --arm64 --prepackaged dist/mac-arm64/Synapse.app --config app/build/electron-builder.json",
     "app:install": "npm run app:build && rm -rf /Applications/Synapse.app && cp -R dist/mac-arm64/Synapse.app /Applications/ && open /Applications/Synapse.app"
   },
   "keywords": [
