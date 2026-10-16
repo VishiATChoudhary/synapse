@@ -195,6 +195,69 @@ function orderedSlots() {
   return out;
 }
 
+// ---------------------------------------------------------------- persistence
+
+// Open sessions survive a restart: every slot's live sessions, their fork tree and the agent id to resume
+// each from go to ~/.synapse/sessions.json, and boot reopens them. Exited sessions are left out; their
+// children hang from the nearest live ancestor instead. Off until the restore has run, so a half-built
+// model never overwrites the file, and off in demo and screenshot runs.
+let persist = false, lastSaved = '', saveTimer = null;
+function snapshot() {
+  const slots = [];
+  for (const s of orderedSlots()) {
+    const index = new Map(), sessions = [];
+    for (const x of s.sessions) {
+      if (x.exited) continue;
+      let p = x.parent;
+      while (p != null && !index.has(p)) p = sess(s, p)?.parent;
+      index.set(x.id, sessions.length);
+      sessions.push({ kind: x.kind, title: x.title, question: x.question, parent: p == null ? null : index.get(p), resume: x.resume || null });
+    }
+    if (!sessions.length) continue;
+    const t = [...s.path].reverse().find((id) => index.has(id));
+    slots.push({ worktree: s.worktree, top: t == null ? sessions.length - 1 : index.get(t), focused: s.id === M.focused, sessions });
+  }
+  return { version: 1, slots };
+}
+function scheduleSave() {
+  if (!persist) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const json = JSON.stringify(snapshot());
+    if (json === lastSaved) return;
+    lastSaved = json;
+    synapse.sessions.save(JSON.parse(json)).catch(() => { lastSaved = ''; });
+  }, 400);
+}
+
+// Rebuild the saved slots. Returns how many came back.
+async function restoreSessions(saved) {
+  let focus = null;
+  for (const sv of saved?.slots || []) {
+    if (!worktreeOf(sv.worktree)) continue; // its workspace was removed
+    const s = { id: nextId++, worktree: sv.worktree, sessions: [], path: [] };
+    M.slots.push(s);
+    const ids = [];
+    for (const [i, x] of sv.sessions.entries()) {
+      const parent = x.parent == null ? null : ids[x.parent] ?? null;
+      try {
+        const made = await makeSession(s, {
+          kind: x.kind, title: x.title, question: x.question, parent,
+          spawn: (cols, rows) => synapse.pty.restore({ cwd: sv.worktree, kind: x.kind, resume: x.resume, cols, rows }),
+        });
+        made.resume = x.resume;
+        ids[i] = made.id;
+      } catch { ids[i] = parent; } // a session that cannot come back hands its children to its parent
+    }
+    if (!s.sessions.length) { M.slots = M.slots.filter((y) => y !== s); continue; }
+    focusPath(s, ids[sv.top] ?? s.sessions[s.sessions.length - 1].id);
+    M.open.add(worktreeOf(sv.worktree).project.key);
+    if (sv.focused || focus == null) focus = s.id;
+  }
+  if (focus != null) M.focused = focus;
+  return M.slots.length;
+}
+
 // ---------------------------------------------------------------- render
 
 // Agent logos live in renderer/logos/<profile>.svg. Colour ones are images, monochrome ones a mask so they follow the theme.
@@ -230,6 +293,7 @@ function render() {
   renderStack();
   renderStage();
   renderBar();
+  scheduleSave();
 }
 
 // a session named after its folder would repeat the checkout row above it: say what runs in it instead
@@ -916,6 +980,12 @@ window.addEventListener('resize', () => { const t = top(focusedSlot()); if (t) t
 async function refresh() { apply(await synapse.state()); }
 function apply(st) {
   M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo;
+  // remember which agent each session runs while it is alive: that id is what a restart resumes. A resumed
+  // agent that has not written its transcript yet must not wipe the id it was resumed from.
+  for (const sl of M.slots) for (const x of sl.sessions) {
+    const a = M.agents[x.pty];
+    if (a?.synapseId && (a.transcript || !x.resume)) x.resume = { synapseId: a.synapseId, transcript: a.transcript || null };
+  }
   render();
 }
 synapse.onState(apply);
@@ -931,7 +1001,11 @@ synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { 
   // first run: the checkout we were started from is the sample workspace
   if (!M.projects.length) { try { await synapse.project.add(flags.cwd); await refresh(); } catch {} }
   const here = M.projects.flatMap((p) => p.worktrees).find((w) => flags.cwd.startsWith(w.path)) || M.projects[0]?.worktrees[0];
-  if (here) { M.open.add(worktreeOf(here.path)?.project.key); await newSlot(here.path, 'shell'); }
+  const keep = !flags.demo && !flags.shot;
+  const restored = keep ? await restoreSessions(await synapse.sessions.load().catch(() => null)) : 0;
+  if (!restored && here) { M.open.add(worktreeOf(here.path)?.project.key); await newSlot(here.path, 'shell'); }
+  persist = keep;
+  render();
   if (flags.demo && here) {
     // a ready-made tree so the deck and the fan-out can be felt without running an agent
     await fork('why not just <= ?');

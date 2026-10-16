@@ -10,12 +10,14 @@ contextBridge.exposeInMainWorld('synapse', {
   onState: (fn) => on('state', fn),
   pty: {
     spawn: (a) => call('pty:spawn', a),
+    restore: (a) => call('pty:restore', a),
     write: (id, data) => call('pty:write', { id, data }),
     resize: (id, cols, rows) => call('pty:resize', { id, cols, rows }),
     kill: (id) => call('pty:kill', { id }),
     onData: (fn) => on('pty:data', fn),
     onExit: (fn) => on('pty:exit', fn),
   },
+  sessions: { load: () => call('sessions:load'), save: (data) => call('sessions:save', data) },
   fork: { spawn: (a) => call('fork:spawn', a), onRequest: (fn) => on('fork:request', fn) },
   project: {
     add: (p) => call('project:add', { path: p }),

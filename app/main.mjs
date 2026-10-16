@@ -63,6 +63,7 @@ function projects() {
 // Repos Synapse makes for you (cloned or created from a name) live here, and workspaces added from
 // elsewhere get a symlink here, so the library tab of "+ workspace" can bring any of them back.
 const WS_HOME = path.join(DATA, 'workspaces');
+const SESSIONS = path.join(DATA, 'sessions.json');
 
 function addWorkspace(p) {
   let dir = path.resolve(p.replace(/^~/, os.homedir()));
@@ -336,6 +337,23 @@ function forkCommand(kind, agent, question, profiles) {
   }
 }
 
+// The per-kind resume adapters: how to bring a session back after the app restarts. Without an id to
+// resume (an agent that never took a turn, or a kind with no adapter yet) it starts fresh in the same place.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+function resumeCommand(kind, resume, profiles) {
+  const base = profiles[kind]?.command ?? kind;
+  const flags = base.split(' ').slice(1).join(' ');
+  switch (kind) {
+    case 'claude': return UUID.test(resume?.synapseId || '') && resume.transcript && fs.existsSync(resume.transcript)
+      ? `claude ${flags} --resume ${resume.synapseId}` : base;
+    case 'codex': {
+      const m = /rollout-.*-([0-9a-f-]{36})\.jsonl$/.exec(resume?.transcript || '');
+      return m && UUID.test(m[1]) ? `codex ${flags} resume ${m[1]}` : base;
+    }
+    default: return base;
+  }
+}
+
 function spawnFork({ parentPty, question, requestId, cols, rows }) {
   const t = ptys.get(parentPty);
   if (!t) throw new Error('parent session is gone');
@@ -442,6 +460,13 @@ handle('pty:write', ({ id, data }) => { ptys.get(id)?.p.write(data); });
 handle('pty:resize', ({ id, cols, rows }) => { try { ptys.get(id)?.p.resize(cols, rows); } catch {} });
 handle('pty:kill', ({ id }) => { ptys.get(id)?.p.kill(); });
 handle('fork:spawn', (a) => spawnFork(a));
+handle('pty:restore', ({ cwd, kind, resume, cols, rows }) => {
+  if (!fs.existsSync(cwd)) throw new Error(`${cwd} is gone`);
+  return spawnPty({ cwd, kind, command: resumeCommand(kind, resume, config().profiles), cols, rows });
+});
+// the open sessions, so a restart (or a rebuilt app) can bring them back; the renderer owns the shape
+handle('sessions:load', () => readJSON(SESSIONS, null));
+handle('sessions:save', (data) => writeJSON(SESSIONS, data));
 handle('canvas', () => ensureCanvas());
 handle('project:add', ({ path: p }) => addWorkspace(p));
 handle('project:create', ({ name }) => createWorkspace(name));
