@@ -396,12 +396,13 @@ function confirm(text, onOk, { danger = 'Close' } = {}) {
 function pickProfile(worktreePath) {
   modal('new session', (body, close) => {
     const wt = worktreeOf(worktreePath);
-    body.appendChild(el('div', 'hint', `in ${wt ? `${wt.project.label} / ${wt.worktree.name}` : worktreePath} · profiles live in ~/.synapse/app.json`));
-    const keys = Object.keys(M.profiles);
-    let sel = keys.indexOf('claude'); if (sel < 0) sel = 0;
+    body.appendChild(el('div', 'hint', `in ${wt ? `${wt.project.label} / ${wt.worktree.name}` : worktreePath} · 1-9 to launch · profiles live in ~/.synapse/app.json`));
+    // agents first (1 claude, 2 codex, ...), the plain shell last; a digit launches straight away
+    const keys = Object.keys(M.profiles).sort((a, b) => (a === 'shell') - (b === 'shell'));
+    let sel = 0;
     const opts = keys.map((k, i) => {
       const o = el('div', 'opt' + (i === sel ? ' sel' : ''));
-      o.append(el('span', 'k', M.profiles[k].label || k), el('span', 'c', M.profiles[k].command || '$SHELL -l'));
+      o.append(el('span', 'n', i < 9 ? String(i + 1) : ''), el('span', 'k', M.profiles[k].label || k), el('span', 'c', M.profiles[k].command || '$SHELL -l'));
       o.onclick = () => { close(); newSlot(worktreePath, k); };
       body.appendChild(o);
       return o;
@@ -410,6 +411,7 @@ function pickProfile(worktreePath) {
     body.onkeydown = (e) => {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { opts[sel].classList.remove('sel'); sel = (sel + (e.key === 'ArrowDown' ? 1 : keys.length - 1)) % keys.length; opts[sel].classList.add('sel'); }
       if (e.key === 'Enter') { close(); newSlot(worktreePath, keys[sel]); }
+      if (/^[1-9]$/.test(e.key) && !e.metaKey && keys[e.key - 1]) { close(); newSlot(worktreePath, keys[e.key - 1]); }
       if (e.key === 'Escape') close();
     };
   });
@@ -571,5 +573,10 @@ synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { 
     if (v.length) { const inp = $('#modal-body input'); inp.value = v.join(':'); inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); }
   }, 800);
   if (flags.shot === 'worktree') setTimeout(() => promptWorktree(M.projects[0]), 800);
-  if (flags.shot === 'picker') setTimeout(() => pickProfile(here?.path), 800);
+  if (flags.shot.startsWith('picker')) setTimeout(() => {
+    // picker[:<digit>] opens the agent picker, and with a digit presses it
+    pickProfile(here?.path);
+    const d = flags.shot.split(':')[1];
+    if (d) $('#modal-body').dispatchEvent(new KeyboardEvent('keydown', { key: d }));
+  }, 800);
 })();

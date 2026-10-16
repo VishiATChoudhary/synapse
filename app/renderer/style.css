@@ -184,6 +184,8 @@ kbd { font: 10.5px var(--mono); color: var(--ink-2); padding: 1px 5px; border: 1
 .modal .hint { padding: 10px 18px; font: 10.5px var(--mono); text-transform: uppercase; color: var(--ink-3); }
 .opt { display: flex; align-items: center; gap: 12px; padding: 9px 18px; border-top: 1px solid var(--rule); cursor: pointer; }
 .opt:hover, .opt.sel { background: var(--ink); color: var(--paper); }
+.opt .n { width: 18px; height: 18px; display: grid; place-items: center; flex: none; font: 10.5px var(--mono); border: 1px solid var(--rule); color: var(--ink-3); }
+.opt:hover .n, .opt.sel .n { border-color: var(--paper); color: var(--paper); }
 .opt .k { width: 120px; font-size: 13px; }
 .opt .c { font: 10.5px var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .opt:hover .c, .opt.sel .c { color: var(--paper); opacity: .6; }
