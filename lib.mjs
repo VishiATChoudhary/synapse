@@ -23,6 +23,8 @@ export const FILES = {
   messages: path.join(DATA, 'messages.json'),
   names: path.join(DATA, 'names.json'),
   projects: path.join(DATA, 'projects.json'),
+  forks: path.join(DATA, 'forks.json'),
+  app: path.join(DATA, 'app.json'),
 };
 
 export function readJSON(file, fallback) {

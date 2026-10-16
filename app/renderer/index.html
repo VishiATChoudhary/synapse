@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Synapse</title>
+<script>document.documentElement.dataset.theme = localStorage.getItem('synapse-mode') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'signal');</script>
+<link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<aside class="side">
+  <div class="drag"></div>
+  <div class="side-head">
+    <span class="wordmark">synapse</span>
+    <button class="icon" id="theme" title="light / dark">☾</button>
+  </div>
+  <nav class="tree" id="tree"></nav>
+  <div class="side-foot">
+    <button class="ghost" id="add-project">+ project</button>
+  </div>
+</aside>
+
+<main class="main">
+  <header class="top">
+    <div class="deck" id="deck"></div>
+    <div class="top-right">
+      <span class="crumb" id="crumb"></span>
+      <button class="ghost" id="btn-shell" title="⌘T">+ shell</button>
+      <button class="ghost" id="btn-agent" title="⌘N">+ agent</button>
+      <button class="ghost sig" id="btn-fork" title="⇧⌘F">⑂ fork</button>
+    </div>
+  </header>
+  <section class="stage" id="stage">
+    <div class="empty" id="empty">
+      <div class="empty-title">No session here yet</div>
+      <div class="empty-sub">⌘T shell · ⌘N agent · ⇧⌘N worktree</div>
+    </div>
+  </section>
+  <footer class="bar" id="bar">
+    <span class="bar-left" id="bar-left"></span>
+    <span class="bar-right" id="bar-right"></span>
+  </footer>
+</main>
+
+<div class="fan" id="fan" hidden>
+  <div class="fan-inner" id="fan-inner"></div>
+  <div class="fan-hint">click a card to bring it to front · ⌫ closes a branch · esc</div>
+</div>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-title" id="modal-title"></div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
