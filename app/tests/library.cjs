@@ -23,7 +23,7 @@ const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t
 git(acme, 'init', '-q'); git(acme, 'commit', '-q', '--allow-empty', '-m', 'init');
 fs.mkdirSync(path.dirname(feature), { recursive: true }); git(acme, 'worktree', 'add', '-q', '-b', 'feature', feature);
 process.env.SUPERSET_HOME = superset;
-fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [alpha], profiles: { shell: { command: 'cat', label: 'Shell' } } }));
+fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [alpha], profiles: { shell: { command: 'cat', label: 'Shell' }, claude: { command: 'cat', label: 'Claude Code' } } }));
 process.env.SYNAPSE_HOME = state;
 process.env.SYNAPSE_DEMO = '1';
 process.env.SHELL = '/bin/sh';
@@ -57,6 +57,13 @@ const config = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'u
   const [wtName, slotTitle] = await js(`[document.querySelector('.wt-name').textContent, document.querySelector('.slot-title').textContent]`);
   assert.equal(wtName, 'alpha');
   assert.match(slotTitle, /shell/i, 'session row names what runs, not the folder again');
+
+  // ⌃1 starts the first agent profile (claude) in the focused worktree; the shell is not on a digit
+  const slotsBefore = await js(`document.querySelectorAll('#tree .slot').length`);
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: '1', modifiers: ['control'] });
+  win.webContents.sendInputEvent({ type: 'keyUp', keyCode: '1', modifiers: ['control'] });
+  await until(() => js(`document.querySelectorAll('#tree .slot').length`).then((n) => n === slotsBefore + 1), '⌃1 opened a session');
+  assert.equal(await js(`[...document.querySelectorAll('#tree .slot-kind')].at(-1).textContent`), 'claude', '⌃1 is claude');
 
   // a second after start, everything known gets linked: app.json entries, Superset repos and worktrees
   await until(() => linkOf('alpha') === alpha, 'startup scan links app.json workspaces');
@@ -99,7 +106,31 @@ const config = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'u
   await js(`document.querySelector('#add-project').click()`);
   await until(() => js(`!document.querySelector('#modal').hidden && document.querySelector('.modal .seg button.on')?.textContent === 'library'`), 'library tab');
   await until(() => js(`document.querySelectorAll('.modal .lib .opt').length === 7`), 'seven library rows');
-  await js(`[...document.querySelectorAll('.modal .lib .opt')].find((o) => o.textContent.includes('delta')).click()`);
+  assert.deepEqual(await js(`[...document.querySelectorAll('.modal .seg button')].map(b => b.textContent)`), ['clone', 'open folder', 'new', 'library'], 'library is the last tab');
+  assert.equal(await js(`document.activeElement === document.querySelector('.modal input[type=search]')`), true, 'search is focused');
+  const search = (query) => js(`(() => { const i = document.querySelector('.modal input'); i.value = ${JSON.stringify(query)}; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  const key = (key, shiftKey = false) => js(`document.querySelector('.modal input').dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, shiftKey: ${shiftKey}, bubbles: true }))`);
+  const names = () => js(`[...document.querySelectorAll('.modal .lib .opt .k')].map(e => e.textContent)`);
+  await search('  BeTA ');
+  assert.deepEqual(await names(), ['beta', 'beta-2'], 'search ignores case and surrounding spaces');
+  await key('ArrowUp');
+  assert.equal(await js(`document.querySelector('.modal .lib .sel .k').textContent`), 'beta-2', 'arrows navigate filtered results');
+  await search('other/beta');
+  assert.deepEqual(await names(), ['beta-2'], 'search matches paths');
+  await search('no-such-workspace');
+  assert.deepEqual(await names(), []);
+  assert.equal(await js(`document.querySelector('.modal .lib').textContent`), 'No matching workspaces.');
+  await key('Enter');
+  assert.equal(await js(`document.querySelector('#modal').hidden`), false, 'Enter with no results does nothing');
+  await search('');
+  assert.equal((await names()).length, 7, 'clearing search restores all entries');
+  await key('Tab');
+  assert.equal(await js(`document.querySelector('.modal .seg button.on').textContent`), 'clone', 'last tab wraps to first');
+  assert.equal(await js(`document.querySelector('.modal input').type`), 'text');
+  await key('Tab', true);
+  assert.equal(await js(`document.querySelector('.modal .seg button.on').textContent`), 'library');
+  await search('delta');
+  await key('Enter');
   await until(() => config().workspaces.includes(fs.realpathSync(path.join(lib, 'delta'))), 'delta added from the library');
   await until(() => js(`document.querySelector('#modal').hidden`), 'modal closed');
 

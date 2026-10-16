@@ -70,6 +70,7 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
   // app shortcuts pass through; the macOS editing keys xterm drops or mis-sends become their readline
   // bytes (⌘⌫ clears the line, ⌘← / ⌘→ jump to its ends); everything else goes to the pty as is
   term.attachCustomKeyEventHandler((e) => {
+    if (e.type === 'keydown' && agentKey(e)) return false; // ⌃1-9 launch agents, never reach the pty
     if (!e.metaKey || e.type !== 'keydown') return true;
     if (APP_KEYS.has(keyName(e))) return false;
     const bytes = !e.shiftKey && !e.altKey && !e.ctrlKey && META_EDIT[e.key];
@@ -206,7 +207,8 @@ function renderLaunch() {
     bar.replaceChildren(...keys.map((k, i) => {
       const b = el('button', 'launch-item');
       b.append(logo(k), el('span', '', k === 'shell' ? 'Shell' : (M.profiles[k].label || k).replace(/ (Code|CLI|Agent)$/, '')));
-      b.title = `${M.profiles[k].command || '$SHELL -l'}${i < 9 ? `  ·  ⌘N then ${i + 1}` : ''}`;
+      const n = agentProfiles().indexOf(k);
+      b.title = `${M.profiles[k].command || '$SHELL -l'}${k === 'shell' ? '  ·  ⌘T' : n >= 0 && n < 9 ? `  ·  ⌃${n + 1}` : ''}`;
       b.onclick = () => { const wt = focusedSlot()?.worktree || M.projects[0]?.worktrees[0]?.path; if (wt) newSlot(wt, k); else toast('add a workspace first', true); };
       return b;
     }));
@@ -595,7 +597,7 @@ async function promptProject(mode) {
 
 // ---------------------------------------------------------------- settings
 const SHORTCUTS = [
-  ['app', [['⌘T', 'shell'], ['⌘N', 'agent'], ['⇧⌘N', 'worktree'], ['⇧⌘F', 'fork'], ['⌘E', 'fork tree'], ['⌘W', 'close session'], ['⇧⌘⌫', 'pop fork'], ['⌘[ ⌘]', 'switch session'], ['⌘1-9', 'nth session'], ['⌃Tab ⌘G', 'node view'], ['⌘,', 'settings']]],
+  ['app', [['⌘T', 'shell'], ['⌃1 ⌃2 …', 'claude, codex, …'], ['⌘N', 'agent picker'], ['⇧⌘N', 'worktree'], ['⇧⌘F', 'fork'], ['⌘E', 'fork tree'], ['⌘W', 'close session'], ['⇧⌘⌫', 'pop fork'], ['⌘[ ⌘]', 'switch session'], ['⌘1-9', 'nth session'], ['⌃Tab ⌘G', 'node view'], ['⌘,', 'settings']]],
   ['terminal', [['⌘⌫', 'clear line'], ['⌘← ⌘→', 'line start / end'], ['⌥⌫', 'delete word']]],
   ['node view', [['⌘F /', 'search'], ['drag ring', 'link'], ['drag', 'move agent or project'], ['dbl-click', 'rename'], ['⌘-click', 'open its session'], ['scroll', 'zoom'], ['F', 'fit'], ['A', 'arrange'], ['⌫', 'unlink'], ['esc', 'back to terminals']]],
 ];
@@ -639,6 +641,9 @@ function toast(text, sig = false) {
 // ---------------------------------------------------------------- keys
 
 const keyName = (e) => (e.shiftKey ? 'shift+' : '') + e.key.toLowerCase();
+// ⌃1 ⌃2 … start the nth agent (claude, codex, …; the shell is not in this list) in the focused worktree
+const agentProfiles = () => profileOrder().filter((k) => k !== 'shell');
+const agentKey = (e) => (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key) ? agentProfiles()[e.key - 1] : null);
 const APP_KEYS = new Set(['t', 'n', 'shift+n', 'shift+f', 'e', 'w', '[', ']', 'shift+backspace', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',']);
 // ⌘ + editing key -> what a macOS terminal sends for it (iTerm's natural editing, Ghostty's defaults)
 const META_EDIT = { Backspace: '\x15', ArrowLeft: '\x01', ArrowRight: '\x05' };
@@ -646,6 +651,8 @@ window.addEventListener('keydown', (e) => {
   if (!$('#modal').hidden) return;
   if (fanOpen && e.key === 'Escape') return closeFan();
   if (fanOpen && e.key === 'Backspace') { const s = focusedSlot(); const t = top(s); if (t?.parent != null) { closeSession(s, t.id); closeFan(); openFan(); } return; }
+  const agent = agentKey(e);
+  if (agent) { e.preventDefault(); const wt = focusedSlot()?.worktree || M.projects[0]?.worktrees[0]?.path; if (wt) newSlot(wt, agent); else toast('add a workspace first', true); return; }
   if (!e.metaKey) return;
   const k = keyName(e);
   if (!APP_KEYS.has(k)) return;
