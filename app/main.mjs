@@ -254,7 +254,10 @@ app.whenReady().then(() => {
   }
 });
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => { for (const [, t] of ptys) try { t.p.kill(); } catch {} });
+// Kill every session's whole process group (agent wrappers spawn helpers that outlive a plain SIGHUP), then exit
+// without Node's handle cleanup: node-pty's exit-watcher threads otherwise block shutdown forever.
+app.on('before-quit', () => { for (const [, t] of ptys) { try { process.kill(-t.pid, 'SIGKILL'); } catch {} try { t.p.kill('SIGKILL'); } catch {} } });
+app.on('will-quit', () => process.exit(0));
 
 // ---------------------------------------------------------------- ipc
 

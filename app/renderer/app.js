@@ -154,7 +154,34 @@ function orderedSlots() {
 
 // ---------------------------------------------------------------- render
 
+// Agent logos live in renderer/logos/<profile>.svg. Colour ones are images, monochrome ones a mask so they follow the theme.
+const LOGOS = { claude: 'color', codex: 'mono', gemini: 'color', opencode: 'mono', 'cursor-agent': 'mono', copilot: 'mono', amp: 'color', shell: 'mono' };
+function logo(kind) {
+  const how = LOGOS[kind];
+  if (!how) return el('span', 'logo none', (kind || '?')[0].toUpperCase());
+  if (how === 'color') { const i = el('img', 'logo'); i.src = `logos/${kind}.svg`; i.alt = ''; return i; }
+  const m = el('span', 'logo mono'); m.style.setProperty('--logo', `url(logos/${kind}.svg)`); return m;
+}
+const profileOrder = () => Object.keys(M.profiles).sort((a, b) => (a === 'shell') - (b === 'shell'));
+
+// the launcher strip under the top bar: one click starts that agent in the focused worktree
+function renderLaunch() {
+  const bar = $('#launch');
+  const keys = profileOrder();
+  if (bar.dataset.keys !== keys.join()) {
+    bar.dataset.keys = keys.join();
+    bar.replaceChildren(...keys.map((k, i) => {
+      const b = el('button', 'launch-item');
+      b.append(logo(k), el('span', '', k === 'shell' ? 'Shell' : (M.profiles[k].label || k).replace(/ (Code|CLI|Agent)$/, '')));
+      b.title = `${M.profiles[k].command || '$SHELL -l'}${i < 9 ? `  ·  ⌘N then ${i + 1}` : ''}`;
+      b.onclick = () => { const wt = focusedSlot()?.worktree || M.projects[0]?.worktrees[0]?.path; if (wt) newSlot(wt, k); else toast('add a workspace first', true); };
+      return b;
+    }));
+  }
+}
+
 function render() {
+  renderLaunch();
   renderTree();
   renderDeck();
   renderStage();
@@ -193,7 +220,7 @@ function renderTree() {
           n++;
           const t = top(s);
           const row = el('div', 'slot' + (s.id === M.focused ? ' focused' : ''));
-          row.append(el('span', 'dot ' + (t ? statusOf(t) : 'exited')), el('span', 'slot-title', t ? (s.path.length > 1 ? t.title : t.title) : 'gone'));
+          row.append(el('span', 'dot ' + (t ? statusOf(t) : 'exited')), logo(t?.kind), el('span', 'slot-title', t ? (s.path.length > 1 ? t.title : t.title) : 'gone'));
           const a = t && M.agents[t.pty];
           const unread = a && M.unread[a.synapseId];
           if (unread) row.appendChild(el('span', 'slot-unread', `✉${unread}`));
@@ -220,7 +247,7 @@ function renderDeck() {
   s.path.forEach((id, i) => {
     const x = sess(s, id);
     const c = el('div', 'card' + (i === s.path.length - 1 ? ' top' : ''));
-    c.append(el('span', 'dot ' + statusOf(x)), el('span', 'label', i === 0 ? x.title : x.question || x.title));
+    c.append(el('span', 'dot ' + statusOf(x)), logo(x.kind), el('span', 'label', i === 0 ? x.title : x.question || x.title));
     if (i > 0) c.prepend(el('span', 'q', '⑂'));
     c.onclick = () => { focusPath(s, id); render(); };
     deck.appendChild(c);
@@ -398,11 +425,11 @@ function pickProfile(worktreePath) {
     const wt = worktreeOf(worktreePath);
     body.appendChild(el('div', 'hint', `in ${wt ? `${wt.project.label} / ${wt.worktree.name}` : worktreePath} · 1-9 to launch · profiles live in ~/.synapse/app.json`));
     // agents first (1 claude, 2 codex, ...), the plain shell last; a digit launches straight away
-    const keys = Object.keys(M.profiles).sort((a, b) => (a === 'shell') - (b === 'shell'));
+    const keys = profileOrder();
     let sel = 0;
     const opts = keys.map((k, i) => {
       const o = el('div', 'opt' + (i === sel ? ' sel' : ''));
-      o.append(el('span', 'n', i < 9 ? String(i + 1) : ''), el('span', 'k', M.profiles[k].label || k), el('span', 'c', M.profiles[k].command || '$SHELL -l'));
+      o.append(el('span', 'n', i < 9 ? String(i + 1) : ''), logo(k), el('span', 'k', M.profiles[k].label || k), el('span', 'c', M.profiles[k].command || '$SHELL -l'));
       o.onclick = () => { close(); newSlot(worktreePath, k); };
       body.appendChild(o);
       return o;
@@ -573,6 +600,8 @@ synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { 
     if (v.length) { const inp = $('#modal-body input'); inp.value = v.join(':'); inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); }
   }, 800);
   if (flags.shot === 'worktree') setTimeout(() => promptWorktree(M.projects[0]), 800);
+  if (flags.shot.endsWith('+light')) { document.documentElement.dataset.theme = 'signal'; flags.shot = flags.shot.slice(0, -6); for (const sl of M.slots) for (const x of sl.sessions) x.term.options.theme = termTheme(); }
+  if (flags.shot.startsWith('launch:')) setTimeout(() => $('#launch').children[flags.shot.split(':')[1] - 1]?.click(), 800);
   if (flags.shot.startsWith('picker')) setTimeout(() => {
     // picker[:<digit>] opens the agent picker, and with a digit presses it
     pickProfile(here?.path);
