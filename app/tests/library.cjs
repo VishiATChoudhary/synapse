@@ -17,16 +17,22 @@ const lib = path.join(state, 'workspaces');
 const dir = (...p) => { const d = path.join(fixture, ...p); fs.mkdirSync(d, { recursive: true }); return d; };
 const alpha = dir('code', 'alpha'), beta = dir('code', 'beta'), beta2 = dir('other', 'beta'), gamma = dir('code', 'gamma'), epsilon = dir('code', 'epsilon');
 fs.mkdirSync(state);
+// a `claude` that only the user's .zshrc puts on PATH: an app started from the Dock has launchd's bare PATH,
+// and a plain login shell never reads .zshrc
+const fakeBin = dir('bin'), zdot = dir('zdot');
+fs.writeFileSync(path.join(fakeBin, 'claude'), '#!/bin/sh\necho FAKE_CLAUDE_RAN\nexec cat\n', { mode: 0o755 });
+fs.writeFileSync(path.join(zdot, '.zshrc'), `export PATH="${fakeBin}:$PATH"\n`);
+process.env.ZDOTDIR = zdot;
 // a Superset-style layout: a repo in projects/ with a worktree in worktrees/<repo>/<branch>
 const superset = dir('superset'), acme = dir('superset', 'projects', 'acme'), feature = path.join(superset, 'worktrees', 'acme', 'feature');
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { stdio: 'pipe' });
 git(acme, 'init', '-q'); git(acme, 'commit', '-q', '--allow-empty', '-m', 'init');
 fs.mkdirSync(path.dirname(feature), { recursive: true }); git(acme, 'worktree', 'add', '-q', '-b', 'feature', feature);
 process.env.SUPERSET_HOME = superset;
-fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [alpha], profiles: { shell: { command: 'cat', label: 'Shell' }, claude: { command: 'cat', label: 'Claude Code' } } }));
+fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [alpha], profiles: { shell: { command: 'cat', label: 'Shell' }, claude: { command: 'claude', label: 'Claude Code' } } }));
 process.env.SYNAPSE_HOME = state;
 process.env.SYNAPSE_DEMO = '1';
-process.env.SHELL = '/bin/sh';
+process.env.SHELL = '/bin/zsh';
 for (const key of Object.keys(process.env)) if (key.startsWith('SYNAPSE_SHOT') || key === 'SYNAPSE_DEBUG') delete process.env[key];
 process.chdir(fixture);
 app.setPath('userData', path.join(fixture, 'electron'));
@@ -89,6 +95,7 @@ const spawns = [];
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: '1', modifiers: ['control'] });
   await until(() => js(`document.querySelectorAll('#tree .slot').length`).then((n) => n === slotsBefore + 1), '⌃1 opened a session');
   assert.equal(await js(`[...document.querySelectorAll('#tree .slot-kind')].at(-1).textContent`), 'claude', '⌃1 is claude');
+  await until(() => js(`[...document.querySelectorAll('.term .xterm-rows > div')].some((d) => d.textContent.includes('FAKE_CLAUDE_RAN'))`), 'claude found through the PATH that .zshrc sets');
 
   // a second after start, everything known gets linked: app.json entries, Superset repos and worktrees
   await until(() => linkOf('alpha') === alpha, 'startup scan links app.json workspaces');

@@ -244,10 +244,24 @@ let win = null;
 // (Claude Code, Superset, ...), passing these on makes every agent here think it is that session's child:
 // Claude then stops saving its transcript and never shows up in Synapse.
 const INHERITED = /^(CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_PLUGIN_DATA|AI_AGENT|CODEX_COMPANION_.*|SUPERSET_.*|SYNAPSE_AGENT|SYNAPSE_FORK_.*)$/;
+// An app started from the Dock has launchd's bare PATH, and the login shell the pty runs never reads
+// .zshrc, which is where PATH usually grows (claude's installer adds ~/.local/bin there). Ask an interactive
+// login shell once for the PATH a terminal would have had.
+let shellPath;
+function userPath() {
+  if (shellPath !== undefined) return shellPath;
+  try {
+    const out = execFileSync(SHELL, ['-ilc', 'printf "\\0%s\\0" "$PATH"'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, TERM: 'dumb' } });
+    shellPath = out.split('\0')[1] || null;
+  } catch { shellPath = null; }
+  return shellPath;
+}
 function cleanEnv() {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !INHERITED.test(k)));
-  // Superset's PATH wrappers report to Superset; agents started here should run as themselves
-  if (env.PATH) env.PATH = env.PATH.split(':').filter((p) => !p.includes('/.superset/bin')).join(':');
+  const seen = new Set();
+  env.PATH = [...(userPath() || '').split(':'), ...(env.PATH || '').split(':')]
+    // Superset's PATH wrappers report to Superset; agents started here should run as themselves
+    .filter((p) => p && !p.includes('/.superset/bin') && !seen.has(p) && seen.add(p)).join(':');
   return env;
 }
 
