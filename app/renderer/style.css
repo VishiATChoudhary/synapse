@@ -198,6 +198,12 @@ kbd { font: 10.5px var(--mono); color: var(--ink-2); padding: 1px 5px; border: 1
 .opt .k { width: 120px; font-size: 13px; }
 .opt .c { font: 10.5px var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .opt:hover .c, .opt.sel .c { color: var(--paper); opacity: .6; }
+.modal .lib { max-height: 50vh; overflow: auto; outline: 0; }
+.modal .lib .opt .k { width: 160px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal .lib .opt .n { border: 0; color: var(--sig); font-size: 8px; }
+.opt.set .k { width: 150px; flex: none; }
+.opt.set .c { white-space: normal; line-height: 1.45; }
+.modal input[type=checkbox] { display: inline-block; width: 14px; height: 14px; flex: none; margin: 0; padding: 0; border: 0; accent-color: var(--sig); }
 .modal .seg { display: flex; border-bottom: 1px solid var(--rule); }
 .modal .seg button { flex: 1; padding: 9px 0; font: 10.5px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); border-left: 1px solid var(--rule); }
 .modal .seg button:first-child { border-left: 0; }

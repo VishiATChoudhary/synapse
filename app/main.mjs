@@ -8,7 +8,7 @@ import os from 'node:os';
 import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
-import { FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked } from '../lib.mjs';
+import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked } from '../lib.mjs';
 
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
 const SHELL = process.env.SHELL || '/bin/zsh';
@@ -31,6 +31,7 @@ function config() {
   let dirty = false;
   if (!c.profiles) { c.profiles = DEFAULT_PROFILES; dirty = true; }
   if (!c.workspaces) { c.workspaces = []; dirty = true; }
+  if (c.autoSymlink === undefined) { c.autoSymlink = true; dirty = true; }
   if (dirty) writeJSON(FILES.app, c);
   return c;
 }
@@ -57,8 +58,9 @@ function projects() {
   return [...groups.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
 
-// Repos Synapse makes for you (cloned or created from a name) live here.
-const WS_HOME = path.join(os.homedir(), '.synapse', 'workspaces');
+// Repos Synapse makes for you (cloned or created from a name) live here, and workspaces added from
+// elsewhere get a symlink here, so the library tab of "+ workspace" can bring any of them back.
+const WS_HOME = path.join(DATA, 'workspaces');
 
 function addWorkspace(p) {
   let dir = path.resolve(p.replace(/^~/, os.homedir()));
@@ -66,8 +68,48 @@ function addWorkspace(p) {
   try { dir = git(dir, ['rev-parse', '--show-toplevel']); } catch {} // a plain folder is fine too, it just cannot have worktrees
   const c = config();
   if (!c.workspaces.includes(dir)) { c.workspaces.push(dir); writeJSON(FILES.app, c); }
+  try { linkIntoLibrary(dir); } catch {}
   return dir;
 }
+
+// Symlink a workspace into WS_HOME under its folder name (-2, -3 when that name points elsewhere).
+// Returns the link, or null when nothing was made. Off with "autoSymlink": false (settings, ⌘,).
+function linkIntoLibrary(dir) {
+  if (!config().autoSymlink || (dir + '/').startsWith(WS_HOME + '/')) return null;
+  fs.mkdirSync(WS_HOME, { recursive: true });
+  const base = path.basename(dir);
+  for (let i = 1; i < 100; i++) {
+    const link = path.join(WS_HOME, i === 1 ? base : `${base}-${i}`);
+    let st = null;
+    try { st = fs.lstatSync(link); } catch {}
+    if (!st) { fs.symlinkSync(dir, link); return link; }
+    if (st.isSymbolicLink() && path.resolve(WS_HOME, fs.readlinkSync(link)) === dir) return link; // already there
+  }
+  return null;
+}
+
+// Every workspace already in app.json gets its link too, so nothing added before this existed is left out.
+function backfillLibrary() {
+  for (const ws of config().workspaces) if (fs.existsSync(ws)) try { linkIntoLibrary(ws); } catch {}
+}
+
+// What the library tab lists: every folder in WS_HOME, links resolved, dangling ones skipped.
+function library() {
+  let names = [];
+  try { names = fs.readdirSync(WS_HOME); } catch { return []; }
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+  const added = new Set(config().workspaces.map(real));
+  const out = [];
+  for (const name of names.sort((a, b) => a.localeCompare(b))) {
+    if (name.startsWith('.')) continue;
+    const entry = path.join(WS_HOME, name);
+    let target;
+    try { target = fs.realpathSync(entry); if (!fs.statSync(target).isDirectory()) continue; } catch { continue; }
+    out.push({ name, path: target, link: target !== real(entry) || fs.lstatSync(entry).isSymbolicLink(), added: added.has(target) });
+  }
+  return out;
+}
+backfillLibrary();
 
 const safeName = (n) => {
   const s = String(n || '').trim().replace(/[^\w.-]+/g, '-').replace(/^[-.]+|-+$/g, '');
@@ -328,6 +370,9 @@ handle('project:add', ({ path: p }) => addWorkspace(p));
 handle('project:create', ({ name }) => createWorkspace(name));
 handle('project:clone', ({ url, name }) => cloneWorkspace(url, name));
 handle('project:pick', () => pickFolder());
+handle('project:library', () => library());
+handle('settings:get', () => ({ autoSymlink: !!config().autoSymlink }));
+handle('settings:set', (patch) => { const c = config(); if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink; writeJSON(FILES.app, c); return { autoSymlink: !!c.autoSymlink }; });
 handle('worktree:add', ({ repo, name, base }) => addWorktree(repo, name, base));
 handle('worktree:remove', ({ repo, dir, force }) => removeWorktree(repo, dir, force));
 handle('synapse', ({ args, as }) => execFileSync(process.execPath.includes('Electron') ? 'node' : process.execPath, [path.join(ROOT, '..', 'cli.mjs'), ...args], { encoding: 'utf8', env: { ...process.env, SYNAPSE_AGENT: as || '' }, timeout: 8000 }));

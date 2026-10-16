@@ -487,39 +487,75 @@ function promptFork() {
 }
 // Add a workspace three ways: clone a repo, open a folder, or start a new repo from a name.
 const WS_MODES = {
+  library: { label: 'library', hint: '~/.synapse/workspaces · ● already in the sidebar · ↑↓ enter', placeholder: '' },
   clone: { label: 'clone', hint: 'git clone into ~/.synapse/workspaces/<repo>', placeholder: 'https://github.com/owner/repo  or  git@github.com:owner/repo.git' },
   open: { label: 'open folder', hint: 'a repo, a worktree or any folder. Enter adds a typed path.', placeholder: '~/code/repo' },
   new: { label: 'new', hint: 'git init ~/.synapse/workspaces/<name> with an empty first commit', placeholder: 'name' },
 };
 let onCloneLine = null;
 synapse.project.onCloneProgress((line) => onCloneLine?.(line));
-function promptProject(mode = 'clone') {
+// "+ workspace": the library (everything in ~/.synapse/workspaces) first when it has entries, else clone
+async function promptProject(mode) {
+  const home = M.home || '';
+  let lib = [];
+  try { lib = await synapse.project.library(); } catch {}
+  mode ||= lib.length ? 'library' : 'clone';
+  let focusList = null;
   modal('add workspace', (body, close) => {
     const seg = el('div', 'seg');
+    const list = el('div', 'lib');
     const inp = el('input');
     const hint = el('div', 'hint');
     const row = el('div', 'row');
     const browse = el('button', 'btn', 'choose folder…');
     const go = el('button', 'btn sig');
-    let busy = false;
+    let busy = false, sel = 0;
+    const done = async (dir) => {
+      onCloneLine = null; close(); await refresh();
+      const wt = worktreeOf(dir); if (wt) M.open.add(wt.project.key);
+      toast(`workspace ${dir.split('/').pop()} added`); newSlot(dir, 'shell');
+    };
+    // a library entry: add it, or go to it if it is already in the sidebar
+    const pick = async (w) => {
+      if (busy) return;
+      if (!w.added) {
+        busy = true;
+        try { await done(await synapse.project.add(w.path)); } catch (e) { busy = false; hint.textContent = e.message; hint.classList.add('err'); }
+        return;
+      }
+      close();
+      const wt = worktreeOf(w.path); if (wt) M.open.add(wt.project.key);
+      const first = M.slots.find((x) => x.worktree === w.path);
+      if (first) { M.focused = first.id; render(); } else pickProfile(w.path);
+    };
+    const renderLib = () => {
+      list.replaceChildren();
+      if (!lib.length) return list.appendChild(el('div', 'hint', 'nothing here yet. clone or create a repo, or add a folder: it gets linked here'));
+      lib.forEach((w, i) => {
+        const o = el('div', 'opt' + (i === sel ? ' sel' : ''));
+        const shown = home && w.path.startsWith(home) ? `~${w.path.slice(home.length)}` : w.path;
+        o.append(el('span', 'n', w.added ? '●' : ''), el('span', 'k', w.name), el('span', 'c', shown));
+        o.title = w.added ? 'already in the sidebar: click to go there' : w.path;
+        o.onclick = () => pick(w);
+        list.appendChild(o);
+      });
+    };
+    const cycle = (back) => { const ks = Object.keys(WS_MODES); set(ks[(ks.indexOf(mode) + (back ? ks.length - 1 : 1)) % ks.length]); };
     const set = (m) => {
       mode = m;
       for (const b of seg.children) b.classList.toggle('on', b.dataset.m === m);
+      const isLib = m === 'library';
+      inp.hidden = row.hidden = isLib; list.hidden = !isLib;
       inp.value = ''; inp.placeholder = WS_MODES[m].placeholder; hint.textContent = WS_MODES[m].hint; hint.classList.remove('err');
-      go.textContent = { clone: 'clone', open: 'add', new: 'create' }[m];
+      go.textContent = { clone: 'clone', open: 'add', new: 'create' }[m] || '';
       browse.hidden = m !== 'open';
-      inp.focus();
+      if (isLib) { sel = 0; renderLib(); list.focus(); } else inp.focus();
     };
     for (const m of Object.keys(WS_MODES)) {
       const b = el('button', '', WS_MODES[m].label); b.dataset.m = m;
       b.onclick = () => !busy && set(m);
       seg.appendChild(b);
     }
-    const done = async (dir) => {
-      onCloneLine = null; close(); await refresh();
-      const wt = worktreeOf(dir); if (wt) M.open.add(wt.project.key);
-      toast(`workspace ${dir.split('/').pop()} added`); newSlot(dir, 'shell');
-    };
     onCloneLine = (line) => { if (busy) hint.textContent = line; };
     const submit = async () => {
       const v = inp.value.trim();
@@ -536,11 +572,41 @@ function promptProject(mode = 'clone') {
     inp.onkeydown = (e) => {
       if (e.key === 'Enter') submit();
       if (e.key === 'Escape' && !busy) { onCloneLine = null; close(); }
-      if (e.key === 'Tab' && !busy) { e.preventDefault(); const ks = Object.keys(WS_MODES); set(ks[(ks.indexOf(mode) + (e.shiftKey ? ks.length - 1 : 1)) % ks.length]); }
+      if (e.key === 'Tab' && !busy) { e.preventDefault(); cycle(e.shiftKey); }
+    };
+    list.tabIndex = 0;
+    list.onkeydown = (e) => {
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && lib.length) { e.preventDefault(); sel = (sel + (e.key === 'ArrowDown' ? 1 : lib.length - 1)) % lib.length; renderLib(); }
+      if (e.key === 'Enter' && lib[sel]) pick(lib[sel]);
+      if (e.key === 'Escape' && !busy) { onCloneLine = null; close(); }
+      if (e.key === 'Tab' && !busy) { e.preventDefault(); cycle(e.shiftKey); }
     };
     row.append(browse, go);
-    body.append(seg, inp, hint, row);
+    body.append(seg, list, inp, hint, row);
     set(mode);
+    focusList = () => list.focus();
+  });
+  if (mode === 'library') focusList?.(); // the modal was hidden while set() ran, so focus again now
+}
+
+// ---------------------------------------------------------------- settings
+async function openSettings() {
+  let s = {};
+  try { s = await synapse.settings.get(); } catch {}
+  modal('settings', (body, close) => {
+    const themeRow = el('div', 'opt set'), themeVal = el('span', 'c');
+    const showTheme = () => (themeVal.textContent = document.documentElement.dataset.theme === 'night' ? 'night' : 'signal');
+    themeRow.append(el('span', 'n', '◐'), el('span', 'k', 'theme'), themeVal); showTheme();
+    themeRow.onclick = () => { toggleTheme(); showTheme(); };
+    const linkRow = el('label', 'opt set'), cb = el('input');
+    cb.type = 'checkbox'; cb.checked = !!s.autoSymlink;
+    linkRow.append(cb, el('span', 'k', 'link workspaces'), el('span', 'c', 'symlink workspaces added from elsewhere into ~/.synapse/workspaces, so the library can bring them back'));
+    cb.onchange = async () => {
+      try { await synapse.settings.set({ autoSymlink: cb.checked }); toast(cb.checked ? 'new workspaces get linked into ~/.synapse/workspaces' : 'workspaces are no longer linked · existing links stay'); }
+      catch (e) { cb.checked = !cb.checked; toast(e.message, true); }
+    };
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow);
+    body.tabIndex = 0; body.onkeydown = (e) => { if (e.key === 'Escape') close(); };
   });
 }
 
@@ -575,7 +641,7 @@ window.addEventListener('keydown', (e) => {
     case 'w': { const t = top(s); if (!t) break; if (!t.exited && statusOf(t) === 'working') confirm(`"${t.title}" is still working. Close it?`, () => closeSession(s, t.id)); else closeSession(s, t.id); break; }
     case '[': moveFocus(-1); break;
     case ']': moveFocus(1); break;
-    case ',': toggleTheme(); break;
+    case ',': openSettings(); break;
     default: { const n = Number(k); const o = orderedSlots(); if (o[n - 1]) { M.focused = o[n - 1].id; render(); } }
   }
 });
@@ -624,6 +690,7 @@ function toggleTheme() {
 }
 
 $('#theme').onclick = toggleTheme;
+$('#settings').onclick = openSettings;
 $('#btn-fork').onclick = promptFork;
 $('#add-project').onclick = () => promptProject();
 window.addEventListener('resize', () => { const t = top(focusedSlot()); if (t) t.fit.fit(); });
@@ -643,6 +710,7 @@ synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { 
 
 (async () => {
   const flags = await synapse.flags();
+  M.home = flags.home || '';
   M.noHover = !!flags.shot && flags.shot !== 'fan'; // screenshots: the real mouse must not open the fork tree
   await refresh();
   // first run: the checkout we were started from is the sample workspace
