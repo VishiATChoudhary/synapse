@@ -267,8 +267,6 @@ function renderDeck() {
   const deck = $('#deck');
   deck.replaceChildren();
   const s = focusedSlot();
-  const wt = s && worktreeOf(s.worktree);
-  $('#crumb').textContent = wt ? `${wt.project.label} / ${wt.worktree.name}` : '';
   if (!s) return;
   s.path.forEach((id, i) => {
     const x = sess(s, id);
@@ -617,8 +615,6 @@ function toggleTheme() {
 }
 
 $('#theme').onclick = toggleTheme;
-$('#btn-shell').onclick = () => { const wt = focusedSlot()?.worktree || M.projects[0]?.worktrees[0]?.path; if (wt) newSlot(wt, 'shell'); };
-$('#btn-agent').onclick = () => { const wt = focusedSlot()?.worktree || M.projects[0]?.worktrees[0]?.path; if (wt) pickProfile(wt); };
 $('#btn-fork').onclick = promptFork;
 $('#add-project').onclick = promptProject;
 window.addEventListener('resize', () => { const t = top(focusedSlot()); if (t) t.fit.fit(); });

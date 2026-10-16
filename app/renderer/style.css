@@ -101,7 +101,6 @@ kbd { font: 10.5px var(--mono); color: var(--ink-2); padding: 1px 5px; border: 1
 .top { height: var(--bar); flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--rule); -webkit-app-region: drag; }
 .top button, .deck { -webkit-app-region: no-drag; }
 .top-right { display: flex; align-items: stretch; flex: none; }
-.crumb { display: flex; align-items: center; padding: 0 14px; font: 11px var(--mono); text-transform: uppercase; color: var(--ink-3); white-space: nowrap; max-width: 340px; overflow: hidden; text-overflow: ellipsis; border-left: 1px solid var(--rule); }
 
 /* the deck: the focused slot's fork path, each card a cell of the bar */
 .deck { flex: 1; min-width: 0; display: flex; align-items: stretch; overflow: hidden; position: relative; }
