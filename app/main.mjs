@@ -237,8 +237,9 @@ function spawnFork({ parentPty, question, requestId }) {
 
 // ---------------------------------------------------------------- synapse canvas
 
-// The canvas is Synapse's own web UI. Reuse a server that is already up, otherwise start this checkout's.
-const CANVAS_PORT = Number(process.env.SYNAPSE_PORT || 4747);
+// The canvas is Synapse's own web UI, served by this checkout's server on a port of its own: a server started
+// from another checkout would serve a canvas that does not know how to talk to the app.
+const CANVAS_PORT = Number(process.env.SYNAPSE_APP_PORT || 4757);
 let canvasProc = null;
 const canvasUp = () => new Promise((resolve) => {
   const req = http.get({ host: '127.0.0.1', port: CANVAS_PORT, path: '/', timeout: 800 }, (r) => { r.resume(); resolve(r.statusCode < 500); });
@@ -273,7 +274,10 @@ function createWindow() {
   }
   // ⌘G toggles the canvas even while focus is inside it (the canvas is a separate page, its keys never reach ours)
   win.webContents.on('before-input-event', (e, i) => {
-    if (i.type === 'keyDown' && i.meta && !i.shift && !i.alt && i.key.toLowerCase() === 'g') { e.preventDefault(); win.webContents.send('canvas:toggle'); }
+    // ⌘Tab belongs to macOS (the app switcher never lets it through), so the node view also toggles on ⌃Tab
+    const g = i.meta && !i.shift && !i.alt && i.key.toLowerCase() === 'g';
+    const tab = i.control && !i.meta && !i.alt && i.key === 'Tab';
+    if (i.type === 'keyDown' && (g || tab)) { e.preventDefault(); win.webContents.send('canvas:toggle'); }
   });
   win.on('closed', () => { win = null; });
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });

@@ -590,6 +590,23 @@ async function toggleCanvas() {
   if (canvasOpen) $('#canvas-frame').focus(); else top(focusedSlot())?.term.focus();
 }
 $('#btn-canvas').onclick = toggleCanvas;
+
+// ⌘-click on a node in the canvas: bring that agent's session to the front, wherever it sits in a fork tree
+addEventListener('message', (ev) => {
+  if (ev.source !== $('#canvas-frame').contentWindow || ev.data?.type !== 'synapse:open') return;
+  const { id, name, pid } = ev.data;
+  const ptyId = Object.keys(M.agents).find((k) => M.agents[k].synapseId === id);
+  for (const s of M.slots) {
+    const x = ptyId && s.sessions.find((y) => y.pty === ptyId);
+    if (!x) continue;
+    M.focused = s.id; focusPath(s, x.id);
+    const wt = worktreeOf(s.worktree); if (wt) M.open.add(wt.project.key);
+    if (canvasOpen) toggleCanvas();
+    render();
+    return;
+  }
+  toast(`${name || id} runs outside this app${pid ? ` (pid ${pid})` : ''}`, true);
+});
 synapse.onCanvasToggle(toggleCanvas);
 
 function toggleTheme() {
