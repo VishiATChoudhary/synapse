@@ -422,9 +422,62 @@ function promptFork() {
   if (!t) return toast('no session to fork', true);
   promptText('⑂ fork', `a child of "${t.title}" with its full context. Nothing flows back unless you send it.`, 'what do you want to dig into?', (q) => fork(q));
 }
-function promptProject() {
-  promptText('add workspace', 'path to a repo or a worktree. Grouped by repo in the sidebar.', '~/code/repo', async (p) => {
-    try { await synapse.project.add(p); await refresh(); toast('workspace added'); } catch (e) { toast(e.message, true); }
+// Add a workspace three ways: clone a repo, open a folder, or start a new repo from a name.
+const WS_MODES = {
+  clone: { label: 'clone', hint: 'git clone into ~/.synapse/workspaces/<repo>', placeholder: 'https://github.com/owner/repo  or  git@github.com:owner/repo.git' },
+  open: { label: 'open folder', hint: 'a repo, a worktree or any folder. Enter adds a typed path.', placeholder: '~/code/repo' },
+  new: { label: 'new', hint: 'git init ~/.synapse/workspaces/<name> with an empty first commit', placeholder: 'name' },
+};
+let onCloneLine = null;
+synapse.project.onCloneProgress((line) => onCloneLine?.(line));
+function promptProject(mode = 'clone') {
+  modal('add workspace', (body, close) => {
+    const seg = el('div', 'seg');
+    const inp = el('input');
+    const hint = el('div', 'hint');
+    const row = el('div', 'row');
+    const browse = el('button', 'btn', 'choose folder…');
+    const go = el('button', 'btn sig');
+    let busy = false;
+    const set = (m) => {
+      mode = m;
+      for (const b of seg.children) b.classList.toggle('on', b.dataset.m === m);
+      inp.value = ''; inp.placeholder = WS_MODES[m].placeholder; hint.textContent = WS_MODES[m].hint; hint.classList.remove('err');
+      go.textContent = { clone: 'clone', open: 'add', new: 'create' }[m];
+      browse.hidden = m !== 'open';
+      inp.focus();
+    };
+    for (const m of Object.keys(WS_MODES)) {
+      const b = el('button', '', WS_MODES[m].label); b.dataset.m = m;
+      b.onclick = () => !busy && set(m);
+      seg.appendChild(b);
+    }
+    const done = async (dir) => {
+      onCloneLine = null; close(); await refresh();
+      const wt = worktreeOf(dir); if (wt) M.open.add(wt.project.key);
+      toast(`workspace ${dir.split('/').pop()} added`); newSlot(dir, 'shell');
+    };
+    onCloneLine = (line) => { if (busy) hint.textContent = line; };
+    const submit = async () => {
+      const v = inp.value.trim();
+      if (busy || !v) return;
+      busy = true; go.disabled = inp.disabled = true;
+      hint.classList.remove('err'); if (mode === 'clone') hint.textContent = 'cloning…';
+      try { await done(await (mode === 'clone' ? synapse.project.clone(v) : mode === 'new' ? synapse.project.create(v) : synapse.project.add(v))); }
+      catch (e) { busy = false; go.disabled = inp.disabled = false; hint.textContent = e.message; hint.classList.add('err'); inp.focus(); }
+    };
+    browse.onclick = async () => {
+      try { const dir = await synapse.project.pick(); if (dir) await done(dir); } catch (e) { hint.textContent = e.message; hint.classList.add('err'); }
+    };
+    go.onclick = submit;
+    inp.onkeydown = (e) => {
+      if (e.key === 'Enter') submit();
+      if (e.key === 'Escape' && !busy) { onCloneLine = null; close(); }
+      if (e.key === 'Tab' && !busy) { e.preventDefault(); const ks = Object.keys(WS_MODES); set(ks[(ks.indexOf(mode) + (e.shiftKey ? ks.length - 1 : 1)) % ks.length]); }
+    };
+    row.append(browse, go);
+    body.append(seg, inp, hint, row);
+    set(mode);
   });
 }
 
@@ -508,5 +561,11 @@ synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { 
     render();
   }
   if (flags.shot === 'fan') setTimeout(openFan, 800);
+  if (flags.shot.startsWith('addws')) setTimeout(() => {
+    // addws:<mode>[:<value>] opens the dialog, and with a value submits it (used to try the flows headless)
+    const [, m = 'clone', ...v] = flags.shot.split(':');
+    promptProject(m);
+    if (v.length) { const inp = $('#modal-body input'); inp.value = v.join(':'); inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); }
+  }, 800);
   if (flags.shot === 'picker') setTimeout(() => pickProfile(here?.path), 800);
 })();

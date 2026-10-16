@@ -17,7 +17,13 @@ contextBridge.exposeInMainWorld('synapse', {
     onExit: (fn) => on('pty:exit', fn),
   },
   fork: { spawn: (a) => call('fork:spawn', a), onRequest: (fn) => on('fork:request', fn) },
-  project: { add: (p) => call('project:add', { path: p }) },
+  project: {
+    add: (p) => call('project:add', { path: p }),
+    create: (name) => call('project:create', { name }),
+    clone: (url, name) => call('project:clone', { url, name }),
+    pick: () => call('project:pick'),
+    onCloneProgress: (fn) => on('clone:progress', fn),
+  },
   worktree: { add: (a) => call('worktree:add', a), remove: (a) => call('worktree:remove', a) },
   cli: (args, as) => call('synapse', { args, as }),
 });

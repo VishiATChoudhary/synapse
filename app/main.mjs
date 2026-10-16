@@ -1,11 +1,11 @@
 // Synapse desktop: Electron main process.
 // Owns the PTYs, reads Synapse state from ~/.synapse through lib.mjs, watches fork requests
 // filed by the prompt hook, and pushes everything to the renderer over IPC.
-import { app, BrowserWindow, ipcMain, nativeTheme, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
 import { FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked } from '../lib.mjs';
 
@@ -56,12 +56,62 @@ function projects() {
   return [...groups.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
 
+// Repos Synapse makes for you (cloned or created from a name) live here.
+const WS_HOME = path.join(os.homedir(), '.synapse', 'workspaces');
+
 function addWorkspace(p) {
-  let dir = p.replace(/^~/, os.homedir());
-  try { dir = git(dir, ['rev-parse', '--show-toplevel']); } catch { throw new Error(`${p} is not inside a git checkout`); }
+  let dir = path.resolve(p.replace(/^~/, os.homedir()));
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error(`${p} is not a folder`);
+  try { dir = git(dir, ['rev-parse', '--show-toplevel']); } catch {} // a plain folder is fine too, it just cannot have worktrees
   const c = config();
   if (!c.workspaces.includes(dir)) { c.workspaces.push(dir); writeJSON(FILES.app, c); }
   return dir;
+}
+
+const safeName = (n) => {
+  const s = String(n || '').trim().replace(/[^\w.-]+/g, '-').replace(/^[-.]+|-+$/g, '');
+  if (!s) throw new Error('give it a name');
+  return s;
+};
+
+// A brand new repo from just a name: ~/.synapse/workspaces/<name>, with one empty commit so worktrees work.
+function createWorkspace(name) {
+  const dir = path.join(WS_HOME, safeName(name));
+  if (fs.existsSync(dir)) throw new Error(`${dir.replace(os.homedir(), '~')} already exists`);
+  fs.mkdirSync(dir, { recursive: true });
+  git(dir, ['init', '-q']);
+  const commit = ['commit', '-q', '--allow-empty', '-m', 'Initial commit'];
+  try { git(dir, commit); } catch { git(dir, ['-c', 'user.name=Synapse', '-c', 'user.email=synapse@localhost', ...commit]); } // no git identity set
+  return addWorkspace(dir);
+}
+
+// git clone can take a while, so it runs async and streams its progress lines to the renderer.
+function cloneWorkspace(url, name) {
+  url = String(url || '').trim();
+  if (!url) throw new Error('paste a repo url');
+  const dir = path.join(WS_HOME, safeName(name || url.replace(/\/+$/, '').split(/[/:]/).pop().replace(/\.git$/, '')));
+  if (fs.existsSync(dir)) throw new Error(`${dir.replace(os.homedir(), '~')} already exists`);
+  fs.mkdirSync(WS_HOME, { recursive: true });
+  return new Promise((resolve, reject) => {
+    const p = spawn('git', ['clone', '--progress', url, dir], { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    let err = '';
+    p.stderr.on('data', (d) => {
+      err += d;
+      const line = String(d).split(/[\r\n]+/).filter(Boolean).pop();
+      if (line) win?.webContents.send('clone:progress', line.trim());
+    });
+    p.on('error', reject);
+    p.on('close', (code) => {
+      if (code === 0) return resolve(addWorkspace(dir));
+      fs.rmSync(dir, { recursive: true, force: true });
+      reject(new Error(err.trim().split('\n').filter((l) => /fatal|error/i.test(l)).pop() || `git clone exited ${code}`));
+    });
+  });
+}
+
+async function pickFolder() {
+  const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], buttonLabel: 'Add workspace' });
+  return r.canceled ? null : addWorkspace(r.filePaths[0]);
 }
 
 function addWorktree(repo, name, base) {
@@ -216,6 +266,9 @@ handle('pty:resize', ({ id, cols, rows }) => { try { ptys.get(id)?.p.resize(cols
 handle('pty:kill', ({ id }) => { ptys.get(id)?.p.kill(); });
 handle('fork:spawn', (a) => spawnFork(a));
 handle('project:add', ({ path: p }) => addWorkspace(p));
+handle('project:create', ({ name }) => createWorkspace(name));
+handle('project:clone', ({ url, name }) => cloneWorkspace(url, name));
+handle('project:pick', () => pickFolder());
 handle('worktree:add', ({ repo, name, base }) => addWorktree(repo, name, base));
 handle('worktree:remove', ({ repo, dir, force }) => removeWorktree(repo, dir, force));
 handle('synapse', ({ args, as }) => execFileSync(process.execPath.includes('Electron') ? 'node' : process.execPath, [path.join(ROOT, '..', 'cli.mjs'), ...args], { encoding: 'utf8', env: { ...process.env, SYNAPSE_AGENT: as || '' }, timeout: 8000 }));
