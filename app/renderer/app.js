@@ -167,10 +167,11 @@ function renderTree() {
   const cur = focusedSlot();
   let n = 0;
   for (const p of M.projects) {
-    const box = el('div', 'proj');
+    const box = el('div', 'proj' + (M.open.has(p.key) ? '' : ' closed'));
     const head = el('div', 'proj-head');
     const sw = el('span', 'swatch'); sw.style.background = p.color;
-    head.append(sw, el('span', 'proj-name', p.label));
+    const live = M.slots.filter((s) => p.worktrees.some((w) => w.path === s.worktree)).length;
+    head.append(sw, el('span', 'proj-name', p.label), el('span', 'proj-count', String(live || p.worktrees.length)));
     const add = el('button', 'proj-add', '+'); add.title = 'new worktree';
     add.onclick = (e) => { e.stopPropagation(); promptWorktree(p); };
     head.appendChild(add);
@@ -182,6 +183,7 @@ function renderTree() {
         const wh = el('div', 'wt-head' + (cur?.worktree === w.path ? ' cur' : ''));
         const wn = el('span', 'wt-name', w.name); wn.title = `${w.path}\n${w.branch}`;
         wh.append(el('span', '', '⎇'), wn);
+        if (w.branch && w.branch !== w.name) wn.textContent = `${w.name} · ${w.branch}`;
         const wa = el('button', 'wt-add', '+'); wa.title = 'new session here';
         wa.onclick = (e) => { e.stopPropagation(); pickProfile(w.path); };
         wh.appendChild(wa);
@@ -223,7 +225,7 @@ function renderDeck() {
     c.onclick = () => { focusPath(s, id); render(); };
     deck.appendChild(c);
   });
-  if (s.sessions.length > 1) deck.appendChild(el('span', 'deck-tag', `${s.sessions.length} in tree · hover to fan out · ⌘E`));
+  if (s.sessions.length > 1) deck.appendChild(el('span', 'deck-tag', `⑂ ${s.sessions.length} in tree · hover ⌘E`));
 }
 
 function renderStage() {
@@ -254,12 +256,12 @@ function renderBar() {
 
 // ---------------------------------------------------------------- fan-out
 
-const CARD_W_PAD = 36, CARD_H = 56, GAP_X = 28, GAP_Y = 48;
+const CARD_W_PAD = 60, CARD_H = 56, GAP_X = 32, GAP_Y = 64;
 let fanOpen = false;
 
 function measure(label) {
   const c = document.createElement('canvas').getContext('2d');
-  c.font = '500 13px Geist, system-ui';
+  c.font = '13px Geist, system-ui';
   return Math.min(300, Math.ceil(c.measureText(label).width)) + CARD_W_PAD;
 }
 
@@ -298,7 +300,9 @@ function openFan() {
   fan.hidden = false;
   inner.replaceChildren();
   const { nodes, totalW, totalH } = layoutTree(s);
-  const ox = Math.max(24, (inner.clientWidth - totalW) / 2), oy = Math.max(40, (inner.clientHeight - totalH) / 2 - 20);
+  const ox = Math.max(32, (inner.clientWidth - totalW) / 2), oy = Math.max(96, (inner.clientHeight - totalH) / 2);
+  const wt = worktreeOf(s.worktree);
+  $('#fan-meta').textContent = `${wt ? `${wt.project.label} / ${wt.worktree.name}` : ''}  ·  ${s.sessions.length} sessions  ·  depth ${s.path.length}`;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   inner.appendChild(svg);
   const deckRects = new Map([...$('#deck').querySelectorAll('.card')].map((c, i) => [s.path[i], c.getBoundingClientRect()]));
@@ -310,6 +314,8 @@ function openFan() {
     c.style.left = `${ox + n.left}px`; c.style.top = `${oy + n.top}px`; c.style.width = `${n.w}px`;
     const q = el('div', 'fq'); q.append(el('span', 'dot ' + statusOf(x)), el('span', '', n.label));
     c.append(q, el('div', 'fm', x.parent == null ? `${x.kind} · root` : `${x.kind} · ${statusOf(x)}`));
+    if (x.parent == null) c.appendChild(el('span', 'tab', 'parent'));
+    else if (x.id === s.path[s.path.length - 1]) c.appendChild(el('span', 'tab', 'on top'));
     const fx = el('button', 'fx', '×'); fx.title = 'close this branch';
     fx.onclick = (e) => { e.stopPropagation(); if (x.parent == null) return toast('close the root with ⌘W'); closeSession(s, x.id); closeFan(); openFan(); };
     c.appendChild(fx);
@@ -333,13 +339,20 @@ function openFan() {
     const p = nodes.find((m) => m.x.id === n.x.parent);
     const x1 = ox + p.left + p.w / 2, y1 = oy + p.top + CARD_H, x2 = ox + n.left + n.w / 2, y2 = oy + n.top;
     const mid = y1 + (y2 - y1) / 2;
+    const onPath = s.path.includes(n.x.id) && s.path.includes(p.x.id);
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', `M${x1},${y1} C${x1},${mid} ${x2},${mid} ${x2},${y2}`);
-    if (s.path.includes(n.x.id) && s.path.includes(p.x.id)) path.classList.add('on-path');
+    path.setAttribute('d', `M${x1},${y1} V${mid} H${x2} V${y2 - (n.x.parent != null && x2 !== x1 ? 0 : 0)}`);
+    if (onPath) path.classList.add('on-path');
     svg.appendChild(path);
+    if (onPath) {
+      const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      r.setAttribute('x', x2 - 4); r.setAttribute('y', y2 - 4); r.setAttribute('width', 8); r.setAttribute('height', 8); r.classList.add('end');
+      svg.appendChild(r);
+    }
   }
 }
-function closeFan() { fanOpen = false; $('#fan').hidden = true; }
+function closeFan() { fanOpen = false; $('#fan').hidden = true; top(focusedSlot())?.term.focus(); }
+$('#fan-esc').onclick = closeFan;
 $('#fan').addEventListener('click', (e) => { if (e.target === $('#fan') || e.target === $('#fan-inner')) closeFan(); });
 
 // hover the deck for 300 ms to fan out

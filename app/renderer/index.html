@@ -12,7 +12,7 @@
   <div class="drag"></div>
   <div class="side-head">
     <span class="wordmark">synapse</span>
-    <button class="icon" id="theme" title="light / dark">☾</button>
+    <button class="icon" id="theme" title="light / dark  ⌘,">◐</button>
   </div>
   <nav class="tree" id="tree"></nav>
   <div class="side-foot">
@@ -32,8 +32,8 @@
   </header>
   <section class="stage" id="stage">
     <div class="empty" id="empty">
-      <div class="empty-title">No session here yet</div>
-      <div class="empty-sub">⌘T shell · ⌘N agent · ⇧⌘N worktree</div>
+      <div class="empty-title">Nothing<br>running</div>
+      <div class="empty-sub"><kbd>⌘T</kbd> shell &nbsp; <kbd>⌘N</kbd> agent &nbsp; <kbd>⇧⌘N</kbd> worktree</div>
     </div>
   </section>
   <footer class="bar" id="bar">
@@ -44,7 +44,8 @@
 
 <div class="fan" id="fan" hidden>
   <div class="fan-inner" id="fan-inner"></div>
-  <div class="fan-hint">click a card to bring it to front · ⌫ closes a branch · esc</div>
+  <div class="fan-title"><b>Fork tree</b><span id="fan-meta"></span><span class="esc" id="fan-esc">esc</span></div>
+  <div class="fan-hint"><span>click a card: bring to front</span><span>⌫ close branch</span><span>⌘E / esc close</span></div>
 </div>
 
 <div class="modal" id="modal" hidden>
@@ -55,6 +56,7 @@
 </div>
 
 <div class="toast" id="toast" hidden></div>
+<div class="grain" aria-hidden="true"></div>
 
 <script type="module" src="app.js"></script>
 </body>
