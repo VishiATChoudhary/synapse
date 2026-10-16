@@ -616,7 +616,7 @@ function toggleTheme() {
 
 $('#theme').onclick = toggleTheme;
 $('#btn-fork').onclick = promptFork;
-$('#add-project').onclick = promptProject;
+$('#add-project').onclick = () => promptProject();
 window.addEventListener('resize', () => { const t = top(focusedSlot()); if (t) t.fit.fit(); });
 
 // ---------------------------------------------------------------- state
