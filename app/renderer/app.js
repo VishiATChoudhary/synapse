@@ -74,6 +74,9 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
   // bytes (⌘⌫ clears the line, ⌘← / ⌘→ jump to its ends); everything else goes to the pty as is
   term.attachCustomKeyEventHandler((e) => {
     if (e.type === 'keydown' && agentKey(e)) return false; // ⌃1-9 launch agents, never reach the pty
+    // ⇧Enter is a newline in agent prompts: Claude Code and Codex read the CSI u form their own terminal
+    // setup installs in iTerm2 and VS Code. A shell gets a plain Enter; the sequence would only echo there.
+    if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey && kind !== 'shell') { e.preventDefault(); term.input('\x1b[13;2u'); return false; }
     if (!e.metaKey || e.type !== 'keydown') return true;
     if (APP_KEYS.has(keyName(e))) return false;
     const bytes = !e.shiftKey && !e.altKey && !e.ctrlKey && META_EDIT[e.key];

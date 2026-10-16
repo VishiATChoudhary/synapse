@@ -12,7 +12,7 @@ const root = path.resolve(__dirname, '../..');
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-keys-'));
 const state = path.join(fixture, 'state');
 fs.mkdirSync(state);
-fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], profiles: { shell: { command: 'cat', label: 'Shell' } } }));
+fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], profiles: { shell: { command: 'cat', label: 'Shell' }, claude: { command: 'cat', label: 'Claude Code' } } }));
 process.env.SYNAPSE_HOME = state;
 process.env.SYNAPSE_DEMO = '1';
 process.env.SHELL = '/bin/sh';
@@ -57,7 +57,15 @@ async function press(keyCode, modifiers = []) {
     metaLeft: await press('Left', ['meta']),
     metaRight: await press('Right', ['meta']),
     shiftMetaBackspace: await press('Backspace', ['meta', 'shift']),
+    shellShiftEnter: await press('Enter', ['shift']),
   };
+  // ⇧Enter in an agent tab is the CSI u form Claude Code and Codex read as a newline; a shell gets plain Enter
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: '1', modifiers: ['control'] });
+  win.webContents.sendInputEvent({ type: 'keyUp', keyCode: '1', modifiers: ['control'] });
+  await until(() => js(`document.querySelectorAll('.term').length === 2 && document.querySelector('.term.visible:last-child')?.contains(document.activeElement)`), 'agent session focused');
+  await sleep(200);
+  got.agentShiftEnter = await press('Enter', ['shift']);
+  got.agentEnter = await press('Enter');
   console.log('bytes', JSON.stringify(got));
   assert.equal(got.enter, '\r', 'Enter sends CR');
   assert.equal(got.backspace, '\x7f', 'Backspace sends DEL');
@@ -66,6 +74,9 @@ async function press(keyCode, modifiers = []) {
   assert.equal(got.metaLeft, '\x01', '⌘← goes to the start of the line (^A)');
   assert.equal(got.metaRight, '\x05', '⌘→ goes to the end of the line (^E)');
   assert.equal(got.shiftMetaBackspace, '', '⇧⌘⌫ is the app\'s pop shortcut, nothing reaches the pty');
+  assert.equal(got.shellShiftEnter, '\r', '⇧Enter in a shell is a plain Enter');
+  assert.equal(got.agentShiftEnter, '\x1b[13;2u', '⇧Enter in an agent tab is a newline (CSI u)');
+  assert.equal(got.agentEnter, '\r', 'Enter in an agent tab still submits');
   assert.equal(await js(`document.querySelector('#toast').textContent`), 'nothing to pop', '⇧⌘⌫ pops');
   assert.deepEqual(errors, []);
   console.log('PASS terminal keys');
