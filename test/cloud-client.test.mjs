@@ -151,8 +151,8 @@ test('removing someone from your trusted people ends what you shared with them',
   const bobMachine = readJSON(path.join(HOME_B, 'remote.json'), {}).machineId;
   const aliceMachine = readJSON(path.join(HOME_A, 'remote.json'), {}).machineId;
   await cliJSON(HOME_B, ['untrust', ALICE]);
-  // bob's side drops it at once; alice's canvas syncs it within a few seconds
-  assert.ok(!readJSON(path.join(HOME_B, 'remote.json'), {}).peers[aliceMachine]);
+  // both sides drop it on their next sync (untrust syncs right away unless the canvas is already syncing)
+  await until(() => !readJSON(path.join(HOME_B, 'remote.json'), {}).peers[aliceMachine]);
   assert.ok(!readJSON(path.join(HOME_B, 'edges.json'), []).some((e) => e.to.startsWith(`r-${aliceMachine}-`)));
   await until(() => !readJSON(path.join(HOME_A, 'remote.json'), {}).peers[bobMachine]);
   assert.ok(!readJSON(path.join(HOME_A, 'edges.json'), []).some((e) => e.from.startsWith(`r-${bobMachine}-`)));
