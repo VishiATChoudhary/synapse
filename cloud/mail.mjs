@@ -4,6 +4,7 @@ import tls from 'node:tls';
 import net from 'node:net';
 import crypto from 'node:crypto';
 
+const LOGO = `${process.env.PUBLIC_URL || 'https://app.heysynapse.dev'}/icon.png`;
 const FROM = process.env.MAIL_FROM || 'Synapse <onboarding@resend.dev>';
 export const devOutbox = [];
 export const mailConfigured = () => !!(process.env.RESEND_API_KEY || process.env.SMTP_URL || process.env.CLOUD_DEV_MAIL);
@@ -89,7 +90,7 @@ function smtp(url, { to, subject, text, html }) {
 // --- the emails themselves: short, plain, with the link on its own line
 const wrap = (title, body, link, cta) => `<!doctype html><html><body style="margin:0;background:#F4F1EA;font:15px/1.55 -apple-system,Helvetica,Arial,sans-serif;color:#141414">
 <div style="max-width:520px;margin:0 auto;padding:40px 28px">
-<div style="font:600 13px ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase">synapse</div>
+<div style="font:600 13px ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase"><img src="${LOGO}" width="28" height="28" alt="" style="vertical-align:middle;margin-right:9px;border-radius:7px">synapse</div>
 <h1 style="font-size:24px;line-height:1.2;margin:28px 0 14px">${title}</h1>
 <p style="margin:0 0 22px">${body}</p>
 ${link ? `<p style="margin:0 0 26px"><a href="${link}" style="display:inline-block;background:#141414;color:#F4F1EA;text-decoration:none;padding:11px 18px;font:600 12px ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase">${cta}</a></p>

@@ -30,6 +30,7 @@ a { color: inherit; text-underline-offset: 3px; }
 .top > * { display: flex; align-items: center; padding: 0 18px; border-right: 1px solid var(--rule); text-decoration: none; }
 .top .brand { gap: 10px; }
 .top .brand b { font: 500 26px/1 var(--display); letter-spacing: .02em; text-transform: none; }
+.top .brand .logo { width: 26px; height: 26px; border-radius: 7px; }
 .top .sp { flex: 1; border-right: 0; }
 .top a.nav:hover { background: var(--wash); }
 .top .nav.cta { background: var(--ink); color: var(--paper); border-right: 0; }
@@ -240,9 +241,9 @@ function layout(ctx, title, body, { bare = false } = {}) {
   const u = ctx.user;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark"><title>${esc(title)} · Synapse</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2316130F'/%3E%3Crect x='5' y='17' width='9' height='9' fill='%23F1EFE9'/%3E%3Crect x='18' y='6' width='9' height='9' fill='%23FF4400'/%3E%3Cpath d='M14 19 18 14' stroke='%23F1EFE9' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/app.css"></head><body>
-<header class="top"><a class="brand" href="${u ? '/welcome' : 'https://heysynapse.vercel.app'}"><b>synapse</b></a><span class="sp"></span>
+<header class="top"><a class="brand" href="${u ? '/welcome' : 'https://heysynapse.dev'}"><img class="logo" src="/icon.svg" alt=""><b>synapse</b></a><span class="sp"></span>
 ${u ? `<a class="nav hide-s" href="/welcome">get started</a><a class="nav hide-s" href="/download">download</a><a class="nav me" href="/settings">${avatar(u)}<span class="hide-s">@${esc(u.handle)}</span></a><a class="nav" href="#" data-act="/v1/auth/logout" data-go="/login">sign out</a>`
     : `<a class="nav hide-s" href="/download">download</a><a class="nav" href="/login">sign in</a><a class="nav cta" href="/signup">sign up</a>`}
 </header>

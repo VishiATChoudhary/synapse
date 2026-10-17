@@ -673,6 +673,11 @@ export const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'content-type': 'font/woff2', 'cache-control': 'public, max-age=31536000, immutable' });
       return fs.createReadStream(file).pipe(res);
     }
+    const icon = { '/icon.svg': ['icon.svg', 'image/svg+xml'], '/icon.png': ['icon.png', 'image/png'], '/apple-touch-icon.png': ['apple-touch-icon.png', 'image/png'], '/favicon.ico': ['icon.png', 'image/png'] }[p];
+    if (icon) {
+      res.writeHead(200, { 'content-type': icon[1], 'cache-control': 'public, max-age=86400' });
+      return fs.createReadStream(path.join(ROOT, 'public', icon[0])).pipe(res);
+    }
     if (p === '/app.css') { res.writeHead(200, { 'content-type': 'text/css', 'cache-control': 'public, max-age=300' }); return res.end(pages.CSS); }
     if (p === '/app.js') { res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'public, max-age=300' }); return res.end(pages.JS); }
 
