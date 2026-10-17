@@ -1811,7 +1811,7 @@ async function drawPeople(box) {
   box.replaceChildren();
   if (!ACC.user) {
     const row = el('div', 'opt set'), b = el('button', 'btn', 'sign in');
-    row.append(el('span', 'k', 'not signed in'), el('span', 'c', 'sign in to add trusted people: your agents can then ask them for context'), b);
+    row.append(el('span', 'k', 'not signed in'), el('span', 'c', 'sign in to add trusted people: they can ask your agents for context, and you decide on each request'), b);
     b.onclick = () => { $('#modal').hidden = true; showLogin(); };
     box.append(row);
     return;

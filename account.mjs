@@ -91,7 +91,9 @@ export async function untrust(id) {
   const q = String(id || '').replace(/^@/, '').toLowerCase();
   const hit = (await trusted()).find((p) => p.id === id || [p.handle, p.email, p.name].some((v) => v && v.toLowerCase() === q));
   if (!hit) throw new Error(`no trusted person matches "${id}"`);
-  return api('DELETE', `/v1/trusted/${encodeURIComponent(hit.id)}`);
+  const out = await api('DELETE', `/v1/trusted/${encodeURIComponent(hit.id)}`);
+  await remote.sync().catch(() => {}); // the cloud revoked what was shared between you: drop it now, not on the next sync
+  return out;
 }
 
 export async function requests() {

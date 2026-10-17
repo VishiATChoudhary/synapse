@@ -87,6 +87,9 @@ test('a request needs the person in your trusted list', { skip }, async () => {
   assert.equal(person.name, 'bob');
   const people = await cliJSON(HOME_A, ['people']);
   assert.equal(people.length, 1);
+  // and bob has to trust alice back before she can ask him
+  await assert.rejects(cli(HOME_A, ['request', BOB, '--target', 'ml eval'], { SYNAPSE_AGENT: 'demo-web-e2e' }), /has not added you to their trusted people/);
+  await cliJSON(HOME_B, ['trust', ALICE]);
 });
 
 test('alice\'s agent asks, bob accepts, and his agent\'s context reaches hers', { skip }, async () => {
@@ -124,6 +127,13 @@ test('alice\'s agent asks, bob accepts, and his agent\'s context reaches hers', 
   const outB = await inHome(HOME_B, 'return account.externalLinks();');
   assert.equal(outB[0].direction, 'out');
   assert.equal(outB[0].local.name, 'ml-eval');
+
+  // each side sees only the agents in the share, not everything the other machine runs
+  const aliceMachine = readJSON(path.join(HOME_A, 'remote.json'), {}).machineId;
+  assert.ok((await cliJSON(HOME_B, ['agents'])).length > 2, 'bob runs several agents');
+  await until(() => readJSON(path.join(HOME_B, 'remote', 'state.json'), {})[aliceMachine]?.agents?.length);
+  assert.deepEqual(readJSON(path.join(HOME_A, 'remote', 'state.json'), {})[bobMachine].agents.map((a) => a.id), ['demo-ml-eval']);
+  assert.deepEqual(readJSON(path.join(HOME_B, 'remote', 'state.json'), {})[aliceMachine].agents.map((a) => a.id), ['demo-web-e2e']);
 });
 
 test('a denied request reaches the asker and shares nothing', { skip }, async () => {
@@ -135,6 +145,21 @@ test('a denied request reaches the asker and shares nothing', { skip }, async ()
   assert.equal(outgoing.find((r) => r.id === sent.id).status, 'denied');
   await assert.rejects(cli(HOME_A, ['accept', sent.id]), /already denied/);
   assert.ok(!readJSON(path.join(HOME_A, 'edges.json'), []).some((e) => !e.mirrored && e.to.endsWith('-demo-docs')));
+});
+
+test('removing someone from your trusted people ends what you shared with them', { skip }, async () => {
+  const bobMachine = readJSON(path.join(HOME_B, 'remote.json'), {}).machineId;
+  const aliceMachine = readJSON(path.join(HOME_A, 'remote.json'), {}).machineId;
+  await cliJSON(HOME_B, ['untrust', ALICE]);
+  // bob's side drops it at once; alice's canvas syncs it within a few seconds
+  assert.ok(!readJSON(path.join(HOME_B, 'remote.json'), {}).peers[aliceMachine]);
+  assert.ok(!readJSON(path.join(HOME_B, 'edges.json'), []).some((e) => e.to.startsWith(`r-${aliceMachine}-`)));
+  await until(() => !readJSON(path.join(HOME_A, 'remote.json'), {}).peers[bobMachine]);
+  assert.ok(!readJSON(path.join(HOME_A, 'edges.json'), []).some((e) => e.from.startsWith(`r-${bobMachine}-`)));
+  assert.ok(!fs.existsSync(path.join(HOME_A, 'remote', bobMachine)));
+  await assert.rejects(cli(HOME_A, ['read', 'ml-eval@bob'], { SYNAPSE_AGENT: 'demo-web-e2e' }));
+  const { outgoing } = await cliJSON(HOME_A, ['requests']);
+  assert.equal(outgoing.find((r) => r.id === requestId).status, 'revoked');
 });
 
 test('signed out, the agent tools say how to sign in', { skip }, async () => {

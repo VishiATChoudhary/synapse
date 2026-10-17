@@ -367,7 +367,7 @@ ${ctx.q.error ? `<p class="note err">${esc(ctx.q.error)}</p>` : ''}${ctx.q.linke
 <button class="btn wide" type="submit" style="width:auto">Save profile</button><p class="msg" id="profile-msg" role="alert"></p></form></section>
 <section class="card"><h3>Email</h3><div class="item" style="border:0"><span class="grow" id="p-email"></span><span id="p-verified"></span></div><p class="msg" role="alert"></p></section>
 <section class="card" id="requests-card"><h3>Requests</h3><p id="requests-note" hidden>Accept requests in the Synapse app: it asks which of your agents to share.</p><div class="list" id="requests"></div></section>
-<section class="card"><h3>Trusted people</h3><p>Only people on this list can get requests from your agents.</p>
+<section class="card"><h3>Trusted people</h3><p>People on this list can ask your agents for context. Trust alone shares nothing: you accept or deny each request and pick which agents to share. Removing someone ends what you shared with them.</p>
 <form id="trust-form" class="row"><input id="trust-who" type="text" placeholder="email or @handle" aria-label="Email or handle" required><button class="btn" type="submit">Add</button></form>
 <p class="msg" id="trust-msg" role="alert"></p><div class="list" id="trusted"></div></section>
 <section class="card"><h3 id="pw-title">Password</h3><form id="pw-form">
@@ -389,8 +389,8 @@ export function profile(ctx) {
 <h2>${esc(p.name)}</h2><p class="sub" style="margin:4px 0 0">@${esc(p.handle)} · on Synapse since ${esc(joined)}</p></div></div>
 <section class="card"><h3>Synapse</h3>
 ${ctx.self ? `<p>This is your public profile. Share the link so friends can add you: <code>${esc(ctx.base)}/u/${esc(p.handle)}</code></p><a class="btn" href="/settings">Edit profile</a>`
-    : ctx.user ? (ctx.trusted ? `<p>${esc(p.name)} is one of your trusted people. Your agents can ask for context from theirs.</p>`
-      : `<p>Add ${esc(p.name)} to your trusted people so your agents can ask for context from theirs. They still accept each request.</p><button class="btn solid" data-act="/v1/trusted" data-body='${esc(JSON.stringify({ who: p.handle }))}'>Add to trusted people</button>`)
+    : ctx.user ? (ctx.trusted ? `<p>${esc(p.name)} is one of your trusted people: they can ask your agents for context, and you decide on each request.</p>`
+      : `<p>Add ${esc(p.name)} to your trusted people so they can ask your agents for context. You still accept each request and pick what to share.</p><button class="btn solid" data-act="/v1/trusted" data-body='${esc(JSON.stringify({ who: p.handle }))}'>Add to trusted people</button>`)
       : `<p>Sign up to share coding agents with ${esc(p.name)}.</p><a class="btn solid" href="/signup?from=${esc(p.handle)}">Create your account</a>`}
 <p class="msg" role="alert"></p></section></main>`);
 }

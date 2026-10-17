@@ -63,17 +63,18 @@ Base: `https://app.heysynapse.dev` (override with env `SYNAPSE_CLOUD`).
 ### Trusted people
 - `GET /v1/trusted` → `{trusted:[{id, handle, name, avatar, email?, pending:boolean, trustsYou:boolean}]}` (`pending` = invited by email, no account yet).
 - `POST /v1/trusted {who}` → `who` is an email, `@handle` or handle → `{person}`. Unknown email: stored as pending + invite email sent; becomes real on their signup.
-- `DELETE /v1/trusted/:id` → `{ok:true}`.
+- `DELETE /v1/trusted/:id` → `{ok:true}`. Ends every accepted request between the two people: status `revoked`, and both machines get `{type:'revoked', id, machine:<the other machine>}` and drop the pairing, its links and the context received. Deleting an account does the same.
 
 ### Synapse requests
 - `POST /v1/requests {to, machineId, agent:{id, name, kind, project}, target?, note?}`
-  `to` must be in the sender's trusted list (handle, @handle, email or name). `target` is a free-text hint for which of their agents (e.g. "api agent").
+  `to` must be in the sender's trusted list (handle, @handle, email or name), and must trust the sender back (403 otherwise): trust lets someone ask, it never grants access by itself. `target` is a free-text hint for which of their agents (e.g. "api agent").
   → `{request}`. Duplicate pending (same agent → same person) returns the existing one.
 - `GET /v1/requests` → `{incoming:[request], outgoing:[request]}` (pending + last 30 days).
-  `request = {id, status:'pending'|'accepted'|'denied'|'cancelled', from:{handle,name,avatar}, to:{handle,name,avatar}, agent:{id,name,kind,project}, target, note, createdAt, decidedAt, fromMachine, toMachine, shared:[{id,name,kind,project}]}`
+  `request = {id, status:'pending'|'accepted'|'denied'|'cancelled'|'revoked', from:{handle,name,avatar}, to:{handle,name,avatar}, agent:{id,name,kind,project}, target, note, createdAt, decidedAt, fromMachine, toMachine, shared:[{id,name,kind,project}]}`
 - `POST /v1/requests/:id/accept {machineId, agents:[{id,name,kind,project}]}` (recipient) → `{request, pair, peer:{machineId, name}}`.
-  Server delivers to the requester's machine mailbox: `{type:'paired', from: <accepter machine>, name, pair}` and `{type:'request', id, status:'accepted', shared:[...]}`.
+  Refused (409) if the two no longer trust each other. Server delivers to the requester's machine mailbox: `{type:'paired', via:'request', from: <accepter machine>, name, pair}` and `{type:'request', id, status:'accepted', shared:[...]}`.
   The accepter's client then adds the peer (`remote.json` peers) and creates share edges `<local agent> → remoteId(fromMachine, agent.id)`; the existing sync pushes context.
+- Visibility: machines paired through a request only tell each other about the agents in the share (the shared agents and the asking agent), never the rest of the machine. `/v1/send` between them is refused once trust ends, and `request`/`revoked` items can only come from the cloud.
 - `POST /v1/requests/:id/deny` (recipient) → `{request}`; requester mailbox gets `{type:'request', id, status:'denied'}`.
 - `POST /v1/requests/:id/cancel` (sender) → `{request}`.
 

@@ -352,6 +352,51 @@ test('trusted people, synapse request, accept delivers the pair; deny and cancel
   assert.deepEqual(statuses, ['accepted', 'cancelled', 'denied']);
 });
 
+test('only someone who trusts you can ask you; ending trust revokes what was shared', async () => {
+  const ava = await signup('ava@example.com', 'Ava');
+  const ben = await signup('ben@example.com', 'Ben');
+  const avaM = await machine(ava.json.token), benM = await machine(ben.json.token);
+  const agent = { id: 'ava-1', name: 'api-claude', kind: 'claude', project: 'api' };
+  const ask = (id = agent.id) => call('/v1/requests', { token: ava.json.token, body: { to: 'ben', machineId: avaM.machineId, agent: { ...agent, id } } });
+
+  // Ava trusting Ben is not enough: Ben has to trust Ava before she can knock
+  await call('/v1/trusted', { token: ava.json.token, body: { who: '@ben' } });
+  const oneWay = await ask();
+  assert.equal(oneWay.status, 403);
+  assert.match(oneWay.json.error, /Ben has not added you to their trusted people/);
+  const benTrust = (await call('/v1/trusted', { token: ben.json.token, body: { who: '@ava' } })).json.person;
+  const req = (await ask()).json.request;
+  assert.equal(req.status, 'pending');
+
+  // Ben stops trusting Ava before answering: accepting is refused
+  await call(`/v1/trusted/${benTrust.id}`, { token: ben.json.token, method: 'DELETE' });
+  assert.equal((await call(`/v1/requests/${req.id}/accept`, { token: ben.json.token, body: { machineId: benM.machineId, agents: [{ id: 'ben-1', name: 'web' }] } })).status, 409);
+  await call(`/v1/requests/${req.id}/deny`, { token: ben.json.token, body: {} });
+
+  // trust again, ask, accept: the machines pair
+  const again = (await call('/v1/trusted', { token: ben.json.token, body: { who: '@ava' } })).json.person;
+  const r2 = (await ask('ava-2')).json.request;
+  const acc = await call(`/v1/requests/${r2.id}/accept`, { token: ben.json.token, body: { machineId: benM.machineId, agents: [{ id: 'ben-1', name: 'web' }] } });
+  assert.equal(acc.status, 200);
+  await call('/v1/poll', { token: avaM.token, body: {} });
+  const send = (from, to, items) => call('/v1/send', { token: from.token, body: { to: to.machineId, pair: acc.json.pair, items } });
+  assert.equal((await send(benM, avaM, [{ type: 'context', agent: 'ben-1', messages: [] }])).status, 200);
+  // a friend cannot forge what only the cloud sends
+  await send(benM, avaM, [{ type: 'revoked', id: r2.id, machine: benM.machineId }, { type: 'request', id: r2.id, status: 'denied' }]);
+  assert.deepEqual((await call('/v1/poll', { token: avaM.token, body: {} })).json.items.map((i) => i.type), ['context']);
+
+  // Ben removes Ava: the share is revoked, both machines hear it, and the mailbox refuses them
+  await call(`/v1/trusted/${again.id}`, { token: ben.json.token, method: 'DELETE' });
+  const toAva = (await call('/v1/poll', { token: avaM.token, body: {} })).json.items;
+  const toBen = (await call('/v1/poll', { token: benM.token, body: {} })).json.items;
+  assert.deepEqual(toAva.map((i) => [i.type, i.id, i.machine]), [['revoked', r2.id, benM.machineId]]);
+  assert.deepEqual(toBen.map((i) => [i.type, i.id, i.machine]), [['revoked', r2.id, avaM.machineId]]);
+  assert.equal((await send(benM, avaM, [{ type: 'context', agent: 'ben-1', messages: [] }])).status, 403);
+  assert.equal((await send(avaM, benM, [{ type: 'state', agents: [] }])).status, 403);
+  const statuses = (await call('/v1/requests', { token: ava.json.token })).json.outgoing.map((x) => [x.id, x.status]);
+  assert.deepEqual(statuses.find(([id]) => id === r2.id), [r2.id, 'revoked']);
+});
+
 test('trusting an email without an account invites them; signing up and confirming claims it', async () => {
   const lee = await signup('lee@example.com', 'Lee');
   const p = (await call('/v1/trusted', { token: lee.json.token, body: { who: 'newbie@example.com' } })).json.person;

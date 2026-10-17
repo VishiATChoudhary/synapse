@@ -30,8 +30,9 @@ $S rename-project <project> "<name>"   # rename a project (its frame on the canv
 
 When the user wants context from an agent a colleague or friend is running on their own machine,
 ask them for it with a **synapse request**. It goes to a **trusted person**: someone the user added
-under Settings → trusted people in the Synapse app (or with `trust`). The person accepts or denies
-in their Synapse app; on accept they pick which of their agents to share with you.
+under Settings → trusted people in the Synapse app (or with `trust`), who has added the user back.
+The person accepts or denies in their Synapse app; on accept they pick which of their agents to
+share with you, and you see only those. If either side removes the other, the share ends.
 
 ```bash
 $S people                      # trusted people you can send a request to

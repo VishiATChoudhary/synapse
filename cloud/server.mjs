@@ -53,7 +53,8 @@ export function verify(token, kind) {
   } catch { return null; }
 }
 const pairOf = (a, b) => sign({ k: 'pair', m: [a, b].sort() });
-const pairCovers = (token, a, b) => { const p = verify(token, 'pair'); return !!p && p.m.includes(a) && p.m.includes(b) && a !== b; };
+const CLOUD_ONLY = new Set(['request', 'revoked']);
+const pairCovers =(token, a, b) => { const p = verify(token, 'pair'); return !!p && p.m.includes(a) && p.m.includes(b) && a !== b; };
 
 // passwords: scrypt with a per-user salt
 const SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 64 << 20 };
@@ -196,6 +197,28 @@ function trustedList(userId) {
       ? { id: r.id, handle: r.handle, name: r.name, avatar: r.avatar || null, email: r.email, pending: false,
           trustsYou: !!get('SELECT 1 FROM trusted WHERE user_id = ? AND trusted_user = ?', r.uid, userId) }
       : { id: r.id, handle: null, name: r.invited, avatar: null, email: r.invited, pending: true, trustsYou: false });
+}
+
+const trusts = (userId, otherId) => !!get('SELECT 1 FROM trusted WHERE user_id = ? AND trusted_user = ?', userId, otherId);
+
+// Trust ended between two people: every share made through an accepted request between them stops.
+// Both machines hear it, drop the pairing, and the mailbox refuses anything they still send each other.
+function revokeBetween(a, b) {
+  const rows = all(`SELECT * FROM requests WHERE status = 'accepted' AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))`, a, b, b, a);
+  for (const r of rows) {
+    run("UPDATE requests SET status = 'revoked', decided_at = ? WHERE id = ?", now(), r.id);
+    deliver(r.from_machine, { type: 'revoked', id: r.id, machine: r.to_machine });
+    if (r.to_machine) deliver(r.to_machine, { type: 'revoked', id: r.id, machine: r.from_machine });
+  }
+}
+
+// Machines paired through a request may only talk while their owners trust each other.
+function pairStillTrusted(a, b) {
+  const viaRequest = get(`SELECT 1 FROM requests WHERE status IN ('accepted', 'revoked')
+    AND ((from_machine = ? AND to_machine = ?) OR (from_machine = ? AND to_machine = ?))`, a, b, b, a);
+  if (!viaRequest) return true; // paired with an invite code: not a request share
+  const ua = get('SELECT user_id FROM machines WHERE id = ?', a)?.user_id, ub = get('SELECT user_id FROM machines WHERE id = ?', b)?.user_id;
+  return !!(ua && ub && trusts(ua, ub) && trusts(ub, ua));
 }
 
 function findUserByWho(who) {
@@ -415,6 +438,8 @@ const routes = {
   'DELETE /v1/me': async (req, res, b) => {
     const { user } = must(req);
     if (user.password_hash && !checkPassword(String(b.password || ''), user.password_hash)) fail(401, 'Type your password to delete the account.');
+    const others = all("SELECT DISTINCT CASE WHEN from_user = ? THEN to_user ELSE from_user END AS id FROM requests WHERE status = 'accepted' AND (from_user = ? OR to_user = ?)", user.id, user.id, user.id);
+    for (const o of others) revokeBetween(user.id, o.id);
     run('DELETE FROM users WHERE id = ?', user.id);
     return json(res, 200, { ok: true }, { 'set-cookie': cookie('syn_session', '', 0) });
   },
@@ -457,7 +482,9 @@ const routes = {
   },
   'DELETE /v1/trusted/:id': async (req, res, b, params) => {
     const { user } = must(req);
+    const row = get('SELECT * FROM trusted WHERE id = ? AND user_id = ?', params.id, user.id);
     run('DELETE FROM trusted WHERE id = ? AND user_id = ?', params.id, user.id);
+    if (row?.trusted_user) revokeBetween(user.id, row.trusted_user);
     return json(res, 200, { ok: true });
   },
   'GET /v1/users/:handle': async (req, res, b, params) => {
@@ -481,6 +508,8 @@ const routes = {
     if (!person) fail(403, `"${b.to}" is not in your trusted people. Add them under Settings, then ask again.`);
     if (person.pending) fail(409, `${person.email} has not joined Synapse yet. They got an invite by email.`);
     const to = get('SELECT * FROM users WHERE handle = ?', person.handle);
+    // only people who trust you can ask you: trust is what lets someone knock, never access by itself
+    if (!trusts(to.id, user.id)) fail(403, `${to.name} has not added you to their trusted people yet. Ask them to, then try again.`);
     const dup = get("SELECT * FROM requests WHERE from_user = ? AND to_user = ? AND status = 'pending' AND json_extract(agent, '$.id') = ?", user.id, to.id, agent.id);
     if (dup) return json(res, 200, { request: requestJSON(dup) });
     const id = `r_${rid(9)}`;
@@ -502,12 +531,13 @@ const routes = {
     if (r.status !== 'pending') fail(409, `This request was already ${r.status}.`);
     const mine = ownMachine(user.id, b.machineId);
     if (mine.id === r.from_machine) fail(400, 'Both agents are on this machine: link them on the canvas instead.');
+    if (!trusts(user.id, r.from_user) || !trusts(r.from_user, user.id)) fail(409, 'You no longer trust each other, so this request cannot be accepted. Deny it instead.');
     const shared = (Array.isArray(b.agents) ? b.agents : []).slice(0, 20).map(cleanAgent).filter((a) => a.id);
     if (!shared.length) fail(400, 'Pick at least one of your agents to share.');
     const pair = pairOf(mine.id, r.from_machine);
     run("UPDATE requests SET status = 'accepted', decided_at = ?, to_machine = ?, shared = ? WHERE id = ?", now(), mine.id, JSON.stringify(shared), r.id);
     const from = get('SELECT * FROM users WHERE id = ?', r.from_user);
-    deliver(r.from_machine, { type: 'paired', from: mine.id, name: user.name, handle: user.handle, pair });
+    deliver(r.from_machine, { type: 'paired', via: 'request', from: mine.id, name: user.name, handle: user.handle, pair });
     deliver(r.from_machine, { type: 'request', id: r.id, status: 'accepted', from: mine.id, pair, shared, agent: JSON.parse(r.agent) });
     return json(res, 200, { request: requestJSON(get('SELECT * FROM requests WHERE id = ?', r.id)), pair, peer: { machineId: r.from_machine, name: from.name, handle: from.handle } });
   },
@@ -558,8 +588,10 @@ const machineRoutes = {
   },
   'POST /v1/send': (me, b) => {
     if (!pairCovers(b.pair, me, b.to)) fail(403, 'not paired with that machine');
+    if (!pairStillTrusted(me, b.to)) fail(403, 'you no longer trust each other');
     const items = Array.isArray(b.items) ? b.items : [];
-    for (const it of items) if (it && typeof it === 'object') deliver(b.to, { ...it, from: me, pair: b.pair });
+    // request answers and revocations only ever come from the cloud itself
+    for (const it of items) if (it && typeof it === 'object' && !CLOUD_ONLY.has(it.type)) deliver(b.to, { ...it, from: me, pair: b.pair });
     return { queued: items.length };
   },
   'POST /v1/poll': (me) => {

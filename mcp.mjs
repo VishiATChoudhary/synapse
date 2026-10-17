@@ -34,7 +34,7 @@ const TOOLS = [
     run: (me, a) => ops.send(me, a.agent, a.message) },
   { name: 'synapse_inbox', description: 'Fetch messages other agents sent you (each is returned once).',
     inputSchema: { type: 'object', properties: {} }, run: (me) => ops.inbox(me) },
-  { name: 'synapse_people', description: "List the user's trusted people (Synapse accounts you can send a synapse request to).",
+  { name: 'synapse_people', description: "List the user's trusted people (Synapse accounts you can send a synapse request to, once they trust the user back).",
     inputSchema: { type: 'object', properties: {} }, run: () => people() },
   { name: 'synapse_request', description: "Ask a trusted person to share one of their agents' context with you. They accept or deny in their Synapse app.",
     inputSchema: { type: 'object', properties: {

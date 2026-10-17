@@ -101,10 +101,11 @@ export async function cloudMachine(cloud, sessionToken) {
   return ensureIdentity(c, cloud.replace(/\/+$/, ''), sessionToken, s?.user || null);
 }
 
-// A friend made through an accepted request: the cloud signed the pairing.
+// A friend made through an accepted request: the cloud signed the pairing. Such a friend only ever
+// sees the agents shared with them (see push), never the rest of this machine.
 export function addPeer(machineId, { name, pair }) {
   const c = config();
-  c.peers[machineId] = { ...c.peers[machineId], name: clean(name, 40) || 'friend', pair, since: c.peers[machineId]?.since || Date.now() };
+  c.peers[machineId] = { ...c.peers[machineId], name: clean(name, 40) || 'friend', pair, via: 'request', since: c.peers[machineId]?.since || Date.now() };
   c.blocked = c.blocked.filter((m) => m !== machineId);
   saveConfig(c);
   return c.peers[machineId];
@@ -183,8 +184,16 @@ function findFriend(c, query) {
 export function unfriend(query) {
   const c = config();
   const [m, p] = findFriend(c, query);
+  forget(m, { block: true });
+  return { removed: p.name };
+}
+
+// Drop everything about one friend's machine. Blocking also ignores whatever they still send;
+// a revoked request does not block, so trusting each other again and a new request can pair again.
+function forget(m, { block }) {
+  const c = config();
   delete c.peers[m];
-  if (!c.blocked.includes(m)) c.blocked.push(m);
+  if (block && !c.blocked.includes(m)) c.blocked.push(m);
   saveConfig(c);
   const prefix = remoteId(m, '');
   writeJSON(FILES.edges, readJSON(FILES.edges, []).filter((e) => !e.from.startsWith(prefix) && !e.to.startsWith(prefix)));
@@ -195,7 +204,8 @@ export function unfriend(query) {
   for (const k of Object.keys(sent)) if (k.startsWith(`${m}:`)) delete sent[k];
   writeJSON(SENT, sent);
   fs.rmSync(path.join(REMOTE_DIR, m), { recursive: true, force: true });
-  return { removed: p.name };
+  const out = readJSON(OUTBOX, []);
+  writeJSON(OUTBOX, out.filter((o) => o.to !== m));
 }
 
 // The friend's side of a link was removed on our canvas: ask its owner to stop sharing.
@@ -301,17 +311,34 @@ async function pull(c, timeout) {
   if (!items?.length) return 0;
   const states = readJSON(FILES.peerState, {});
   let cfgChanged = false;
+  const revoked = new Set();
   for (const it of items) {
     // a synapse request was answered (from the cloud, not from a friend's machine)
     if (it.type === 'request' && typeof it.id === 'string') { noteRequest(it); continue; }
+    // trust ended: the cloud tells both machines to drop the pairing (friends cannot send this, it carries no pair)
+    if (it.type === 'revoked' && !it.pair) {
+      if (typeof it.id === 'string') noteRequest({ id: it.id, status: 'revoked' });
+      const m = clean(it.machine, 40);
+      if (m) {
+        if (c.peers[m]) logEvent({ type: 'friend-revoked', name: c.peers[m].name });
+        delete c.peers[m];
+        delete states[m];
+        revoked.add(m);
+        forget(m, { block: false });
+      }
+      continue;
+    }
     const m = it.from;
-    if (!m || c.blocked.includes(m)) continue;
+    if (!m || c.blocked.includes(m) || revoked.has(m)) continue;
     if (!c.peers[m]) {
-      // a friend who joined our invite: the relay vouches for the pairing token it carries
+      // a friend who joined our invite, or who accepted our request: the cloud vouches for the pairing token it carries
       if (!it.pair) continue;
-      c.peers[m] = { name: clean(it.name, 40) || 'friend', pair: it.pair, since: Date.now() };
+      c.peers[m] = { name: clean(it.name, 40) || 'friend', pair: it.pair, ...(it.type === 'paired' && it.via === 'request' ? { via: 'request' } : {}), since: Date.now() };
       cfgChanged = true;
       logEvent({ type: 'friend', name: c.peers[m].name });
+    } else if (it.type === 'paired' && it.via === 'request' && c.peers[m].via !== 'request') {
+      c.peers[m].via = 'request';
+      cfgChanged = true;
     }
     if (it.type === 'state') {
       const name = clean(it.name, 40) || c.peers[m].name;
@@ -335,7 +362,7 @@ async function pull(c, timeout) {
   }
   if (cfgChanged) {
     const latest = config();
-    for (const [m, p] of Object.entries(c.peers)) if (!latest.blocked.includes(m)) latest.peers[m] = { ...latest.peers[m], ...p };
+    for (const [m, p] of Object.entries(c.peers)) if (!latest.blocked.includes(m) && !revoked.has(m)) latest.peers[m] = { ...latest.peers[m], ...p };
     saveConfig(latest);
   }
   writeJSON(FILES.peerState, states);
@@ -385,15 +412,22 @@ async function push(c, timeout) {
       .map((e) => ({ from: e.from, to: e.to.slice(prefix.length), fromName: byId.get(e.from).name }));
     const items = [];
     const marks = {};
+    const sharedFrom = [...new Set(shares.map((s) => s.from))];
 
-    const sig = sha(JSON.stringify([c.name, brief.map((a) => [a.id, a.name, a.status, a.project]), shares]));
+    // A friend from an invite code sees which agents run here, so links can be drawn either way.
+    // A friend from a request sees only what is shared with them and their own agents' counterparts here.
+    let agents = brief;
+    if (peer.via === 'request') {
+      const theirs = new Set(edges.filter((e) => e.mirrored && e.remote === m).map((e) => e.to));
+      agents = brief.filter((a) => sharedFrom.includes(a.id) || theirs.has(a.id));
+    }
+    const sig = sha(JSON.stringify([c.name, agents.map((a) => [a.id, a.name, a.status, a.project]), shares]));
     const last = sent[`state:${m}`];
     if (!last || last.sig !== sig || now - last.t > HEARTBEAT) {
-      items.push({ type: 'state', name: c.name, agents: brief, shares });
+      items.push({ type: 'state', name: c.name, agents, shares });
       marks[`state:${m}`] = { sig, t: now };
     }
 
-    const sharedFrom = [...new Set(shares.map((s) => s.from))];
     for (const from of sharedFrom) {
       const a = byId.get(from), key = `${m}:${from}`;
       if (!a.transcript) continue;
