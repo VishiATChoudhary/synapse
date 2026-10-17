@@ -4,6 +4,7 @@
 //                    sent to it, and prints a visible "synapse ..." line in the terminal.
 //  SessionStart:     prints which agents this session is linked with.
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import {
   FILES, readJSON, writeJSON, listAgents, readAgentMessages, formatMessages, takeInbox, logEvent, agentForProcess,
 } from './lib.mjs';
@@ -22,6 +23,26 @@ function main() {
     if (self) me = self.id;
   }
   if (!me) return;
+
+  // `/sfork <question>`: file a fork request and block the prompt so it never enters this session.
+  // The Synapse app (or `synapse fork` when no app runs) picks the request up and spawns the child.
+  const sfork = event === 'UserPromptSubmit' && /^\/sfork\s+(\S[\s\S]*)$/.exec(String(input.prompt || '').trim());
+  if (sfork) {
+    const question = sfork[1].trim();
+    const reqs = readJSON(FILES.forks, []).filter((r) => Date.now() - r.requestedAt < 86400_000);
+    reqs.push({
+      id: crypto.randomUUID(), parent: input.session_id || me, parentKind: input.session_id ? 'claude' : 'codex',
+      cwd: input.cwd || process.cwd(), question, requestedAt: Date.now(), status: 'pending',
+      host: process.env.SYNAPSE_APP ? 'app' : 'tab',
+    });
+    writeJSON(FILES.forks, reqs);
+    logEvent({ type: 'fork', parent: input.session_id || me, question });
+    process.stdout.write(JSON.stringify({
+      decision: 'block', reason: `synapse  ⑂ forked: ${question}`,
+      hookSpecificOutput: { hookEventName: event, suppressOriginalPrompt: true },
+    }));
+    return;
+  }
 
   if (event === 'SessionStart') {
     const ins = edgesAll.filter((e) => e.to === me).map((e) => e.fromName);
