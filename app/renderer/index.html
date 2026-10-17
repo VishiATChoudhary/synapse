@@ -16,6 +16,7 @@
   <nav class="tree" id="tree"></nav>
   <div class="side-foot">
     <button class="ghost" id="add-project">+ workspace</button>
+    <button class="ghost me" id="me" title="account"></button>
   </div>
 </aside>
 
@@ -26,7 +27,7 @@
     <div class="top-right">
       <button class="icon" id="split-right" title="Split side by side  ⌘D" aria-label="Split side by side">◫</button>
       <button class="icon" id="split-down" title="Split top and bottom  ⇧⌘D" aria-label="Split top and bottom">⊟</button>
-      <button class="ghost" id="btn-canvas" title="node view  ⌃Tab or ⌘G · ⌘-click a node opens its session">◇ synapse</button>
+      <button class="ghost" id="btn-canvas" title="node view  ⌃Tab or ⌘G · ⌘-click a node opens its session"><span class="glyph" aria-hidden="true">◇</span><span id="syn-dot" hidden role="button" tabindex="0" aria-label="synapse requests"></span>synapse</button>
       <button class="ghost sig" id="btn-fork" title="⇧⌘F">⑂ fork</button>
     </div>
   </header>
@@ -56,6 +57,12 @@
     <div class="modal-title" id="modal-title"></div>
     <div class="modal-body" id="modal-body"></div>
   </div>
+</div>
+
+<div class="syn-pop" id="syn-pop" hidden></div>
+
+<div class="login" id="login" hidden>
+  <div class="login-card" id="login-card"></div>
 </div>
 
 <div class="toast" id="toast" hidden></div>

@@ -40,7 +40,14 @@ export function config() {
 }
 const saveConfig = (c) => writeJSON(FILES.remote, c);
 // Worth talking to the relay: we have friends, or an invite of ours may be accepted any moment.
-export const isConnected = (c = config()) => !!c.token && (Object.keys(c.peers).length > 0 || Date.now() - (c.invitedAt || 0) < 7 * 24 * 3600_000);
+// a machine bound to a Synapse account keeps polling: synapse requests and their answers arrive through it
+export const isConnected = (c = config()) => !!c.token && (Object.keys(c.peers).length > 0 || !!c.user || Date.now() - (c.invitedAt || 0) < 7 * 24 * 3600_000);
+
+// signed in to Synapse Cloud (account.mjs owns the file; read here so the two modules do not import each other)
+function session() {
+  const a = readJSON(FILES.account, null);
+  return a?.token ? { cloud: (process.env.SYNAPSE_CLOUD || a.cloud || '').replace(/\/+$/, ''), token: a.token, user: a.user?.id || null } : null;
+}
 
 function defaultName() {
   try {
@@ -71,16 +78,40 @@ async function call(relay, route, body, token, timeout = 8000) {
   return out;
 }
 
-async function ensureIdentity(c, relay) {
-  if (c.token && c.relay === relay) return c;
-  if (c.token && Object.keys(c.peers).length) {
+// sessionToken: register with the signed-in account, so the cloud knows whose machine this is
+async function ensureIdentity(c, relay, sessionToken = null, user = null) {
+  const peers = Object.keys(c.peers).length > 0;
+  if (c.token && c.relay === relay && (!sessionToken || (user && c.user === user))) return c;
+  if (c.token && c.relay !== relay && peers) {
     throw new Error(`this machine already has friends on ${c.relay}; both sides need the same relay`);
   }
-  const r = await call(relay, '/v1/register', { name: c.name });
-  Object.assign(c, { relay, machineId: r.machineId, token: r.token });
+  // already known to this cloud: keep the machine id (friends address it) and bind it to the account
+  const keep = sessionToken && c.token && c.relay === relay ? { machineToken: c.token } : {};
+  const r = await call(relay, '/v1/register', { name: c.name, ...keep }, sessionToken);
+  Object.assign(c, { relay, machineId: r.machineId, token: r.token, user: sessionToken ? (r.user?.id || r.user || user) : null });
   saveConfig(c);
   return c;
 }
+
+// The machine identity on Synapse Cloud, bound to the signed-in account (account.mjs uses it for requests).
+export async function cloudMachine(cloud, sessionToken) {
+  const s = session();
+  const c = config();
+  if (!c.name) c.name = defaultName();
+  return ensureIdentity(c, cloud.replace(/\/+$/, ''), sessionToken, s?.user || null);
+}
+
+// A friend made through an accepted request: the cloud signed the pairing.
+export function addPeer(machineId, { name, pair }) {
+  const c = config();
+  c.peers[machineId] = { ...c.peers[machineId], name: clean(name, 40) || 'friend', pair, since: c.peers[machineId]?.since || Date.now() };
+  c.blocked = c.blocked.filter((m) => m !== machineId);
+  saveConfig(c);
+  return c.peers[machineId];
+}
+
+// where new identities go: the cloud when signed in, else the relay
+const relayFor = (c) => c.relay || process.env.SYNAPSE_RELAY || session()?.cloud || DEFAULT_RELAY;
 
 // ---------------------------------------------------------------- invite, join, friends
 
@@ -88,7 +119,8 @@ export async function invite({ name } = {}) {
   const c = config();
   if (name || !c.name) c.name = clean(name, 40) || defaultName();
   saveConfig(c);
-  await ensureIdentity(c, c.relay || process.env.SYNAPSE_RELAY || DEFAULT_RELAY);
+  const relay = relayFor(c), s = session();
+  await ensureIdentity(c, relay, s?.cloud === relay ? s.token : null, s?.cloud === relay ? s.user : null);
   const { code } = await call(c.relay, '/v1/invite', { name: c.name }, c.token);
   c.invitedAt = Date.now();
   saveConfig(c);
@@ -270,6 +302,8 @@ async function pull(c, timeout) {
   const states = readJSON(FILES.peerState, {});
   let cfgChanged = false;
   for (const it of items) {
+    // a synapse request was answered (from the cloud, not from a friend's machine)
+    if (it.type === 'request' && typeof it.id === 'string') { noteRequest(it); continue; }
     const m = it.from;
     if (!m || c.blocked.includes(m)) continue;
     if (!c.peers[m]) {
@@ -309,6 +343,18 @@ async function pull(c, timeout) {
 }
 
 // ---- sending
+
+function noteRequest(it) {
+  const status = clean(it.status, 20);
+  logEvent({ type: 'request', id: it.id, status, shared: Array.isArray(it.shared) ? it.shared.map((a) => clean(a?.name, 48)) : [] });
+  const cache = readJSON(FILES.requests, null);
+  if (!cache) return;
+  for (const r of [...(cache.incoming || []), ...(cache.outgoing || [])]) {
+    if (r.id === it.id) { r.status = status; if (Array.isArray(it.shared)) r.shared = it.shared; r.decidedAt = Date.now(); }
+  }
+  cache.stale = true;
+  writeJSON(FILES.requests, cache);
+}
 
 function pack(messages) {
   const out = [];

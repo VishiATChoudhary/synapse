@@ -1,7 +1,7 @@
 // Synapse desktop: Electron main process.
 // Owns the PTYs, reads Synapse state from ~/.synapse through lib.mjs, watches fork requests
 // filed by the prompt hook, and pushes everything to the renderer over IPC.
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -434,6 +434,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
+  pollRequests(); setInterval(pollRequests, REQUEST_POLL);
   setInterval(() => { if (win) { win.webContents.send('state', state()); pumpForks(); } }, 1000);
   if (process.env.SYNAPSE_SHOT) {
     setTimeout(async () => {
@@ -461,6 +462,80 @@ app.on('before-quit', (e) => {
   const started = Date.now();
   const wait = setInterval(() => { if (!ptys.size || Date.now() - started > 2000) { clearInterval(wait); app.quit(); } }, 30);
 });
+
+// ---------------------------------------------------------------- account (Synapse Cloud)
+
+// Sign-in, trusted people and synapse requests live in ../account.mjs, shared with the CLI and the MCP
+// server through ~/.synapse/account.json. Loaded lazily so a broken cloud never stops the terminals.
+let accountMod = null;
+const acct = async () => (accountMod ||= await import('../account.mjs'));
+const DEVICE_LABEL = `Synapse on ${os.hostname().replace(/\.local$/, '')}`;
+const REQUEST_POLL = Number(process.env.SYNAPSE_REQUEST_POLL || 8000);
+// SYNAPSE_FAKE_REQUESTS=<file.json> drives the requests feed from a file ({ incoming, outgoing, links }),
+// for screenshots and the circle test; accept and deny edit the file the way the cloud would.
+const FAKE = process.env.SYNAPSE_FAKE_REQUESTS || '';
+const fake = () => ({ incoming: [], outgoing: [], links: [], ...readJSON(FAKE, {}) });
+
+let feed = { incoming: [], outgoing: [], links: [] };
+let notified = null; // ids of incoming requests already announced; null until the first poll so old ones stay quiet
+async function pollRequests() {
+  let next;
+  if (FAKE) next = fake();
+  else {
+    const a = await acct().catch(() => null);
+    if (!a?.account()) next = { incoming: [], outgoing: [], links: [] };
+    else {
+      let r;
+      try { r = await a.requests(); } catch { return; } // offline: keep showing what we had
+      let links = [];
+      try { links = a.externalLinks(); } catch {}
+      next = { incoming: r.incoming || [], outgoing: r.outgoing || [], links };
+    }
+  }
+  feed = next;
+  const pending = feed.incoming.filter((r) => r.status === 'pending');
+  if (notified && Notification.isSupported() && !process.env.SYNAPSE_SHOT) {
+    for (const r of pending) {
+      if (notified.has(r.id)) continue;
+      const n = new Notification({ title: 'Synapse', body: `${r.from?.name || r.from?.handle || 'Someone'} wants to synapse with your agents` });
+      n.on('click', () => { if (!win) return; win.show(); win.focus(); win.webContents.send('requests:open'); });
+      n.show();
+    }
+  }
+  notified = new Set(pending.map((r) => r.id));
+  win?.webContents.send('requests', feed);
+}
+const accountChanged = async () => { const a = await acct(); win?.webContents.send('account', a.account()?.user || null); pollRequests(); };
+
+// device sign-in (GitHub, Google, X): the browser does the provider dance, we poll until it says yes
+let device = null;
+async function deviceSignIn(provider) {
+  const a = await acct();
+  device?.stop();
+  const d = await a.deviceStart(DEVICE_LABEL);
+  let url = d.url.startsWith('/') ? a.cloudUrl().replace(/\/+$/, '') + d.url : d.url;
+  if (provider) url += `${url.includes('?') ? '&' : '?'}via=${encodeURIComponent(provider)}`;
+  shell.openExternal(url);
+  let timer = null;
+  const until = Date.now() + (d.expiresIn || 600) * 1000;
+  const me = device = { stop: () => { clearTimeout(timer); if (device === me) device = null; } };
+  const tick = async () => {
+    if (device !== me) return;
+    if (Date.now() > until) { me.stop(); win?.webContents.send('device', { status: 'expired' }); return; }
+    try {
+      const r = await a.devicePoll(d.deviceCode);
+      if (r.status === 'approved') { me.stop(); win?.webContents.send('device', { status: 'approved' }); return accountChanged(); }
+    } catch (e) { me.stop(); win?.webContents.send('device', { status: 'failed', error: e.message }); return; }
+    timer = setTimeout(tick, (d.interval || 2) * 1000);
+  };
+  timer = setTimeout(tick, (d.interval || 2) * 1000);
+  return { userCode: d.userCode, url };
+}
+
+// the live agents on this machine (not only the app's tabs), offered when accepting a request
+function localAgentList() {
+  return listAgents().filter((a) => !a.remote).map((a) => ({ id: a.id, name: a.name, kind: a.kind, status: a.status, project: projectOf(a.cwd).label }));
+}
 
 // ---------------------------------------------------------------- ipc
 
@@ -534,3 +609,35 @@ handle('worktree:rename', ({ path: dir, name }) => {
 });
 handle('synapse', ({ args, as }) => execFileSync(process.execPath, [path.join(ROOT, '..', 'cli.mjs'), ...args], { encoding: 'utf8', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SYNAPSE_AGENT: as || '' }, timeout: 8000 }));
 handle('linked', ({ a, b }) => linked(readJSON(FILES.edges, []), a, b));
+handle('account:get', async () => { if (FAKE) return readJSON(FAKE, {}).account || null; const a = await acct().catch(() => null); return a?.account()?.user || null; });
+handle('account:skipped', () => !!config().skipLogin || !!process.env.SYNAPSE_DEMO);
+handle('account:skip', () => { const c = config(); c.skipLogin = true; writeJSON(FILES.app, c); });
+handle('account:signup', async (b) => { const a = await acct(); const r = await a.signup({ ...b, label: DEVICE_LABEL }); await accountChanged(); return r?.user || a.account()?.user; });
+handle('account:login', async (b) => { const a = await acct(); const r = await a.login({ ...b, label: DEVICE_LABEL }); await accountChanged(); return r?.user || a.account()?.user; });
+handle('account:logout', async () => { const a = await acct(); device?.stop(); await a.logout(); await accountChanged(); });
+handle('account:providers', async () => (await acct()).providers());
+handle('account:device', ({ provider }) => deviceSignIn(provider));
+handle('account:device-cancel', () => { device?.stop(); });
+handle('account:me', async () => (await acct()).me());
+handle('account:update', async (patch) => { const a = await acct(); const r = await a.updateMe(patch); await accountChanged(); return r; });
+handle('account:password', async (b) => (await acct()).changePassword(b));
+handle('account:forgot', async ({ email }) => (await acct()).forgot(email));
+handle('account:resend', async () => (await acct()).resendVerification());
+handle('account:web', async ({ path: p }) => { if (!String(p || '').startsWith('/')) throw new Error('bad path'); shell.openExternal((await acct()).cloudUrl().replace(/\/+$/, '') + p); });
+handle('people:list', async () => (FAKE ? { trusted: fake().people || [] } : (await acct()).trusted()));
+handle('people:add', async ({ who }) => (await acct()).trust(who));
+handle('people:remove', async ({ id }) => (await acct()).untrust(id));
+handle('requests:list', () => feed);
+handle('requests:agents', () => localAgentList());
+// accept and deny answer the cloud, then poll at once so the circle changes without waiting for the next tick
+async function decide(id, fn) {
+  if (FAKE) {
+    const f = fake(), r = f.incoming.find((x) => x.id === id);
+    if (r) { f.incoming = f.incoming.filter((x) => x !== r); if (fn === 'accept') f.links.push({ direction: 'out', owner: r.from?.name || r.from?.handle, agent: r.agent, local: { id: 'local', name: 'local' }, edgeId: `fake-${id}` }); writeJSON(FAKE, f); }
+  }
+  await pollRequests();
+}
+handle('requests:accept', async ({ id, agents }) => { const out = FAKE ? null : await (await acct()).accept(id, agents); await decide(id, 'accept'); return out; });
+handle('requests:deny', async ({ id }) => { const out = FAKE ? null : await (await acct()).deny(id); await decide(id, 'deny'); return out; });
+handle('requests:cancel', async ({ id }) => { const out = await (await acct()).cancel(id); await pollRequests(); return out; });
+handle('links', async () => (FAKE ? fake().links : (await acct()).externalLinks()));
