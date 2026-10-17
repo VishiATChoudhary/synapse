@@ -1705,6 +1705,7 @@ function drawLogin() {
   if (st.mode === 'signin') {
     const forgot = el('button', 'login-link', 'forgot password?');
     forgot.onclick = async () => {
+      if (loginState.providers?.mail === false) { setErr('password reset by email is not switched on yet'); return; }
       if (!email.value.trim()) { setErr('enter your email first, then press forgot password'); email.focus(); return; }
       try { await synapse.account.forgot(email.value.trim()); setErr('if that email has an account, a reset link is on its way', true); } catch (e) { setErr(e.message); }
     };

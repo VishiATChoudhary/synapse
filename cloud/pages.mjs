@@ -175,7 +175,7 @@ if ($('#trusted')) {
   $('#trust-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const inp = $('#trust-who'), msg = $('#trust-msg');
-    try { const { person } = await api('/v1/trusted', { who: inp.value }); inp.value = ''; say(msg, person.pending ? 'Invite sent to ' + person.email + '.' : 'Added ' + person.name + '.', true); renderTrusted(); }
+    try { const { person, emailed } = await api('/v1/trusted', { who: inp.value }); inp.value = ''; say(msg, !person.pending ? 'Added ' + person.name + '.' : emailed ? 'Invite sent to ' + person.email + '.' : 'Added. ' + person.email + ' shows up here once they sign up with that email.', true); renderTrusted(); }
     catch (e) { say(msg, e.message); }
   });
   $('#trusted').addEventListener('click', async (ev) => {
@@ -301,6 +301,7 @@ export function forgot(ctx) {
   return layout(ctx, 'Reset password', `<main class="split">${poster('Locked <em>out</em>?', 'It happens. We email you a link to choose a new password.')}
 <div class="pane"><form class="form" data-api="/v1/auth/forgot" data-done="If there is an account for that email, a reset link is on its way. It works for one hour. Check your spam folder too.">
 <h2>Forgot password</h2><p class="sub">Type the email you signed up with.</p>
+${ctx.mail ? '' : '<p class="note err">Password reset by email is not switched on yet. If you signed up with GitHub, Google or X, sign in with that button instead.</p>'}
 <label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required>
 <button class="btn solid wide" type="submit">Email me a link</button><p class="msg" role="alert"></p>
 <p class="alt"><a href="/login">Back to sign in</a></p></form></div></main>`, { bare: true });
@@ -336,13 +337,15 @@ export function welcome(ctx) {
   const u = ctx.user;
   const steps = [
     { done: true, title: 'Create your account', body: `You are <b>@${esc(u.handle)}</b>. People can add you by this handle or your email.` },
-    { done: !u.email || u.emailVerified, title: 'Confirm your email',
-      body: u.email ? `We sent a link to <b>${esc(u.email)}</b>. Confirming lets friends who invited you by email find you.` : 'You signed up without an email. Add one later in settings if you want.',
-      act: u.email && !u.emailVerified ? '<section style="border:0;padding:0"><button class="btn small" data-act="/v1/auth/resend-verification" data-done="Sent. Check your inbox.">Send it again</button><p class="msg" role="alert"></p></section>' : '' },
+    { done: !u.email || u.emailVerified || !ctx.mail, title: 'Confirm your email',
+      body: !u.email ? 'You signed up without an email. Add one later in settings if you want.'
+        : !ctx.mail && !u.emailVerified ? 'Email confirmation is not switched on yet. Nothing to do here for now: friends can already add you by your handle.'
+        : `We sent a link to <b>${esc(u.email)}</b>. Confirming lets friends who invited you by email find you.`,
+      act: u.email && !u.emailVerified && ctx.mail ? '<section style="border:0;padding:0"><button class="btn small" data-act="/v1/auth/resend-verification" data-done="Sent. Check your inbox.">Send it again</button><p class="msg" role="alert"></p></section>' : '' },
     { done: ctx.hasApp, title: 'Download Synapse for Mac', body: 'Apple Silicon. Open the DMG and drag Synapse into Applications. The first time, right-click Synapse and choose <b>Open</b> (macOS asks once because the app is new).',
       act: `<a class="btn solid" href="/download">Download the DMG</a>` },
     { done: ctx.hasApp, title: 'Sign in inside the app', body: 'Open Synapse. Sign in with the same account: email and password, or GitHub, Google or X (the app opens this browser to confirm).' },
-    { done: ctx.trusted.length > 0, title: 'Add the people you trust', body: 'Only people on this list can get requests from your agents. Someone without an account gets an invite by email.',
+    { done: ctx.trusted.length > 0, title: 'Add the people you trust', body: `Only people on this list can get requests from your agents. ${ctx.mail ? 'Someone without an account gets an invite by email.' : 'Someone without an account shows up once they sign up with that email.'}`,
       act: `<form id="trust-form" class="row"><input id="trust-who" type="text" placeholder="email or @handle" aria-label="Email or handle" required><button class="btn" type="submit">Add</button></form><p class="msg" id="trust-msg" role="alert"></p><div class="list" id="trusted"></div>` },
     { done: false, title: 'Let your agent ask', body: 'In any agent running in Synapse, say what you need. Your friend sees a blinking circle at the top right of their app and accepts or denies. Once accepted, your agent reads their agent\'s context.',
       act: `<pre class="code">use synapse to get context from @friend's api agent</pre>` },

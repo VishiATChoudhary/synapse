@@ -451,7 +451,7 @@ const routes = {
       }
     } else fail(404, `Nobody on Synapse is called @${hit.handle}. Add them by email instead: they get an invite.`);
     const person = trustedList(user.id).find((p) => (hit.user ? p.handle === hit.user.handle : p.email === hit.email));
-    return json(res, 200, { person });
+    return json(res, 200, { person, emailed: !hit.user && mailConfigured() });
   },
   'DELETE /v1/trusted/:id': async (req, res, b, params) => {
     const { user } = must(req);
@@ -614,7 +614,7 @@ async function oauthCallback(req, res, provider, url) {
 function page(req, res, url) {
   const p = url.pathname;
   const a = auth(req);
-  const ctx = { user: a ? meUser(a.user) : null, providers: oauth.providerStatus(), q: Object.fromEntries(url.searchParams), dmg: DMG_URL, base: PUBLIC_URL };
+  const ctx = { user: a ? meUser(a.user) : null, providers: oauth.providerStatus(), mail: mailConfigured(), q: Object.fromEntries(url.searchParams), dmg: DMG_URL, base: PUBLIC_URL };
   const needUser = (to) => (ctx.user ? null : redirect(res, `/login?next=${encodeURIComponent(to)}`));
   switch (p) {
     case '/': return redirect(res, ctx.user ? '/welcome' : '/signup');
