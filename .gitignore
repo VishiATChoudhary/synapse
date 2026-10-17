@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 promo/out/
 .DS_Store
 *.log
