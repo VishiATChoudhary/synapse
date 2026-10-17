@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld('synapse', {
     onExit: (fn) => on('pty:exit', fn),
   },
   sessions: { load: () => call('sessions:load'), save: (data) => call('sessions:save', data) },
-  fork: { spawn: (a) => call('fork:spawn', a), onRequest: (fn) => on('fork:request', fn) },
+  fork: { spawn: (a) => call('fork:spawn', a), link: (child, parent) => call('fork:link', { child, parent }), onRequest: (fn) => on('fork:request', fn) },
   project: {
     add: (p) => call('project:add', { path: p }),
     create: (name) => call('project:create', { name }),

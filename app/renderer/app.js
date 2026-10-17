@@ -215,6 +215,14 @@ function toggleSidebar() {
   $('#toggle-sidebar').setAttribute('aria-expanded', String(!collapsed));
 }
 
+// a fork's tab is named after its question: its first line, cut at a word to fit an agent's name (48)
+function forkTitle(question) {
+  const line = question.split('\n').find((l) => l.trim())?.replace(/\s+/g, ' ').trim() || 'fork';
+  if (line.length <= 48) return line;
+  const cut = line.slice(0, 47).replace(/\s+\S*$/, '');
+  return `${cut.length > 20 ? cut : line.slice(0, 47)}…`;
+}
+
 async function fork(question, { requestId = null, parentPty = null } = {}) {
   const s = parentPty ? M.slots.find((x) => x.sessions.some((y) => y.pty === parentPty)) : focusedSlot();
   if (!s) return toast('no session to fork', true);
@@ -224,12 +232,13 @@ async function fork(question, { requestId = null, parentPty = null } = {}) {
   if (parentPty) M.focused = s.id;
   try {
     const child = await makeSession(s, {
-      kind: parent.kind, title: parent.kind, question, parent: parent.id,
+      kind: parent.kind, title: forkTitle(question), question, parent: parent.id,
       spawn: (cols, rows) => synapse.fork.spawn({ parentPty: parent.pty, question, requestId, cols, rows }),
     });
     child.injected = false;
+    child.named = false; // the agent takes the tab's name once it registers with synapse
     selectSession(s, child.id);
-    toast(`⑂ forked: ${question}`);
+    toast(M.autoSendFork ? `⑂ forked: ${child.title}` : `⑂ forked: ${child.title} · press ↵ in the child to send`);
   } catch (e) { toast(e.message, true); }
   render();
 }
@@ -603,6 +612,13 @@ async function renameTab(x, name) {
   render();
 }
 
+// the canvas shows a fork under its question too; a name another agent has gets a number
+async function nameForkAgent(x) {
+  for (let i = 1; i < 10; i++) {
+    try { return await renameTab(x, i === 1 ? x.title : `${x.title} ${i}`); } catch {}
+  }
+}
+
 // a session named after its folder would repeat the checkout row above it: say what runs in it instead
 const slotTitle = (s, t, w) => (!t ? 'gone' : t.title === w.name && s.path.length < 2 ? (M.profiles[t.kind]?.label || t.kind) : t.title);
 function renderTree() {
@@ -719,6 +735,10 @@ function setChildrenCollapsed(s, targets, collapsed) {
     if (collapsed) M.collapsed.add(x.id);
     else for (const id of sessionBranch(s, x.id)) M.collapsed.delete(id);
   }
+  if (collapsed) for (const x of targets) {
+    const child = M.agents[x.pty]?.synapseId, parent = M.agents[sess(s, x.parent)?.pty]?.synapseId;
+    if (child && parent) linkToParent(child, parent, x.title);
+  }
   // If the current session was hidden, return to the nearest visible ancestor.
   const visible = new Set(visibleSessions(s).map((x) => x.id));
   const current = [...s.path].reverse().find((id) => visible.has(id));
@@ -726,6 +746,12 @@ function setChildrenCollapsed(s, targets, collapsed) {
   render();
   if (fanOpen) openFan(true);
   else if (!canvasOpen && $('#modal').hidden) top(focusedSlot())?.term.focus();
+}
+
+// collapsing a child links it to its parent on demand: the parent can read it, nothing is pushed into its prompt
+async function linkToParent(child, parent, name) {
+  try { if (await synapse.fork.link(child, parent)) toast(`⇠ the parent can read "${name}" when it needs to`); }
+  catch (e) { toast(e.message, true); }
 }
 
 function sessionActions(s, x) {
@@ -929,15 +955,20 @@ function modal(title, build) {
   body.onkeydown = null;
   build(body, () => { m.hidden = true; top(focusedSlot())?.term.focus(); });
   m.hidden = false;
-  const inp = body.querySelector('input'); if (inp) inp.focus();
+  const inp = body.querySelector('input, textarea'); if (inp) inp.focus();
 }
 $('#modal').addEventListener('click', (e) => { if (e.target === $('#modal')) { $('#modal').hidden = true; } });
 
-function promptText(title, hint, placeholder, onOk) {
+// multiline: a textarea that grows with its text; Enter submits, ⇧Enter is a newline
+function promptText(title, hint, placeholder, onOk, { multiline = false } = {}) {
   modal(title, (body, close) => {
-    const inp = el('input'); inp.placeholder = placeholder;
+    const inp = el(multiline ? 'textarea' : 'input'); inp.placeholder = placeholder;
+    if (multiline) { inp.rows = 1; inp.oninput = () => { inp.style.height = 'auto'; inp.style.height = `${inp.scrollHeight + 1}px`; }; }
     body.append(inp, el('div', 'hint', hint));
-    inp.onkeydown = (e) => { if (e.key === 'Enter' && inp.value.trim()) { close(); onOk(inp.value.trim()); } if (e.key === 'Escape') close(); };
+    inp.onkeydown = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (inp.value.trim()) { close(); onOk(inp.value.trim()); } }
+      if (e.key === 'Escape') close();
+    };
   });
 }
 function confirm(text, onOk, { danger = 'Close' } = {}) {
@@ -1089,7 +1120,8 @@ function promptWorktree(project) {
 }
 function promptFork(s = focusedSlot(), t = top(s)) {
   if (!t) return toast('no session to fork', true);
-  promptText('⑂ fork', `a child of "${t.title}" with its full context. Nothing flows back unless you send it.`, 'what do you want to dig into?', (q) => { if (fanOpen) closeFan(); fork(q, { parentPty: t.pty }); });
+  const send = M.autoSendFork ? 'it is sent right away' : 'it waits in the child\'s prompt for you to send';
+  promptText('⑂ fork', `a child of "${t.title}" with its full context · ${send} · ⇧↵ newline`, 'what do you want to dig into?', (q) => { if (fanOpen) closeFan(); fork(q, { parentPty: t.pty }); }, { multiline: true });
 }
 // Add a workspace by cloning, opening a folder, creating a repo, or choosing from the library.
 const WS_MODES = {
@@ -1341,10 +1373,11 @@ function canvasMenu({ hit, agent, group, x, y }) {
     if (mine) items.push(...sessionActions(mine, mine.sessions.find((q) => q.pty === ptyId)), '-', { label: 'Open session', run: () => { const z = mine.sessions.find((q) => q.pty === ptyId); M.focused = mine.id; focusPath(mine, z.id); if (canvasOpen) toggleCanvas(); render(); } });
     if (!mine) {
       const kids = agent.children || [];
-      if (kids.some((k) => !k.hidden)) items.push({ label: 'Collapse all children', run: () => tellCanvas({ action: 'collapse-children', id: agent.id }) });
+      const collapse = (k) => { tellCanvas({ action: 'collapse-branch', id: k.id }); linkToParent(k.id, agent.id, k.name); };
+      if (kids.some((k) => !k.hidden)) items.push({ label: 'Collapse all children', run: () => kids.filter((k) => !k.hidden).forEach(collapse) });
       if (kids.some((k) => k.hidden)) items.push({ label: 'Expand all children', run: () => tellCanvas({ action: 'expand-children', id: agent.id }) });
-      for (const child of kids) items.push({ label: `${child.hidden ? 'Expand' : 'Collapse'} child: ${child.name}`, run: () => tellCanvas({ action: child.hidden ? 'expand-branch' : 'collapse-branch', id: child.id }) });
-      if (agent.parentId) items.push({ label: 'Collapse this child', run: () => tellCanvas({ action: 'collapse-branch', id: agent.id }) });
+      for (const child of kids) items.push({ label: `${child.hidden ? 'Expand' : 'Collapse'} child: ${child.name}`, run: () => child.hidden ? tellCanvas({ action: 'expand-branch', id: child.id }) : collapse(child) });
+      if (agent.parentId) items.push({ label: 'Collapse this child', run: () => { tellCanvas({ action: 'collapse-branch', id: agent.id }); linkToParent(agent.id, agent.parentId, agent.name); } });
     }
     if (agent.cwd) items.push({ label: 'New agent in this folder', sub: agentMenuIn(agent.cwd) });
     items.push({ label: 'Rename', run: () => tellCanvas({ action: 'rename', id: agent.id }) }, { label: 'Unlink all', run: () => tellCanvas({ action: 'unlink', id: agent.id }) }, '-');
@@ -1377,7 +1410,14 @@ async function openSettings() {
       try { await synapse.settings.set({ autoSymlink: cb.checked }); toast(cb.checked ? 'new workspaces get linked into ~/.synapse/workspaces' : 'workspaces are no longer linked · existing links stay'); }
       catch (e) { cb.checked = !cb.checked; toast(e.message, true); }
     };
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow);
+    const forkRow = el('label', 'opt set'), fcb = el('input');
+    fcb.type = 'checkbox'; fcb.checked = !!s.autoSendFork;
+    forkRow.append(fcb, el('span', 'k', 'send forks'), el('span', 'c', 'send a fork\'s question right away, instead of leaving it in the child\'s prompt for you to send'));
+    fcb.onchange = async () => {
+      try { M.autoSendFork = (await synapse.settings.set({ autoSendFork: fcb.checked })).autoSendFork; toast(fcb.checked ? 'forks send their question right away' : 'a fork\'s question waits in its prompt for you'); }
+      catch (e) { fcb.checked = !fcb.checked; toast(e.message, true); }
+    };
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow);
     for (const [title, keys] of SHORTCUTS) {
       const box = el('div', 'keys');
       for (const [k, what] of keys) { const row = el('span'); row.append(el('kbd', '', k), what); box.appendChild(row); }
@@ -1559,13 +1599,14 @@ async function refreshPullRequests() {
 }
 async function refresh() { apply(await synapse.state()); }
 function apply(st) {
-  M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo;
+  M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo; M.autoSendFork = !!st.autoSendFork;
   // remember which agent each session runs while it is alive: that id is what a restart resumes. A resumed
   // agent that has not written its transcript yet must not wipe the id it was resumed from.
   for (const sl of M.slots) for (const x of sl.sessions) {
     const a = M.agents[x.pty];
     if (a?.synapseId && (a.transcript || !x.resume)) x.resume = { synapseId: a.synapseId, transcript: a.transcript || null };
     if (a && agentWorking(a)) x.ran = true; // noted here, not on draw, so a folded workspace's agents count too
+    if (a && x.named === false) { x.named = true; nameForkAgent(x); }
   }
   refreshPullRequests();
   render();

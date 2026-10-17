@@ -10,6 +10,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
 import { git, listChoices, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
 import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork } from '../lib.mjs';
+import { createEdge } from '../ops.mjs';
 
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
 const SHELL = process.env.SHELL || '/bin/zsh';
@@ -33,6 +34,7 @@ function config() {
   if (!c.profiles) { c.profiles = DEFAULT_PROFILES; dirty = true; }
   if (!c.workspaces) { c.workspaces = []; dirty = true; }
   if (c.autoSymlink === undefined) { c.autoSymlink = true; dirty = true; }
+  if (c.autoSendFork === undefined) { c.autoSendFork = false; dirty = true; }
   if (dirty) writeJSON(FILES.app, c);
   return c;
 }
@@ -306,7 +308,7 @@ function state() {
   const messages = readJSON(FILES.messages, []);
   const unread = {};
   for (const m of messages) if (!m.delivered) unread[m.to] = (unread[m.to] || 0) + 1;
-  return { projects: projects(), agents: byPty, edges, unread, profiles: config().profiles, demo: DEMO };
+  return { projects: projects(), agents: byPty, edges, unread, profiles: config().profiles, autoSendFork: !!config().autoSendFork, demo: DEMO };
 }
 
 // ---------------------------------------------------------------- forks
@@ -330,8 +332,9 @@ function pumpForks() {
 }
 
 // The per-kind fork adapters: how to start a child that inherits the parent's conversation.
+// Without a question the child starts idle and the question is typed into its prompt for the human to send.
 function forkCommand(kind, agent, question, profiles) {
-  const q = JSON.stringify(question);
+  const q = question ? JSON.stringify(question) : '';
   const flags = (profiles[kind]?.command || kind).split(' ').slice(1).join(' ');
   switch (kind) {
     // a session with no turns yet has no transcript, so there is nothing to inherit: start fresh with the question
@@ -369,7 +372,7 @@ function spawnFork({ parentPty, question, requestId, cols, rows }) {
   let command;
   if (DEMO && !agent) command = ''; // demo: fork a shell into another shell, so the tree can be tried without agents
   else if (!agent) throw new Error('that session is not a known agent (shells cannot fork)');
-  else command = forkCommand(agent.kind, agent, question, config().profiles);
+  else command = forkCommand(agent.kind, agent, config().autoSendFork ? question : '', config().profiles);
   const r = spawnPty({ cwd: t.cwd, kind: t.kind, command, cols, rows, extraEnv: { SYNAPSE_FORK_OF: agent?.synapseId || '', SYNAPSE_FORK_Q: question } }); // the renderer's size, not the 120x36 default
   if (agent?.synapseId) try { recordFork(r.pid, agent.synapseId, question); } catch {} // the canvas draws the fork tree from this
   if (requestId) {
@@ -377,7 +380,19 @@ function spawnFork({ parentPty, question, requestId, cols, rows }) {
     const req = reqs.find((x) => x.id === requestId);
     if (req) { req.status = 'spawned'; req.childPty = r.id; writeJSON(FILES.forks, reqs); }
   }
+  if (!config().autoSendFork && command) prefill(r.id, question);
   return r;
+}
+
+// Type the question into a fresh agent's prompt without sending it: wait until its TUI has drawn and
+// gone quiet, then paste it (bracketed, so newlines stay newlines). Enter is the human's to press.
+function prefill(id, text) {
+  const t = ptys.get(id);
+  if (!t || !text) return;
+  let quiet = null, seen = false;
+  const done = () => { clearTimeout(quiet); clearTimeout(cap); sub.dispose(); if (ptys.get(id) === t) t.p.write(`\x1b[200~${text}\x1b[201~`); };
+  const sub = t.p.onData(() => { seen = true; clearTimeout(quiet); quiet = setTimeout(done, 900); });
+  const cap = setTimeout(() => { if (seen) done(); else sub.dispose(); }, 20000);
 }
 
 // ---------------------------------------------------------------- synapse canvas
@@ -492,8 +507,15 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-handle('settings:get', () => ({ autoSymlink: !!config().autoSymlink }));
-handle('settings:set', (patch) => { const c = config(); if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink; writeJSON(FILES.app, c); if (c.autoSymlink) scanLibrary(true); return { autoSymlink: !!c.autoSymlink }; });
+handle('settings:get', () => ({ autoSymlink: !!config().autoSymlink, autoSendFork: !!config().autoSendFork }));
+handle('settings:set', (patch) => {
+  const c = config();
+  if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink;
+  if ('autoSendFork' in patch) c.autoSendFork = !!patch.autoSendFork;
+  writeJSON(FILES.app, c);
+  if ('autoSymlink' in patch && c.autoSymlink) scanLibrary(true);
+  return { autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork };
+});
 handle('worktree:add', ({ repo, name, base }) => addWorktree(repo, name, base));
 handle('worktree:remove', ({ repo, dir, force }) => removeWorktree(repo, dir, force));
 handle('project:order', ({ keys }) => { const c = config(); c.projectOrder = keys.filter((k) => typeof k === 'string'); writeJSON(FILES.app, c); });
@@ -540,3 +562,9 @@ handle('worktree:rename', ({ path: dir, name }) => {
 });
 handle('synapse', ({ args, as }) => execFileSync(process.execPath, [path.join(ROOT, '..', 'cli.mjs'), ...args], { encoding: 'utf8', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SYNAPSE_AGENT: as || '' }, timeout: 8000 }));
 handle('linked', ({ a, b }) => linked(readJSON(FILES.edges, []), a, b));
+// a collapsed child shares with its parent on demand: the parent can read it, nothing is pushed into its prompt
+handle('fork:link', ({ child, parent }) => {
+  const agents = listAgents(), from = agents.find((a) => a.id === child), to = agents.find((a) => a.id === parent);
+  if (!from || !to) throw new Error('that agent is gone');
+  return createEdge(from, to, { onDemand: true }).created;
+});

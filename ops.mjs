@@ -14,7 +14,8 @@ function resolve(agents, query) {
   return a;
 }
 
-export function createEdge(from, to) {
+// extra.onDemand: the target reads the source when it asks (synapse_read); the hook pushes nothing
+export function createEdge(from, to, extra = {}) {
   if (from.id === to.id) throw new Error('An agent cannot link to itself.');
   const edges = readJSON(FILES.edges, []);
   const existing = edges.find((e) => e.from === from.id && e.to === to.id);
@@ -22,7 +23,7 @@ export function createEdge(from, to) {
   const color = (a) => colorOf(projectOf(a.cwd).key);
   const edge = {
     id: crypto.randomUUID(), from: from.id, to: to.id, fromName: from.name, toName: to.name,
-    fromColor: color(from), toColor: color(to), fromKind: from.kind, toKind: to.kind, createdAt: Date.now(),
+    fromColor: color(from), toColor: color(to), fromKind: from.kind, toKind: to.kind, createdAt: Date.now(), ...extra,
   };
   edges.push(edge);
   writeJSON(FILES.edges, edges);
