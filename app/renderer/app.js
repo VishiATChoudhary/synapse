@@ -402,7 +402,7 @@ function render() {
 // its process runs there. The picked-up item follows the pointer and its neighbours slide out of its way;
 // nothing moves in the model until it is let go. The tree redraws every second from state, which would
 // pull the row out from under the pointer, so it holds still while a drag is on.
-let drag = null; // the lifted item, while a drag is on
+let drag = null; // the lifted item while a drag is on ('pressed' until the pointer moves)
 // a workspace's tab sits above its box (and a collapsed box is only a rule), so the tab counts as its top
 function extent(node) {
   const r = node.getBoundingClientRect(), head = node.querySelector(':scope > .proj-head')?.getBoundingClientRect();
@@ -449,6 +449,7 @@ function sortable(handle, item, sel, onDrop) {
     if (e.button !== 0 || drag || e.target.closest('button, input')) return;
     const x0 = e.clientX, y0 = e.clientY;
     let d = null;
+    drag = 'pressed'; // a redraw between press and move would take the row away before it is lifted
     const move = (e) => {
       if (!d && Math.hypot(e.clientX - x0, e.clientY - y0) < 4) return;
       d ||= drag = lift(item, sel);
@@ -457,7 +458,7 @@ function sortable(handle, item, sel, onDrop) {
     const end = (e) => {
       removeEventListener('pointermove', move); removeEventListener('pointerup', end);
       removeEventListener('pointercancel', end); removeEventListener('keydown', esc, true);
-      if (!d) return;
+      if (!d) { drag = null; return; }
       // the release would also land as a click (select, fold): swallow it
       const swallow = (e) => { e.stopPropagation(); e.preventDefault(); };
       addEventListener('click', swallow, { capture: true, once: true });
