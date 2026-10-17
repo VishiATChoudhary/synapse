@@ -497,6 +497,12 @@ handle('settings:set', (patch) => { const c = config(); if ('autoSymlink' in pat
 handle('worktree:add', ({ repo, name, base }) => addWorktree(repo, name, base));
 handle('worktree:remove', ({ repo, dir, force }) => removeWorktree(repo, dir, force));
 handle('project:order', ({ keys }) => { const c = config(); c.projectOrder = keys.filter((k) => typeof k === 'string'); writeJSON(FILES.app, c); });
+// a workspace's worktrees show in the order their folders sit in app.json: deal the dragged order into the same places
+handle('worktree:order', ({ paths }) => {
+  const c = config(), moved = paths.filter((w) => c.workspaces.includes(w));
+  c.workspaces.map((w, i) => moved.includes(w) ? i : -1).filter((i) => i >= 0).forEach((i, k) => { c.workspaces[i] = moved[k]; });
+  writeJSON(FILES.app, c);
+});
 handle('project:remove', ({ path: p }) => { const c = config(); c.workspaces = c.workspaces.filter((w) => w !== p); writeJSON(FILES.app, c); });
 // how many uncommitted changes a folder has (0 when it is not a repo); the renderer asks before anything destructive
 handle('git:dirty', ({ cwd }) => { try { return git(cwd, ['status', '--porcelain']).split('\n').filter(Boolean).length; } catch { return 0; } });

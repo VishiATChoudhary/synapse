@@ -30,7 +30,7 @@ contextBridge.exposeInMainWorld('synapse', {
     rename: (key, name) => call('project:rename', { key, name }),
     onCloneProgress: (fn) => on('clone:progress', fn),
   },
-  worktree: { list: (repo) => call('worktree:list', { repo }), open: (a) => call('worktree:open', a), fetch: (repo) => call('worktree:fetch', { repo }), prs: (repo, choices) => call('worktree:prs', { repo, choices }), add: (a) => call('worktree:add', a), remove: (a) => call('worktree:remove', a), rename: (path, name) => call('worktree:rename', { path, name }) },
+  worktree: { list: (repo) => call('worktree:list', { repo }), open: (a) => call('worktree:open', a), fetch: (repo) => call('worktree:fetch', { repo }), prs: (repo, choices) => call('worktree:prs', { repo, choices }), add: (a) => call('worktree:add', a), remove: (a) => call('worktree:remove', a), rename: (path, name) => call('worktree:rename', { path, name }), order: (paths) => call('worktree:order', { paths }) },
   settings: { get: () => call('settings:get'), set: (patch) => call('settings:set', patch) },
   git: { dirty: (cwd) => call('git:dirty', { cwd }) },
   agent: { kill: (pid) => call('agent:kill', { pid }), rename: (pty, name) => call('agent:rename', { pty, name }) },

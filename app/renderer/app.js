@@ -75,7 +75,10 @@ function statusOf(x) {
   if (x.kind === 'shell') return 'shell';
   const a = M.agents[x.pty];
   if (!a) return 'idle';
-  return a.status === 'busy' || a.status === 'working' || a.status === 'running' ? 'working' : a.status === 'waiting' || a.status === 'needs_input' ? 'waiting' : 'idle';
+  const st = a.status === 'busy' || a.status === 'working' || a.status === 'running' ? 'working' : a.status === 'waiting' || a.status === 'needs_input' ? 'waiting' : 'idle';
+  // an agent that has worked and gone quiet is done: its square lights green until it starts again
+  if (st === 'working') x.ran = true;
+  return st === 'idle' && x.ran ? 'done' : st;
 }
 
 // ---------------------------------------------------------------- terminals
@@ -395,33 +398,75 @@ function render() {
 
 // ---------------------------------------------------------------- drag to rearrange
 
-// Workspaces (project boxes) and agent rows reorder by dragging. An agent stays in its own folder, since
-// its process runs there. The tree redraws every second from state, which would pull the row out from
-// under the pointer, so it holds still while a drag is on.
-let drag = null; // { type: 'proj', key } | { type: 'slot', id, worktree }
+// Workspaces (project boxes), their worktrees and agent rows reorder by dragging. An agent stays in its own folder, since
+// its process runs there. The picked-up item follows the pointer and its neighbours slide out of its way;
+// nothing moves in the model until it is let go. The tree redraws every second from state, which would
+// pull the row out from under the pointer, so it holds still while a drag is on.
+let drag = null; // the lifted item, while a drag is on
 // a workspace's tab sits above its box (and a collapsed box is only a rule), so the tab counts as its top
-function dropSide(e, node) {
+function extent(node) {
   const r = node.getBoundingClientRect(), head = node.querySelector(':scope > .proj-head')?.getBoundingClientRect();
-  const topY = head ? Math.min(head.top, r.top) : r.top;
-  return e.clientY < (topY + r.bottom) / 2 ? 'before' : 'after';
+  return { top: head ? Math.min(head.top, r.top) : r.top, bottom: r.bottom };
 }
-function clearDrop() { for (const n of document.querySelectorAll('.drop-before, .drop-after')) n.classList.remove('drop-before', 'drop-after'); }
-function draggable(handle, what, target, accepts, onDrop) {
-  handle.draggable = true;
-  handle.addEventListener('dragstart', (e) => { drag = what; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', ''); e.stopPropagation(); });
-  handle.addEventListener('dragend', () => { drag = null; clearDrop(); render(); });
-  target.addEventListener('dragover', (e) => {
-    if (!drag || !accepts(drag)) return;
-    e.preventDefault(); e.stopPropagation();
-    clearDrop(); target.classList.add('drop-' + dropSide(e, target));
-  });
-  target.addEventListener('drop', (e) => {
-    if (!drag || !accepts(drag)) return;
-    e.preventDefault(); e.stopPropagation();
-    const d = drag, side = dropSide(e, target);
-    drag = null; clearDrop();
-    onDrop(d, side);
-    render();
+function lift(item, sel) {
+  const items = [...item.parentElement.children].filter((n) => n.matches(sel));
+  const from = items.indexOf(item), rs = items.map(extent), me = rs[from];
+  const gap = from < items.length - 1 ? rs[from + 1].top - me.bottom : from > 0 ? me.top - rs[from - 1].bottom : 0;
+  const step = me.bottom - me.top + gap; // how far a neighbour slides to make room
+  item.classList.add('lifted'); document.body.classList.add('sorting');
+  for (const n of items) if (n !== item) n.classList.add('yielding');
+  let to = from;
+  return {
+    follow(dy) {
+      item.style.transform = `translateY(${dy}px)`;
+      // a neighbour yields once the lifted item's leading edge passes its middle, so a tall open
+      // workspace does not leap over small folded ones
+      to = from;
+      items.forEach((n, k) => {
+        const m = (rs[k].top + rs[k].bottom) / 2;
+        const shift = k > from && me.bottom + dy > m ? -step : k < from && me.top + dy < m ? step : 0;
+        if (shift < 0) to = Math.max(to, k);
+        if (shift > 0) to = Math.min(to, k);
+        if (n !== item) n.style.transform = shift ? `translateY(${shift}px)` : '';
+      });
+    },
+    // glide into the gap, then hand the move to the model and redraw from it
+    drop(onDrop) {
+      const off = to > from ? rs[to].bottom - me.bottom : to < from ? rs[to].top - me.top : 0;
+      item.classList.add('settling'); item.style.transform = `translateY(${off}px)`;
+      setTimeout(() => {
+        document.body.classList.remove('sorting');
+        drag = null;
+        if (to !== from) onDrop(items[to], to > from ? 'after' : 'before');
+        render();
+      }, 170);
+    },
+    cancel() { this.follow(0); this.drop(() => {}); },
+  };
+}
+function sortable(handle, item, sel, onDrop) {
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || drag || e.target.closest('button, input')) return;
+    const x0 = e.clientX, y0 = e.clientY;
+    let d = null;
+    const move = (e) => {
+      if (!d && Math.hypot(e.clientX - x0, e.clientY - y0) < 4) return;
+      d ||= drag = lift(item, sel);
+      d.follow(e.clientY - y0);
+    };
+    const end = (e) => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', end);
+      removeEventListener('pointercancel', end); removeEventListener('keydown', esc, true);
+      if (!d) return;
+      // the release would also land as a click (select, fold): swallow it
+      const swallow = (e) => { e.stopPropagation(); e.preventDefault(); };
+      addEventListener('click', swallow, { capture: true, once: true });
+      setTimeout(() => removeEventListener('click', swallow, true), 0);
+      if (e.type === 'pointerup') d.drop(onDrop); else d.cancel();
+    };
+    const esc = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); end(e); } };
+    addEventListener('pointermove', move); addEventListener('pointerup', end);
+    addEventListener('pointercancel', end); addEventListener('keydown', esc, true);
   });
 }
 function moveItem(list, item, target, side) {
@@ -429,6 +474,31 @@ function moveItem(list, item, target, side) {
   const out = list.filter((x) => x !== item);
   out.splice(out.indexOf(target) + (side === 'after' ? 1 : 0), 0, item);
   return out;
+}
+function moveWorktree(p, from, to, side) {
+  p.worktrees = moveItem(p.worktrees, p.worktrees.find((w) => w.path === from), p.worktrees.find((w) => w.path === to), side);
+  synapse.worktree.order(p.worktrees.map((w) => w.path)).catch((e) => toast(e.message, true));
+}
+// folding a workspace slides its worktrees shut (or open) instead of snapping; the tree holds still meanwhile
+let folding = false;
+const FOLD = { duration: 220, easing: 'cubic-bezier(.2, .7, .3, 1)' };
+function foldProject(key) {
+  if (folding) return;
+  const find = () => $('#tree').querySelector(`:scope > .proj[data-key="${CSS.escape(key)}"]`);
+  const box = find(), from = box?.getBoundingClientRect().height;
+  const slide = (node, a, b, done) => {
+    folding = true;
+    node.style.clipPath = 'inset(-40px -40px 0 -40px)'; // the tab above the box stays visible
+    node.animate([{ height: `${a}px` }, { height: `${b}px` }], FOLD).onfinish = () => { folding = false; done(); };
+  };
+  if (M.open.has(key)) {
+    if (!box) { M.open.delete(key); return render(); }
+    slide(box, from, 1, () => { M.open.delete(key); render(); });
+  } else {
+    M.open.add(key); render();
+    const next = find();
+    if (next && box) slide(next, from, next.getBoundingClientRect().height, render);
+  }
 }
 function moveProject(key, targetKey, side) {
   const by = (k) => M.projects.find((p) => p.key === k);
@@ -533,7 +603,7 @@ async function renameTab(x, name) {
 const slotTitle = (s, t, w) => (!t ? 'gone' : t.title === w.name && s.path.length < 2 ? (M.profiles[t.kind]?.label || t.kind) : t.title);
 function renderTree() {
   const tree = $('#tree');
-  if (drag) return;
+  if (drag || folding) return;
   tree.replaceChildren();
   const cur = focusedSlot();
   let n = 0;
@@ -543,14 +613,14 @@ function renderTree() {
     const sw = el('span', 'swatch'); sw.style.background = p.color;
     const live = M.slots.filter((s) => p.worktrees.some((w) => w.path === s.worktree)).length;
     const pn = el('span', 'proj-name', p.label);
-    const toggleProject = () => { if (M.open.has(p.key)) M.open.delete(p.key); else M.open.add(p.key); render(); };
+    const toggleProject = () => foldProject(p.key);
     editableName(pn, `project:${p.key}`, 'workspace', p.label, async (name) => { await synapse.project.rename(p.key, name); await refresh(); }, toggleProject, true);
     head.append(sw, pn, el('span', 'proj-count', String(live || p.worktrees.length)));
     const add = el('button', 'proj-add', '+'); add.title = 'open branch or worktree'; add.setAttribute('aria-label', add.title);
     add.onclick = (e) => { e.stopPropagation(); promptWorktree(p); };
     head.appendChild(add);
     head.onclick = toggleProject;
-    draggable(head, { type: 'proj', key: p.key }, box, (d) => d.type === 'proj' && d.key !== p.key, (d, side) => moveProject(d.key, p.key, side));
+    sortable(head, box, '.proj', (t, side) => moveProject(p.key, t.dataset.key, side));
     box.appendChild(head);
     if (M.open.has(p.key)) {
       for (const w of p.worktrees) {
@@ -570,6 +640,7 @@ function renderTree() {
         wa.onclick = (e) => { e.stopPropagation(); pickProfile(w.path); };
         wh.appendChild(wa);
         wh.onclick = selectWorktree;
+        sortable(wh, wt, '.wt', (t, side) => moveWorktree(p, w.path, t.dataset.path, side));
         wt.appendChild(wh);
         for (const s of M.slots.filter((s) => s.worktree === w.path)) {
           n++;
@@ -586,8 +657,7 @@ function renderTree() {
           if (t) row.appendChild(tabCloseButton(s, t));
           row.title = `⌘${n}`;
           row.onclick = () => selectSession(s);
-          draggable(row, { type: 'slot', id: s.id, worktree: w.path }, row, (d) => d.type === 'slot' && d.worktree === w.path && d.id !== s.id,
-            (d, side) => { M.slots = moveItem(M.slots, slot(d.id), s, side); });
+          sortable(row, row, '.slot', (t, side) => { M.slots = moveItem(M.slots, s, slot(Number(t.dataset.slot)), side); });
           wt.appendChild(row);
         }
         box.appendChild(wt);

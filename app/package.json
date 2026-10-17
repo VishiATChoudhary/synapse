@@ -12,6 +12,7 @@
     "test:keys": "electron tests/keys.cjs",
     "test:library": "electron tests/library.cjs",
     "test:tabs": "node tests/tabs.cjs",
+    "test:drag": "node tests/drag.cjs",
     "rebuild": "electron-rebuild -f -w node-pty"
   },
   "dependencies": {
