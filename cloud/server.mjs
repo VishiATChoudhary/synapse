@@ -697,7 +697,7 @@ export const server = http.createServer(async (req, res) => {
       if (req.method !== 'GET' && auth(req)?.viaCookie && !sameOrigin(req)) return json(res, 403, { error: 'cross-site request refused' });
       return await handler(req, res, b, params);
     }
-    if (req.method === 'GET' && page(req, res, url) !== null) return;
+    if ((req.method === 'GET' || req.method === 'HEAD') && page(req, res, url) !== null) return;
     return html(res, 404, pages.message({ title: 'Not found', body: 'There is nothing at this address.', link: '/', cta: 'Home' }));
   } catch (e) {
     if (res.headersSent) return;
