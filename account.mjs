@@ -6,7 +6,7 @@ import { FILES, readJSON, writeJSON, localAgents, findAgent, projectOf, remoteId
 import { createEdge } from './ops.mjs';
 import * as remote from './remote.mjs';
 
-export const DEFAULT_CLOUD = 'https://synapse-cloud.up.railway.app';
+export const DEFAULT_CLOUD = 'https://app.heysynapse.dev';
 const NOT_SIGNED_IN = 'Not signed in to Synapse. Ask the user to sign in in the Synapse app or run: synapse login';
 
 export function account() {

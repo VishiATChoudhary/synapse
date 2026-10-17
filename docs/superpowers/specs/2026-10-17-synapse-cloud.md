@@ -14,7 +14,7 @@ can read the shared agent's context (`synapse_read name@owner`). Denied: circle 
 
 | piece | where | what |
 |---|---|---|
-| cloud service | `cloud/` → Railway project `synapse-relay`, service `cloud`, https://synapse-cloud.up.railway.app | accounts, OAuth, email, trusted list, requests, machine mailbox (superset of `relay/`), web pages (signup, login, forgot/reset, verify, device approval, onboarding, download, settings, public profiles) |
+| cloud service | `cloud/` → Railway project `synapse-relay`, service `cloud`, https://app.heysynapse.dev | accounts, OAuth, email, trusted list, requests, machine mailbox (superset of `relay/`), web pages (signup, login, forgot/reset, verify, device approval, onboarding, download, settings, public profiles) |
 | client lib | `account.mjs` (new), `remote.mjs` | login state in `~/.synapse/account.json`; cloud calls; machine bound to the user; accept/deny applies the share |
 | agent surface | `mcp.mjs`, `cli.mjs`, `skill/SKILL.md` | `synapse_request`, `synapse_people`, `synapse_requests` tools; CLI `login/logout/whoami/trust/request/requests/accept/deny` |
 | app | `app/main.mjs`, `app/preload.cjs`, `app/renderer/*` | login screen, account/profile modal, trusted people in settings, the status circle + popover |
@@ -34,7 +34,7 @@ can read the shared agent's context (`synapse_read name@owner`). Denied: circle 
 
 ## API (JSON in, JSON out; errors are `{ error: "human sentence" }` with 4xx/5xx)
 
-Base: `https://synapse-cloud.up.railway.app` (override with env `SYNAPSE_CLOUD`).
+Base: `https://app.heysynapse.dev` (override with env `SYNAPSE_CLOUD`).
 
 ### Auth
 - `POST /v1/auth/signup {email, password, name?, client?: 'app'|'cli'|'web', label?}` → `{token, user}` (web also sets cookie). Sends a verification email. Password ≥ 8 chars.

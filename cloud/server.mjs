@@ -16,6 +16,8 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
 const PUBLIC_URL = (process.env.PUBLIC_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : `http://127.0.0.1:${PORT}`)).replace(/\/+$/, '');
 const SECURE = PUBLIC_URL.startsWith('https://');
+// once PUBLIC_URL is a custom domain, the railway.app address it replaced is the old one
+const OLD_HOST = new URL(PUBLIC_URL).host.endsWith('.up.railway.app') ? null : /\.up\.railway\.app$/;
 const SECRET = process.env.CLOUD_SECRET || process.env.RELAY_SECRET;
 if (!SECRET) throw new Error('CLOUD_SECRET is not set');
 export const DMG_URL = process.env.DMG_URL || 'https://github.com/VishiATChoudhary/synapse/releases/latest/download/Synapse-arm64.dmg';
@@ -659,6 +661,11 @@ export const server = http.createServer(async (req, res) => {
   const p = url.pathname;
   try {
     if (p === '/health') return json(res, 200, { ok: true, service: 'synapse-cloud' });
+    // pages on the old railway.app address move to PUBLIC_URL (their cookies only work there); the API stays on both
+    if (OLD_HOST?.test(req.headers.host || '') &&!p.startsWith('/v1/') && ['GET', 'HEAD'].includes(req.method)) {
+      res.writeHead(301, { location: PUBLIC_URL + req.url });
+      return res.end();
+    }
     const font = p.match(/^\/fonts\/([a-z-]+\.woff2)$/);
     if (font) {
       const file = path.join(FONTS, font[1]);
