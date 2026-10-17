@@ -377,7 +377,7 @@ body.sidebar-collapsed .main > .top { padding-left: 86px; }
 .login-err:empty { display: none; }
 .login-err.ok { color: #00A36C; }
 .login .login-go { display: block; width: calc(100% - 44px); margin: 14px 22px 0; padding: 12px; border: 0; }
-.login-link { display: block; margin: 10px 22px 0; font: 10.5px var(--mono); text-transform: uppercase; color: var(--ink-3); }
+.login-link { display: block; margin: 10px 22px 18px; font: 10.5px var(--mono); text-transform: uppercase; color: var(--ink-3); }
 .login-link:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .login-link.skip { margin: 0; padding: 14px 22px; width: 100%; text-align: center; border-top: 1px solid var(--rule); }
 .login-or { display: flex; align-items: center; gap: 10px; margin: 18px 22px 10px; font: 10.5px var(--mono); text-transform: uppercase; color: var(--ink-3); }
