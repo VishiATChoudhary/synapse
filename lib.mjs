@@ -22,6 +22,10 @@ export const FILES = {
   colors: path.join(DATA, 'colors.json'),
   messages: path.join(DATA, 'messages.json'),
   names: path.join(DATA, 'names.json'),
+  projects: path.join(DATA, 'projects.json'),
+  forks: path.join(DATA, 'forks.json'),
+  lineage: path.join(DATA, 'lineage.json'),
+  app: path.join(DATA, 'app.json'),
 };
 
 export function readJSON(file, fallback) {
@@ -254,6 +258,10 @@ function codexTranscript(id, cwd, start) {
       try { files = fs.readdirSync(dir).filter((f) => f.startsWith('rollout-')); } catch { continue; }
       for (const f of files) {
         const p = path.join(dir, f);
+        // the name carries the session's creation time (local); a session created before this process started
+        // belongs to an earlier run, even if Codex touched the file since (it rewrites old rollouts on startup)
+        const born = /^rollout-(\d{4})-(\d\d)-(\d\d)T(\d\d)-(\d\d)-(\d\d)/.exec(f);
+        if (born && new Date(+born[1], born[2] - 1, +born[3], +born[4], +born[5], +born[6]).getTime() < start - 2000) continue;
         const st = fs.statSync(p);
         if (st.mtimeMs < start - 60_000) continue;
         try {
@@ -319,7 +327,23 @@ export function listAgents() {
   const found = DEMO ? DEMO.demoAgents() : [...claudeAgents(), ...processAgents()];
   // names given in the canvas or with `synapse rename` win over the generated ones
   const names = readJSON(FILES.names, {});
-  return found.map((a) => (names[a.id] ? { ...a, name: names[a.id], autoName: a.name } : a));
+  // forks: which agent each one was forked from and the question it was given (the app records it by pid)
+  const lineage = readJSON(FILES.lineage, {});
+  return found.map((a) => {
+    const n = names[a.id] ? { ...a, name: names[a.id], autoName: a.name } : a;
+    const f = lineage[a.pid];
+    return f ? { ...n, forkOf: f.parent, forkQ: f.question } : n;
+  });
+}
+
+// Remember that the process `pid` was forked from agent `parent` to look into `question`. Entries for
+// processes that are gone are dropped on the way, so the file never grows past what is running.
+const processAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+export function recordFork(pid, parent, question) {
+  const lineage = readJSON(FILES.lineage, {});
+  for (const k of Object.keys(lineage)) if (!processAlive(Number(k))) delete lineage[k];
+  lineage[pid] = { parent, question: String(question || ''), at: Date.now() };
+  writeJSON(FILES.lineage, lineage);
 }
 
 // Rename an agent; an empty name goes back to the generated one. Links keep the new name too.
@@ -362,22 +386,42 @@ export function findAgent(agents, query) {
 // ---------------------------------------------------------------- projects & colours
 
 // Group sessions by real project: worktrees share their main repo's git dir.
+// `label` is what is shown (a name given in the canvas or with `synapse rename-project` wins),
+// `autoLabel` is the generated one.
 const projectCache = new Map();
 export function projectOf(cwd) {
-  if (projectCache.has(cwd)) return projectCache.get(cwd);
-  let key = cwd, label = path.basename(cwd);
-  try {
-    const common = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).trim();
-    key = common.replace(/\/\.git\/?$/, '');
-    label = path.basename(key);
-  } catch {}
-  const wt = cwd.match(/\/worktrees\/([^/]+)\//); // e.g. ~/.superset/worktrees/<Project>/<branch>
-  if (wt) label = wt[1];
-  if (key === cwd) key = `project:${label}`; // not a git repo: group by name
-  const p = { key, label };
-  projectCache.set(cwd, p);
-  return p;
+  let p = projectCache.get(cwd);
+  if (!p) {
+    let key = cwd, label = path.basename(cwd), isGit = false;
+    try {
+      const common = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).trim();
+      key = common.replace(/\/\.git\/?$/, '');
+      isGit = true;
+      label = path.basename(key);
+    } catch {}
+    const wt = cwd.match(/\/worktrees\/([^/]+)\//); // e.g. ~/.superset/worktrees/<Project>/<branch>
+    if (wt) label = wt[1];
+    if (!isGit) key = `project:${label}`; // not a git repo: group by name
+    p = { key, autoLabel: label };
+    projectCache.set(cwd, p);
+  }
+  const given = readJSON(FILES.projects, {})[p.key];
+  return { key: p.key, label: given || p.autoLabel, autoLabel: p.autoLabel };
+}
+
+// Rename a project; an empty name goes back to the generated one.
+export function renameProject(key, name) {
+  name = String(name ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 48);
+  const live = new Map(listAgents().map((a) => { const p = projectOf(a.cwd); return [p.key, p]; }));
+  if (name && [...live.values()].some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) {
+    throw new Error(`another project is already called "${name}"`);
+  }
+  const given = readJSON(FILES.projects, {});
+  if (name) given[key] = name; else delete given[key];
+  writeJSON(FILES.projects, given);
+  const auto = live.get(key)?.autoLabel ?? [...projectCache.values()].find((p) => p.key === key)?.autoLabel ?? path.basename(key);
+  return { key, label: name || auto };
 }
 
 // Stable colour per project: first come, first served from a flat palette, persisted.

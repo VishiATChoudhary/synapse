@@ -128,6 +128,7 @@ synapse read codex-api              # their latest conversation
 synapse send codex-api "Did the rate limiter land? I'm about to touch auth."
 synapse inbox                       # what other agents sent me
 synapse rename "auth refactor"     # rename yourself (or: synapse rename <agent> <name>)
+synapse rename-project synapse "Synapse canvas"   # rename a project frame
 synapse ui                          # start the canvas
 ```
 
@@ -144,6 +145,7 @@ Code and Codex, so you can just say *"connect to the codex agent and ask what it
 | drag a project frame | move the whole project; other frames step aside so they never overlap |
 | click a node | details, links, messages, recent activity |
 | double-click a node (or **rename** in its panel) | rename it. Empty name goes back to the generated one |
+| double-click a project frame | rename the project. Empty name goes back to the folder name |
 | hover a link, click × (or select it and press ⌫) | remove the link |
 | scroll, drag the background | zoom, pan |
 | F, or double-click the background | fit everything on screen |
@@ -165,6 +167,13 @@ Code and Codex, so you can just say *"connect to the codex agent and ask what it
 | `promo/` | the Remotion source of the video above |
 
 Settings: `PORT`, `SYNAPSE_HOME` (state folder, default `~/.synapse`), `SYNAPSE_BUDGET` (characters per link per prompt), `SYNAPSE_AGENT` (force an identity).
+
+## Desktop app
+
+`npm install && npm run app:install` packages the checkout into `Synapse.app` (Apple Silicon), copies it to
+`/Applications` and opens it. `npm run app:build` only builds, into `dist/`, together with a `.dmg`. The app is
+ad-hoc signed: it runs on the machine that built it, and on another Mac only after right-click → Open (or
+`xattr -dr com.apple.quarantine Synapse.app`), since there is no Developer ID or notarization.
 
 ## Good to know
 

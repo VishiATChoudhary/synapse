@@ -35,6 +35,8 @@
   .bar { position: fixed; top: 0; left: 0; right: 0; height: 48px; z-index: 6; display: flex; align-items: stretch; background: var(--paper); border-bottom: 1px solid var(--rule); font-size: 11px; text-transform: uppercase; }
   .bar > * { display: flex; align-items: center; border-right: 1px solid var(--rule); }
   .brand { gap: 10px; padding: 0 18px; user-select: none; }
+  html.in-app .brand { display: none; }
+  html.in-app .mode { display: none; } /* inside the app the app's own toggle drives the theme */
   .brand b { font: 500 24px/1 var(--display); letter-spacing: .02em; }
   .brand span { color: var(--ink-3); }
   .stats { margin-left: auto; border-left: 1px solid var(--rule); }
@@ -67,10 +69,17 @@
   .res mark { background: none; color: inherit; text-decoration: underline; text-underline-offset: 3px; }
   .res.none { color: var(--ink-3); cursor: default; }
 
-  .hints { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; background: var(--paper); border: 1px solid var(--rule);
+  .gear { position: fixed; right: 16px; bottom: 16px; z-index: 6; width: 34px; height: 34px; display: grid; place-items: center; background: var(--paper); border: 1px solid var(--rule); color: var(--ink-2); font-size: 15px; cursor: pointer; transition: background-color .15s ease-out, color .15s ease-out; }
+  .gear:hover, .gear.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .hints { position: fixed; right: 16px; bottom: 58px; z-index: 6; display: none; flex-direction: column; min-width: 240px; background: var(--paper); border: 1px solid var(--rule);
     font-size: 10.5px; text-transform: uppercase; color: var(--ink-2); white-space: nowrap; user-select: none; }
-  .hints span { padding: 7px 12px; border-right: 1px solid var(--rule); }
-  .hints span:last-child { border-right: 0; }
+  .hints.show { display: flex; }
+  .cmenu { position: fixed; z-index: 8; min-width: 180px; background: var(--paper); border: 1px solid var(--ink); font: 11px var(--mono); text-transform: uppercase; }
+  .cmenu div { padding: 8px 14px; cursor: pointer; white-space: nowrap; }
+  .cmenu div:hover { background: var(--ink); color: var(--paper); }
+  .hints .head { padding: 8px 12px; border-bottom: 1px solid var(--rule); color: var(--ink-3); }
+  .hints span { display: flex; justify-content: space-between; gap: 18px; padding: 6px 12px; border-bottom: 1px solid var(--rule); }
+  .hints span:last-child { border-bottom: 0; }
 
   .empty { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; text-align: center; opacity: 0; transition: opacity .3s ease-out; }
   .empty.show { opacity: 1; }
@@ -78,10 +87,20 @@
   .empty p { margin: 18px 0 0; color: var(--ink-2); }
   .empty code { font-family: var(--mono); color: var(--ink); }
 
-  .legend { position: fixed; left: 16px; bottom: 16px; min-width: 180px; max-height: 45vh; overflow: hidden; background: var(--paper); border: 1px solid var(--rule); user-select: none; }
-  .legend .head { padding: 7px 10px; font-size: 10.5px; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--rule); }
-  .legend .item { display: flex; align-items: center; gap: 9px; padding: 5px 10px; font-size: 11.5px; color: var(--ink-2); }
-  .legend .item:hover { color: var(--ink); background: var(--wash); }
+  /* projects: a chip under the top bar that expands on hover; clicking a project flies the camera to it */
+  .legend { position: fixed; left: 16px; top: 64px; min-width: 180px; background: var(--paper); border: 1px solid var(--rule); user-select: none; display: flex; flex-direction: column; z-index: 5; }
+  .legend:empty { display: none; }
+  .legend .head { display: flex; gap: 8px; padding: 7px 10px; font-size: 10.5px; text-transform: uppercase; color: var(--ink-3); cursor: default; }
+  .legend .head .n { margin-left: auto; }
+  .legend .head::after { content: '▾'; }
+  .legend .list { max-height: 0; overflow: hidden auto; transition: max-height .18s ease-out; scrollbar-width: thin; }
+  .legend:hover { border-color: var(--ink); }
+  .legend:hover .head { color: var(--ink); border-bottom: 1px solid var(--rule); }
+  .legend:hover .head::after { content: '▴'; }
+  .legend:hover .list { max-height: 55vh; }
+  .legend .item { display: flex; align-items: center; gap: 9px; padding: 5px 10px; font-size: 11.5px; color: var(--ink-2); cursor: pointer; }
+  .legend .item:hover { color: var(--paper); background: var(--ink); }
+  .legend .item:hover .n { color: var(--paper); }
   .legend .sw { width: 9px; height: 9px; flex: none; }
   .legend .n { margin-left: auto; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
@@ -97,7 +116,9 @@
   .tag { font-size: 10.5px; text-transform: uppercase; padding: 2px 7px; border: 1px solid var(--rule); color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
   .panel input.rename { flex: 1; min-width: 0; font: 300 36px/.9 var(--display); text-transform: uppercase; color: var(--ink); background: none; border: 0; border-bottom: 1px solid var(--ink); outline: 0; padding: 0 0 2px; }
   .panel h2 .nm { cursor: text; }
+  .panel .link .fq { flex: 1; min-width: 0; margin-left: 8px; font: 10.5px var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tag.ren { cursor: pointer; background: none; font-family: var(--mono); }
+  .frame-rename { position: fixed; z-index: 6; box-sizing: border-box; font-family: var(--mono); text-transform: uppercase; letter-spacing: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--ink); outline: 0; }
   .tag.ren:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
   .close { position: absolute; top: 14px; right: 14px; width: 28px; height: 28px; border: 1px solid var(--rule); background: none; cursor: pointer; font-size: 15px; line-height: 1; transition: background-color .15s ease-out, color .15s ease-out; }
   .close:hover { background: var(--ink); color: var(--paper); }
@@ -194,6 +215,7 @@
 </style>
 </head>
 <body>
+<script>if (window.parent !== window) document.documentElement.classList.add('in-app');</script>
 <canvas id="c"></canvas>
 <div class="grain" aria-hidden="true"></div>
 
@@ -218,14 +240,17 @@
   <button class="mode" id="mode" type="button" aria-label="Toggle dark mode"></button>
 </div>
 <div class="empty" id="empty"><div><h2>No agents yet</h2><p>Start a <code>claude</code> or <code>codex</code> session and it shows up here.</p></div></div>
+<button class="gear" id="gear" type="button" title="shortcuts and settings" aria-label="Shortcuts and settings">⚙</button>
 <div class="hints" id="hints">
-  <span><kbd>⌘F</kbd>search</span>
-  <span><kbd>drag ring</kbd>link</span>
-  <span><kbd>drag</kbd>move agent or project</span>
-  <span><kbd>scroll</kbd>zoom</span>
-  <span><kbd>F</kbd>fit</span>
-  <span><kbd>A</kbd>arrange</span>
-  <span><kbd>⌫</kbd>unlink</span>
+  <div class="head">Shortcuts</div>
+  <span>search<kbd>⌘F</kbd></span>
+  <span>link<kbd>drag ring</kbd></span>
+  <span>move agent or project<kbd>drag</kbd></span>
+  <span>rename agent or project<kbd>dbl-click</kbd></span>
+  <span>zoom<kbd>scroll</kbd></span>
+  <span>fit<kbd>F</kbd></span>
+  <span>arrange<kbd>A</kbd></span>
+  <span>unlink<kbd>⌫</kbd></span>
 </div>
 <div class="legend" id="legend"></div>
 <aside class="panel" id="panel"></aside>
@@ -252,6 +277,40 @@ let mouse = { x: 0, y: 0, wx: 0, wy: 0 };
 const flows = new Map();  // edge id -> burst intensity 0..1
 const packets = [];       // messages in flight {from, to, born}
 let query = '', matches = null, resultIdx = 0;
+
+// Collapsing is presentation only: nodes, links and running agents are preserved.
+const collapsedBranches = new Set();
+let sessionHidden = new Set();
+const forkChildren = (id) => [...agents.values()].filter((n) => !n.dying && n.a?.forkOf === id);
+function updateBranchVisibility() {
+  for (const [id, n] of agents) {
+    const seen = new Set();
+    n.hidden = false;
+    for (let cur = id; cur && !seen.has(cur); cur = agents.get(cur)?.a?.forkOf) {
+      seen.add(cur);
+      if (sessionHidden.has(cur) || collapsedBranches.has(cur)) { n.hidden = true; break; }
+    }
+  }
+  if (selected?.type === 'node' && agents.get(selected.id)?.hidden) { selected = null; closePanel(); }
+  if (agents.get(hover?.id)?.hidden) hover = null;
+}
+function expandBranch(id) {
+  const todo = [id], seen = new Set();
+  while (todo.length) {
+    const cur = todo.pop();
+    if (seen.has(cur)) continue;
+    seen.add(cur); collapsedBranches.delete(cur);
+    todo.push(...forkChildren(cur).map((n) => n.a.id));
+  }
+}
+function branchActions(id) {
+  const kids = forkChildren(id), out = [];
+  if (kids.some((n) => !n.hidden)) out.push(['Collapse all children', () => doAction({ action: 'collapse-children', id })]);
+  if (kids.some((n) => n.hidden)) out.push(['Expand all children', () => doAction({ action: 'expand-children', id })]);
+  for (const n of kids) out.push([`${n.hidden ? 'Expand' : 'Collapse'} child: ${n.a.forkQ || n.a.name}`, () => doAction({ action: n.hidden ? 'expand-branch' : 'collapse-branch', id: n.a.id })]);
+  if (agents.get(id)?.a?.forkOf) out.push(['Collapse this child', () => doAction({ action: 'collapse-branch', id })]);
+  return out;
+}
 
 // ---------- helpers ----------
 function rgba(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }
@@ -328,6 +387,9 @@ readVars();
   btn.onclick = () => { const k = document.documentElement.dataset.theme === 'night' ? 'signal' : 'night'; localStorage.setItem('synapse-mode', k); apply(k); };
   dark.addEventListener('change', (e) => { if (!localStorage.getItem('synapse-mode')) apply(e.matches ? 'night' : 'signal'); });
   apply(document.documentElement.dataset.theme);
+  // inside the app: the app says which theme to use (its localStorage is another origin, so it cannot be read here)
+  addEventListener('message', (ev) => { if (ev.source === window.parent && ev.data?.type === 'synapse:theme' && ['night', 'signal'].includes(ev.data.theme)) apply(ev.data.theme); });
+  if (window.parent !== window) window.parent.postMessage({ type: 'synapse:ready' }, '*');
 })();
 const short = (s, n = 26) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -345,6 +407,15 @@ function resize() {
 addEventListener('resize', resize); resize();
 
 // ---------- state sync ----------
+// a fork appears next to the agent it was forked from
+function nearParent(pn) {
+  for (let n = 0; n < 24; n++) {
+    const r = 130 + 30 * Math.floor(n / 8), t = n * 0.785 + 0.4;
+    const p = { x: pn.x + r * Math.cos(t), y: pn.y + r * Math.sin(t) };
+    if ([...agents.values()].every((o) => Math.hypot(o.x - p.x, o.y - p.y) > 110)) return p;
+  }
+  return spawnPoint(agents.size, null);
+}
 function spawnPoint(i, key) {
   // next to agents of the same project if there are any, else a golden-angle spiral round the centre
   const mates = [...agents.values()].filter((o) => !o.dying && o.a?.projectKey === key);
@@ -372,7 +443,8 @@ function applyState(s) {
     seen.add(a.id);
     let n = agents.get(a.id);
     if (!n) {
-      const p = layout[a.id] || spawnPoint(agents.size, a.projectKey);
+      const parent = a.forkOf && agents.get(a.forkOf);
+      const p = layout[a.id] || (parent ? nearParent(parent) : spawnPoint(agents.size, a.projectKey));
       n = { x: p.x, y: p.y, vx: 0, vy: 0, born: performance.now(), color: a.color, phase: Math.random() * 6.28, dying: 0 };
       if (!layout[a.id]) setTimeout(() => agents.has(a.id) && saveLayout(a.id), 1500);
       agents.set(a.id, n);
@@ -380,6 +452,7 @@ function applyState(s) {
     n.a = a; n.color = a.color; n.dying = 0;
   });
   for (const [id, n] of agents) if (!seen.has(id) && !n.dying) n.dying = performance.now();
+  updateBranchVisibility();
   assignShades();
   edges = s.edges;
   const live = [...agents.values()].filter((n) => !n.dying);
@@ -432,7 +505,7 @@ async function removeEdge(id) {
 // ---------- geometry ----------
 function edgeGeom(e) {
   const a = agents.get(e.from), b = agents.get(e.to);
-  if (!a || !b) return null;
+  if (!a || !b || a.hidden || b.hidden) return null;
   const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
   const nx = -dy / len, ny = dx / len, bend = Math.min(60, len * 0.14);
   const cx = (a.x + b.x) / 2 + nx * bend, cy = (a.y + b.y) / 2 + ny * bend;
@@ -454,7 +527,7 @@ function tAtDist(g, fromEnd, d) {
 function hitTest(wx, wy) {
   let best = null;
   for (const [id, n] of agents) {
-    if (n.dying) continue;
+    if (n.dying || n.hidden) continue;
     const d = Math.max(Math.abs(n.x - wx), Math.abs(n.y - wy));
     if (d <= R + 2) return { type: 'node', id };
     if (d <= R + RING + 4 && (!best || d < best.d)) best = { type: 'ring', id, d };
@@ -474,10 +547,61 @@ function hitTest(wx, wy) {
 }
 
 // ---------- input ----------
+// Inside the Synapse desktop app the canvas is an iframe: ⌘-click on a node asks the app to open that session.
+const EMBEDDED = window.parent !== window;
+if (EMBEDDED) $('hints').insertAdjacentHTML('afterbegin', '<span><kbd>⌘ click</kbd>open session</span>');
+// Right-click. Inside the app the app draws the menu (it can start agents, add workspaces, kill
+// processes) and tells us what to do here; standalone we offer what the canvas itself can do.
+let cmenu = null;
+const closeCmenu = () => { cmenu?.remove(); cmenu = null; };
+function doAction(d) {
+  const n = d.id && agents.get(d.id);
+  if (d.action === 'session-visibility') { sessionHidden = new Set(d.hidden); updateBranchVisibility(); }
+  if (d.action === 'collapse-branch' && n) collapsedBranches.add(d.id);
+  if (d.action === 'expand-branch' && n) expandBranch(d.id);
+  if (d.action === 'collapse-children' && n) for (const child of forkChildren(d.id)) collapsedBranches.add(child.a.id);
+  if (d.action === 'expand-children' && n) for (const child of forkChildren(d.id)) expandBranch(child.a.id);
+  if (/^(collapse|expand)-/.test(d.action)) updateBranchVisibility();
+  if (d.action === 'rename' && n) { selected = { type: 'node', id: d.id }; renderPanel(true).then(startRename); revealSelected(); }
+  if (d.action === 'rename-project' && d.key) startProjectRename(d.key);
+  if (d.action === 'unlink' && n) for (const e of edges.filter((e) => e.from === d.id || e.to === d.id)) removeEdge(e.id);
+  if (d.action === 'arrange') { arrange(); toast('Arranged by project'); }
+  if (d.action === 'fit') fit();
+}
+cv.addEventListener('contextmenu', (ev) => {
+  ev.preventDefault();
+  const w = toWorld(ev.clientX, ev.clientY), h = hitTest(w.x, w.y);
+  const n = h?.type === 'node' || h?.type === 'ring' ? agents.get(h.id) : null;
+  const g = h?.type === 'group' ? groupRects().find((r) => r.key === h.key) : null;
+  if (EMBEDDED) {
+    const a = n?.a, mate = g?.nodes[0]?.[1]?.a;
+    window.parent.postMessage({ type: 'synapse:menu', x: ev.clientX, y: ev.clientY,
+      hit: n ? 'node' : g ? 'group' : 'background',
+      agent: a ? { id: a.id, name: a.name, pid: a.pid, kind: a.kind, cwd: a.cwd, parentId: a.forkOf, children: forkChildren(a.id).map((n) => ({ id: n.a.id, name: n.a.forkQ || n.a.name, hidden: n.hidden })) } : null,
+      group: g ? { key: g.key, label: g.label, cwd: mate?.cwd, count: g.nodes.length } : null }, '*');
+    return;
+  }
+  closeCmenu();
+  const items = n ? [...branchActions(n.a.id), ['Rename', () => doAction({ action: 'rename', id: n.a.id })], ['Unlink all', () => doAction({ action: 'unlink', id: n.a.id })]]
+    : g ? [['Rename project', () => doAction({ action: 'rename-project', key: g.key })]]
+    : [['Arrange', () => doAction({ action: 'arrange' })], ['Fit', () => doAction({ action: 'fit' })]];
+  cmenu = document.createElement('div'); cmenu.className = 'cmenu';
+  for (const [label, run] of items) { const d = document.createElement('div'); d.textContent = label; d.onclick = () => { closeCmenu(); run(); }; cmenu.appendChild(d); }
+  document.body.appendChild(cmenu);
+  const r = cmenu.getBoundingClientRect();
+  cmenu.style.left = `${Math.min(ev.clientX, innerWidth - r.width - 8)}px`; cmenu.style.top = `${Math.min(ev.clientY, innerHeight - r.height - 8)}px`;
+});
+addEventListener('pointerdown', (ev) => { if (cmenu && !cmenu.contains(ev.target)) closeCmenu(); }, true);
+addEventListener('message', (ev) => { if (ev.source === window.parent && ev.data?.type === 'synapse:do') doAction(ev.data); });
 cv.addEventListener('pointerdown', (ev) => {
   cv.setPointerCapture(ev.pointerId);
   const w = toWorld(ev.clientX, ev.clientY);
   const h = hitTest(w.x, w.y);
+  if (EMBEDDED && ev.metaKey && h?.type === 'node') {
+    const a = agents.get(h.id)?.a;
+    window.parent.postMessage({ type: 'synapse:open', id: h.id, pid: a?.pid, name: a?.name, kind: a?.kind, cwd: a?.cwd }, '*');
+    return;
+  }
   const sx = ev.clientX, sy = ev.clientY;
   if (h?.type === 'node') { const n = agents.get(h.id); drag = { mode: 'move', id: h.id, ox: w.x - n.x, oy: w.y - n.y, sx, sy, moved: false }; }
   else if (h?.type === 'ring') drag = { mode: 'link', id: h.id, sx, sy };
@@ -506,6 +630,7 @@ addEventListener('pointermove', (ev) => {
     hover = hitTest(w.x, w.y);
   }
   cv.style.cursor = drag?.mode === 'link' ? 'crosshair' : drag?.mode ? 'grabbing'
+    : EMBEDDED && ev.metaKey && hover?.type === 'node' ? 'pointer'
     : hover?.type === 'ring' ? 'crosshair' : hover?.type === 'node' || hover?.type === 'group' ? 'grab'
     : hover?.type === 'x' || hover?.type === 'edge' ? 'pointer' : 'default';
 });
@@ -527,7 +652,7 @@ addEventListener('pointerup', () => {
 function linkTarget() {
   let best = null, bd = Infinity;
   for (const [id, n] of agents) {
-    if (n.dying || id === drag?.id) continue;
+    if (n.dying || n.hidden || id === drag?.id) continue;
     const d = Math.hypot(n.x - mouse.wx, n.y - mouse.wy);
     if (d < R + 34 && d < bd) { bd = d; best = id; }
   }
@@ -544,14 +669,38 @@ cv.addEventListener('dblclick', (ev) => {
   const w = toWorld(ev.clientX, ev.clientY), h = hitTest(w.x, w.y);
   if (!h) return fit();
   if (h.type === 'node') { selected = { type: 'node', id: h.id }; renderPanel(true).then(startRename); revealSelected(); }
+  if (h.type === 'group') startProjectRename(h.key);
 });
+// The desktop owns Escape navigation; capture it before search and rename handlers.
+// Standalone canvas keeps its local Escape behavior.
+addEventListener('keydown', (ev) => {
+  if (window.parent === window || ev.key !== 'Escape') return;
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  document.querySelector('.frame-rename')?.dispatchEvent(new Event('synapse:cancel-edit'));
+  document.querySelector('input.rename')?.dispatchEvent(new Event('synapse:cancel-edit'));
+  window.parent.postMessage({ type: 'synapse:close' }, '*');
+}, true);
+addEventListener('keydown', (ev) => {
+  if (window.parent === window || !ev.metaKey || !/^[1-9\[\]]$/.test(ev.key)) return;
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  window.parent.postMessage({ type: 'synapse:switch', key: ev.key }, '*');
+}, true);
+for (const type of ['mouseup', 'auxclick']) addEventListener(type, (ev) => {
+  if (window.parent === window || (ev.button !== 3 && ev.button !== 4)) return;
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  if (type === 'mouseup') window.parent.postMessage({ type: ev.button === 3 ? 'synapse:close' : 'synapse:forward' }, '*');
+}, true);
+$('gear').onclick = () => {
+  if (window.parent !== window) return window.parent.postMessage({ type: 'synapse:settings' }, '*');
+  const on = $('hints').classList.toggle('show'); $('gear').classList.toggle('on', on);
+};
 addEventListener('keydown', (ev) => {
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'f') { ev.preventDefault(); $('q').focus(); $('q').select(); return; }
   if (ev.target.tagName === 'INPUT') return;
   if (ev.key === '/') { ev.preventDefault(); $('q').focus(); return; }
   if (ev.key === 'f' || ev.key === 'F') fit();
   if (ev.key === 'a' || ev.key === 'A') { arrange(); toast('Arranged by project'); }
-  if (ev.key === 'Escape') { if (viewer.classList.contains('open')) return closeViewer(); selected = null; closePanel(); }
+  if (ev.key === 'Escape') { if (viewer.classList.contains('open')) return closeViewer(); selected = null; closePanel(); closeCmenu(); $('hints').classList.remove('show'); $('gear').classList.remove('on'); }
   if ((ev.key === 'Backspace' || ev.key === 'Delete') && selected?.type === 'edge') removeEdge(selected.id);
 });
 
@@ -561,12 +710,12 @@ function revealSelected() {
   if (sx > limit) cam.tx -= sx - limit + 40;
 }
 function fit(instant) {
-  const live = [...agents.values()].filter((n) => !n.dying);
+  const live = [...agents.values()].filter((n) => !n.dying && !n.hidden);
   if (!live.length) return;
   const xs = live.map((n) => n.x), ys = live.map((n) => n.y);
   const minX = Math.min(...xs) - 120, maxX = Math.max(...xs) + 120, minY = Math.min(...ys) - 110, maxY = Math.max(...ys) + 130;
-  // leave room for the projects legend on the left and the panel on the right
-  const left = W > 900 ? 210 : 0, availW = W - left - (selected?.type === 'node' ? 390 : 0);
+  // leave room for the panel on the right (the projects legend is a small chip now)
+  const left = 0, availW = W - left - (selected?.type === 'node' ? 390 : 0);
   const k = clamp(Math.min(availW / (maxX - minX), (H - 160) / (maxY - minY)), 0.35, 1.25);
   cam.tk = k; cam.tx = left + availW / 2 - ((minX + maxX) / 2) * k; cam.ty = H / 2 + 20 - ((minY + maxY) / 2) * k;
   if (instant) Object.assign(cam, { x: cam.tx, y: cam.ty, k: cam.tk });
@@ -591,13 +740,13 @@ function searchAgents(q) {
   if (!words.length) return [];
   const out = [];
   for (const [id, n] of agents) {
-    if (n.dying) continue;
+    if (n.dying || n.hidden) continue;
     // every word has to match some field; highlight the matches on the best field
     let total = 0, top = null;
     const idx = {};
     for (const w of words) {
       let best = null;
-      for (const [field, weight] of [['name', 1], ['project', 0.85], ['kind', 0.7], ['cwd', 0.5]]) {
+      for (const [field, weight] of [['name', 1], ['project', 0.85], ['forkQ', 0.8], ['kind', 0.7], ['cwd', 0.5]]) {
         const m = fuzzy(w, n.a[field] || '');
         if (m && (!best || m.score * weight > best.score)) best = { score: m.score * weight, field, idx: m.idx };
       }
@@ -696,14 +845,40 @@ function renderLegend(live) {
     const g = groups.get(n.a.projectKey) || { label: n.a.project, shade: shadeOf(n), n: 0 };
     g.n++; groups.set(n.a.projectKey, g);
   }
-  $('legend').innerHTML = (groups.size ? '<div class="head">Projects</div>' : '') + [...groups.values()].sort((a, b) => b.n - a.n).map((g) =>
-    `<div class="item"><span class="sw" style="${cssShade(g.shade)}"></span>${esc(g.label)}<span class="n">${g.n}</span></div>`).join('');
+  // skip identical rewrites so a hovered list does not flicker or lose its scroll position
+  const html = groups.size ? `<div class="head">Projects<span class="n">${groups.size}</span></div><div class="list">` + [...groups.entries()].sort(([, a], [, b]) => b.n - a.n).map(([key, g]) =>
+    `<div class="item" data-key="${esc(key)}"><span class="sw" style="${cssShade(g.shade)}"></span>${esc(g.label)}<span class="n">${g.n}</span></div>`).join('') + '</div>' : '';
+  if (html === legendHTML) return;
+  const list = $('legend').querySelector('.list'), top = list?.scrollTop || 0;
+  $('legend').innerHTML = legendHTML = html;
+  const nl = $('legend').querySelector('.list'); if (nl) nl.scrollTop = top;
+}
+let legendHTML = '', legendHot = null, groupPing = null;
+$('legend').addEventListener('click', (ev) => { const it = ev.target.closest('.item'); if (it) flyToGroup(it.dataset.key); });
+$('legend').addEventListener('mouseover', (ev) => { legendHot = ev.target.closest('.item')?.dataset.key || null; });
+$('legend').addEventListener('mouseleave', () => { legendHot = null; });
+
+// move the camera so the whole project frame fills the middle of the view, then flash its frame
+function flyToGroup(key) {
+  const g = groupRects().find((r) => r.key === key); if (!g) return;
+  const w = g.x1 - g.x0, h = g.y1 - g.top;
+  const k = clamp(Math.min((W * 0.7) / w, (H * 0.6) / h), 0.45, 1.4);
+  cam.tk = k; cam.tx = W / 2 - ((g.x0 + g.x1) / 2) * k; cam.ty = H / 2 - ((g.top + g.y1) / 2) * k;
+  groupPing = { key, t: performance.now() };
 }
 
 // ---------- panel ----------
 const panel = $('panel');
 function closePanel() { panel.classList.remove('open'); }
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+// the panel's fork section: who this agent was forked from, and what was forked from it
+function forkSection(a) {
+  const par = a.forkOf && agents.get(a.forkOf);
+  const kids = [...agents.values()].filter((o) => !o.dying && o.a?.forkOf === a.id);
+  if (!par && !kids.length) return '';
+  const line = (o, arrow, q) => `<div class="link"><span class="arrow">${arrow}</span><span class="name" data-go="${o.a.id}">${esc(o.a.name)}</span><span class="fq" title="${esc(q || '')}">${esc(q || '')}</span></div>`;
+  return `<section><h3>Fork tree</h3>${par ? line(par, '⑂ from', a.forkQ) : ''}${kids.map((o) => line(o, '↳', o.a.forkQ)).join('')}</section>`;
+}
 async function renderPanel(fetchFeed) {
   if (panel.querySelector('input.rename')) return; // don't wipe a rename in progress
   const n = agents.get(selected?.id); if (!n) return closePanel();
@@ -730,6 +905,7 @@ async function renderPanel(fetchFeed) {
       </div>
       <button class="close" id="closeP" aria-label="Close">×</button>
     </header>
+    ${forkSection(a)}
     <section><h3>Reads context from</h3>${inc.map((e) => row(e, e.from, '←')).join('') || '<div class="none">Nothing yet. Drag from another agent\'s ring onto this one.</div>'}</section>
     <section><h3>Shares context with</h3>${out.map((e) => row(e, e.to, '→')).join('') || '<div class="none">Not shared. Drag from this ring to another agent.</div>'}</section>
     ${keepFeed}`;
@@ -927,6 +1103,37 @@ function startRename() {
     renderPanel(false);
   };
   input.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Enter') finish(true); if (ev.key === 'Escape') finish(false); });
+  input.addEventListener('synapse:cancel-edit', () => finish(false));
+  input.addEventListener('blur', () => finish(true));
+}
+
+// a project's frame tab turns into an input laid over the canvas: Enter saves, Escape cancels, an empty name resets
+let renamingGroup = null;
+function startProjectRename(key) {
+  const g = groupRects().find((r) => r.key === key);
+  if (!g || renamingGroup) return;
+  const input = document.createElement('input');
+  input.className = 'frame-rename'; input.value = g.label; input.maxLength = 48; input.spellcheck = false;
+  // sized like the tab at the current zoom
+  const k = cam.k;
+  input.style.left = `${cam.x + g.x0 * k}px`; input.style.top = `${cam.y + (g.y0 - 20) * k}px`;
+  input.style.width = `${Math.max(180 * k, (g.x1 - g.x0) * k * 0.6)}px`; input.style.height = `${20 * k}px`;
+  input.style.fontSize = `${10.5 * k}px`; input.style.padding = `0 ${6 * k}px 0 ${21 * k}px`;
+  document.body.appendChild(input); input.focus(); input.select();
+  renamingGroup = key;
+  let done = false;
+  const finish = async (save) => {
+    if (done) return; done = true;
+    const name = input.value.trim();
+    input.remove(); renamingGroup = null;
+    if (!save || name === g.label) return;
+    const r = await fetch('/api/projects/name', { method: 'POST', body: JSON.stringify({ key, name }) });
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok) toast(out.error || 'Could not rename');
+    else toast(name ? `Renamed to ${out.label}` : `Back to ${out.label}`);
+  };
+  input.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Enter') finish(true); if (ev.key === 'Escape') finish(false); });
+  input.addEventListener('synapse:cancel-edit', () => finish(false));
   input.addEventListener('blur', () => finish(true));
 }
 
@@ -949,6 +1156,24 @@ function drawGrid() {
   for (let x = ox; x < W; x += step) for (let y = oy; y < H; y += step) ctx.fillRect(x - s / 2, y - s / 2, s, s);
 }
 
+// fork lineage: a dashed hairline from the agent to the one forked from it, ⑂ at the child's end
+function drawForks(t) {
+  for (const [id, n] of agents) {
+    const a = n.a; if (!a?.forkOf || n.dying) continue;
+    const g = edgeGeom({ from: a.forkOf, to: id }); if (!g) continue;
+    const fade = ease(clamp((t - Math.max(g.a.born, g.b.born)) / 900, 0, 1));
+    ctx.save();
+    ctx.globalAlpha = (matches && !(matches.has(a.forkOf) && matches.has(id)) ? 0.12 : 0.6) * fade;
+    ctx.strokeStyle = V.ink; ctx.lineWidth = 1; ctx.setLineDash([3, 5]);
+    const t0 = tAtDist(g, false, R + 8), t1 = tAtDist(g, true, R + 22);
+    const p0 = qpt(g, t0), p1 = qpt(g, t1);
+    ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.quadraticCurveTo(g.cx, g.cy, p1.x, p1.y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = V.ink; ctx.font = '11px "Fragment Mono", ui-monospace, monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('⑂', p1.x, p1.y);
+    ctx.restore();
+  }
+}
 function drawEdge(e, t) {
   const g = edgeGeom(e); if (!g) return;
   const fa = g.a.dying ? 1 - clamp((t - g.a.dying) / 600, 0, 1) : 1;
@@ -997,6 +1222,7 @@ function drawEdge(e, t) {
 }
 
 function drawNode(id, n, t) {
+  if (n.hidden) return;
   const a = n.a, c = V.ink;
   const appear = ease(clamp((t - n.born) / 700, 0, 1));
   const vanish = n.dying ? 1 - clamp((t - n.dying) / 600, 0, 1) : 1;
@@ -1062,7 +1288,8 @@ function drawNode(id, n, t) {
   knockout(name, 0, R + 22);
   ctx.fillStyle = V.ink; ctx.fillText(name, 0, R + 22);
   ctx.font = '10px "Fragment Mono", ui-monospace, monospace';
-  const sub = `${busy ? '■' : '□'} ${a.kind} · ${short(a.project, 22)}`.toUpperCase();
+  const hiddenKids = forkChildren(id).filter((child) => child.hidden).length;
+  const sub = hiddenKids ? `+${hiddenKids} children collapsed · right-click` : `${busy ? '■' : '□'} ${a.kind} · ${a.forkQ ? `⑂ ${short(a.forkQ, 22)}` : short(a.project, 22)}`.toUpperCase();
   knockout(sub, 0, R + 38);
   ctx.fillStyle = busy ? V.sig : rgba(V.ink, 0.5);
   ctx.fillText(sub, 0, R + 38);
@@ -1114,7 +1341,7 @@ function drawLinkPreview(t) {
 function projectGroups() {
   const groups = new Map();
   for (const [id, n] of agents) {
-    if (n.dying || !n.a) continue;
+    if (n.dying || n.hidden || !n.a) continue;
     const g = groups.get(n.a.projectKey) || { label: n.a.project, shade: shadeOf(n), nodes: [] };
     g.nodes.push([id, n]); groups.set(n.a.projectKey, g);
   }
@@ -1132,11 +1359,15 @@ function drawGroups() {
   const s = 1 / cam.k;
   for (const g of groupRects()) {
     const { x0, x1, y0, y1 } = g;
-    const hot = (hover?.type === 'group' && hover.key === g.key) || (drag?.mode === 'group' && drag.key === g.key);
+    const hot = (hover?.type === 'group' && hover.key === g.key) || (drag?.mode === 'group' && drag.key === g.key) || legendHot === g.key;
     const dim = matches && !g.nodes.some(([id]) => matches.has(id));
     ctx.globalAlpha = dim ? 0.3 : 1;
     ctx.fillStyle = rgba(V.ink, hot ? 0.05 : 0.025); ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
     ctx.strokeStyle = rgba(V.ink, hot ? 0.7 : 0.28); ctx.lineWidth = s; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    const pp = groupPing?.key === g.key ? (performance.now() - groupPing.t) / 1400 : 1;
+    if (pp < 1) { // just flown to: an orange frame that fades out
+      ctx.strokeStyle = rgba(V.sig, 1 - pp); ctx.lineWidth = (2.5 * (1 - pp) + 1) * s; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0); ctx.lineWidth = s;
+    }
     // tab: shade swatch, project name, agent count
     ctx.font = '10.5px "Fragment Mono", ui-monospace, monospace'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
     const text = `${g.label.toUpperCase()}  ${g.nodes.length}`, tw = ctx.measureText(text).width + 30;
@@ -1209,7 +1440,7 @@ function saveAll() {
 
 function physics() {
   // soft separation so nodes never overlap
-  const list = [...agents.entries()].filter(([, n]) => !n.dying);
+  const list = [...agents.entries()].filter(([, n]) => !n.dying && !n.hidden);
   for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
     const [ia, a] = list[i], [ib, b] = list[j];
     const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 0.01, min = 215;
@@ -1248,6 +1479,7 @@ function frame(t) {
   ctx.setTransform(dpr * cam.k, 0, 0, dpr * cam.k, dpr * cam.x, dpr * cam.y);
   drawGroups();
   for (const e of edges) drawEdge(e, t);
+  drawForks(t);
   ctx.globalAlpha = 1;
   drawPackets(t);
   if (drag?.mode === 'link') drawLinkPreview(t);

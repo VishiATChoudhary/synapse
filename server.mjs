@@ -7,7 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { exec, execFile } from 'node:child_process';
 import { pipeline } from 'node:stream';
-import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, projectOf, colorOf, renameAgent } from './lib.mjs';
+import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, projectOf, colorOf, renameAgent, renameProject } from './lib.mjs';
 import { createEdge, removeEdge } from './ops.mjs';
 
 const PORT = Number(process.env.PORT || 4747);
@@ -44,7 +44,7 @@ function agents() {
       }
     }
     const proj = projectOf(a.cwd);
-    return { ...a, project: proj.label, projectKey: proj.key, color: colorOf(proj.key), lastActivity, preview };
+    return { ...a, project: proj.label, projectAuto: proj.autoLabel, projectKey: proj.key, color: colorOf(proj.key), lastActivity, preview };
   });
 }
 
@@ -159,6 +159,16 @@ const server = http.createServer(async (req, res) => {
     if (!a) return json(res, 404, { error: 'gone' });
     try {
       const out = renameAgent(a, (await body(req)).name);
+      lastSig = '';
+      broadcast('state', state());
+      return json(res, 200, out);
+    } catch (e) { return json(res, 409, { error: e.message }); }
+  }
+  if (p === '/api/projects/name' && req.method === 'POST') {
+    const { key, name } = await body(req);
+    if (!agents().some((a) => a.projectKey === key)) return json(res, 404, { error: 'gone' });
+    try {
+      const out = renameProject(key, name);
       lastSig = '';
       broadcast('state', state());
       return json(res, 200, out);

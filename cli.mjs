@@ -10,8 +10,9 @@
 //   synapse inbox                      messages sent to you
 //   synapse agents                     every live agent
 //   synapse rename [agent] <new name>  rename an agent (yourself if no agent given); empty name resets
+//   synapse rename-project <project> <new name>  rename a project (frame on the canvas); empty name resets
 //   synapse ui                         start the canvas (http://localhost:4747)
-import { agentForProcess, listAgents, findAgent, renameAgent } from './lib.mjs';
+import { agentForProcess, listAgents, findAgent, renameAgent, projectOf, renameProject } from './lib.mjs';
 import * as ops from './ops.mjs';
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -43,9 +44,18 @@ try {
       out = renameAgent(target, (args.length > 1 ? args.slice(1) : args).join(' '));
       break;
     }
+    case 'rename-project': {
+      // `synapse rename-project <project> <new name>`: <project> is its current name (case-insensitive)
+      const live = new Map(listAgents().map((a) => { const p = projectOf(a.cwd); return [p.key, p]; }));
+      const want = String(args[0] || '').toLowerCase();
+      const hit = [...live.values()].filter((p) => p.label.toLowerCase() === want || p.autoLabel.toLowerCase() === want);
+      if (hit.length !== 1) throw new Error(hit.length ? `"${args[0]}" matches several projects` : `no project is called "${args[0]}"`);
+      out = renameProject(hit[0].key, args.slice(1).join(' '));
+      break;
+    }
     case 'agents': out = listAgents().map(({ name, id, kind, cwd, status }) => ({ name, id, kind, cwd, status })); break;
     default:
-      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | agents | rename [agent] <name>');
+      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | agents | rename [agent] <name> | rename-project <project> <name>');
       process.exit(cmd ? 1 : 0);
   }
   if (cmd === 'ui') { /* server keeps running */ }

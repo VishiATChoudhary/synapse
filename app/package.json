@@ -1,0 +1,28 @@
+{
+  "name": "synapse-app",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Synapse desktop: projects, worktrees, agent terminals and fork stacks",
+  "main": "main.mjs",
+  "type": "module",
+  "scripts": {
+    "start": "electron .",
+    "test:worktrees": "node tests/worktrees.mjs && node tests/worktrees-ui.cjs",
+    "test:navigation": "node tests/navigation.cjs",
+    "test:keys": "electron tests/keys.cjs",
+    "test:library": "electron tests/library.cjs",
+    "test:tabs": "node tests/tabs.cjs",
+    "test:drag": "node tests/drag.cjs",
+    "rebuild": "electron-rebuild -f -w node-pty"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.1",
+    "electron": "^44.0.0"
+  }
+}

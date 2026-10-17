@@ -1,0 +1,59 @@
+{
+  "appId": "dev.synapse.desktop",
+  "productName": "Synapse",
+  "electronVersion": "44.7.2",
+  "directories": {
+    "app": ".",
+    "output": "dist",
+    "buildResources": "app/build"
+  },
+  "asar": false,
+  "npmRebuild": false,
+  "files": [
+    "lib.mjs",
+    "ops.mjs",
+    "hook.mjs",
+    "mcp.mjs",
+    "cli.mjs",
+    "demo.mjs",
+    "server.mjs",
+    "skill/**",
+    "public/**",
+    "app/main.mjs",
+    "app/preload.cjs",
+    "app/worktrees.mjs",
+    "app/renderer/**",
+    "app/node_modules/**",
+    "!app/node_modules/electron/**",
+    "!app/node_modules/@electron/**",
+    "!app/node_modules/.bin/**",
+    "!**/*.map",
+    "!**/README.md",
+    "!**/CHANGELOG.md"
+  ],
+  "mac": {
+    "category": "public.app-category.developer-tools",
+    "icon": "app/build/icon.png",
+    "target": [
+      "dmg",
+      "dir"
+    ],
+    "hardenedRuntime": false,
+    "gatekeeperAssess": false
+  },
+  "dmg": {
+    "title": "Synapse",
+    "contents": [
+      {
+        "x": 150,
+        "y": 190
+      },
+      {
+        "x": 390,
+        "y": 190,
+        "type": "link",
+        "path": "/Applications"
+      }
+    ]
+  }
+}
