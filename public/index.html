@@ -768,8 +768,9 @@ const URL_RE = /\bhttps?:\/\/[^\s<>"'`\])]+/g;
 async function linkFiles(root, cwd) {
   // bare urls first, so the path pass below never sees their slashes
   const texts = [], urls = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (n) => n.parentElement.closest('a, .who') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
-  while (urls.nextNode()) if (URL_RE.test(urls.currentNode.data)) texts.push(urls.currentNode);
+  while (urls.nextNode()) if (urls.currentNode.data.includes('http')) texts.push(urls.currentNode);
   for (const n of texts) {
+    if (!n.data.match(URL_RE)) continue;
     const frag = document.createDocumentFragment();
     let at = 0;
     for (const m of n.data.matchAll(URL_RE)) {
@@ -810,7 +811,7 @@ async function linkFiles(root, cwd) {
 
 // ---------- file viewer ----------
 const viewer = $('viewer');
-let vStack = [];
+let vStack = [], vReq = 0;
 const vBack = () => { vStack.pop(); const prev = vStack.at(-1); prev.url ? openUrl(prev.url, { back: true }) : openFile(prev.path, '', { back: true, mode: prev.mode }); };
 function closeViewer() { viewer.classList.remove('open'); vStack = []; }
 const fmtSize = (b) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
@@ -818,18 +819,19 @@ const rawUrl = (p) => `/api/file/raw?path=${encodeURIComponent(p)}`;
 async function openFile(target, cwd, { back = false, mode } = {}) {
   const lm = String(target).match(/(?::(\d+)(?:-(\d+))?(?::\d+)?|#L(\d+)(?:-L?(\d+))?)$/);
   const from = lm ? +(lm[1] || lm[3]) : 0, to = lm ? +(lm[2] || lm[4] || from) : 0;
-  const q = new URLSearchParams({ path: target, cwd: cwd || '' });
+  const q = new URLSearchParams({ path: target, cwd: cwd || '' }), req = ++vReq;
   const f = await fetch(`/api/file?${q}`).then((r) => r.json()).catch(() => ({ error: 'unreachable' }));
+  if (req !== vReq) return; // a later click won
   if (f.error) return toast(`Can't open ${target}`);
   if (!back) vStack.push({ path: f.path + (from ? `:${from}${to !== from ? `-${to}` : ''}` : ''), mode });
   const isMd = f.type === 'text' && /^(md|markdown|mdx)$/.test(f.ext);
   mode = mode || (isMd && !from ? 'rendered' : 'source');
   const parts = f.path.split('/').filter(Boolean);
   const crumbs = parts.slice(0, -1).map((p, i) => `<span class="fp" data-path="/${esc(parts.slice(0, i + 1).join('/'))}">${esc(p)}</span>`).join(' / ');
-  const lines = f.type === 'text' ? f.text.split('\n') : [];
+  const lines = f.type === 'text' ? f.text.split('\n') : [], MAX_LINES = 20000;
   const tags = [
     f.type === 'dir' ? `${f.entries.length} items` : f.type === 'text' ? `${lines.length} lines` : f.ext || f.type,
-    f.type !== 'dir' && fmtSize(f.size), `edited ${ago(f.mtime)}`, f.truncated && 'truncated at 1 MB',
+    f.type !== 'dir' && fmtSize(f.size), `edited ${ago(f.mtime)}`, (f.truncated || lines.length > MAX_LINES) && `showing ${lines.length > MAX_LINES ? `first ${MAX_LINES} lines` : 'first 1 MB'}`,
   ].filter(Boolean).map((t) => `<span class="tag">${esc(t)}</span>`).join('');
   const btn = (id, label) => `<button class="tag ren" id="${id}" type="button">${label}</button>`;
   let content;
@@ -840,7 +842,7 @@ async function openFile(target, cwd, { back = false, mode } = {}) {
   else if (f.type === 'pdf') content = `<iframe src="${rawUrl(f.path)}"></iframe>`;
   else if (f.type === 'binary') content = `<div class="note">Binary file, ${fmtSize(f.size)}. Open it in its own app instead.</div>`;
   else if (mode === 'rendered') content = `<div class="md">${md(f.text)}</div>`;
-  else content = `<div class="src">${lines.map((l, i) => `<div class="ln${i + 1 >= from && i + 1 <= to ? ' hit' : ''}"><span class="n">${i + 1}</span><span class="t">${esc(l) || ' '}</span></div>`).join('')}</div>`;
+  else content = `<div class="src">${lines.slice(0, MAX_LINES).map((l, i) => `<div class="ln${i + 1 >= from && i + 1 <= to ? ' hit' : ''}"><span class="n">${i + 1}</span><span class="t">${esc(l) || ' '}</span></div>`).join('')}</div>`;
   viewer.innerHTML = `
     <header>
       <h2>${esc(f.name)}${f.type === 'dir' ? '/' : ''}</h2>
@@ -866,6 +868,7 @@ async function openFile(target, cwd, { back = false, mode } = {}) {
 // web links open here too, never in the default browser. Sites that forbid framing get a note instead
 async function openUrl(url, { back = false } = {}) {
   if (!back) vStack.push({ url });
+  vReq++;
   const u = new URL(url);
   viewer.innerHTML = `
     <header>
@@ -887,12 +890,12 @@ async function openUrl(url, { back = false } = {}) {
   $('vWeb').textContent = r.error ? 'unreachable' : r.embeddable ? `${r.status}` : 'no embedding';
   if (r.error) body.innerHTML = `<div class="note">Couldn't reach ${esc(u.host)}: ${esc(r.error)}.</div>`;
   else if (!r.embeddable) body.innerHTML = `<div class="note">${esc(u.host)} doesn't allow being shown inside another page, so it can't preview here. Copy the link to open it yourself.</div>`;
-  else { body.classList.add('web'); body.innerHTML = `<iframe src="${esc(url)}" sandbox="allow-scripts allow-same-origin allow-forms" referrerpolicy="no-referrer"></iframe>`; }
+  else { body.classList.add('web'); body.innerHTML = `<iframe src="${esc(url)}" sandbox="allow-scripts allow-forms${u.origin === location.origin ? '' : ' allow-same-origin'}" referrerpolicy="no-referrer"></iframe>`; }
 }
 // catch every web link on the page, wherever it was rendered
 document.addEventListener('click', (ev) => {
   const a = ev.target.closest('a[href]');
-  if (!a || !/^https?:/.test(a.href) || new URL(a.href).origin === location.origin) return;
+  if (!a || !/^https?:/.test(a.href)) return;
   ev.preventDefault();
   openUrl(a.href);
 }, true);
