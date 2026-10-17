@@ -75,11 +75,11 @@ function statusOf(x) {
   if (x.kind === 'shell') return 'shell';
   const a = M.agents[x.pty];
   if (!a) return 'idle';
-  const st = a.status === 'busy' || a.status === 'working' || a.status === 'running' ? 'working' : a.status === 'waiting' || a.status === 'needs_input' ? 'waiting' : 'idle';
+  const st = agentWorking(a) ? 'working' : a.status === 'waiting' || a.status === 'needs_input' ? 'waiting' : 'idle';
   // an agent that has worked and gone quiet is done: its square lights green until it starts again
-  if (st === 'working') x.ran = true;
   return st === 'idle' && x.ran ? 'done' : st;
 }
+const agentWorking = (a) => a.status === 'busy' || a.status === 'working' || a.status === 'running';
 
 // ---------------------------------------------------------------- terminals
 
@@ -475,7 +475,10 @@ function moveItem(list, item, target, side) {
   out.splice(out.indexOf(target) + (side === 'after' ? 1 : 0), 0, item);
   return out;
 }
-function moveWorktree(p, from, to, side) {
+function moveWorktree(key, from, to, side) {
+  // state refreshes replace M.projects while a drag is on: move it in the current one
+  const p = M.projects.find((x) => x.key === key);
+  if (!p) return;
   p.worktrees = moveItem(p.worktrees, p.worktrees.find((w) => w.path === from), p.worktrees.find((w) => w.path === to), side);
   synapse.worktree.order(p.worktrees.map((w) => w.path)).catch((e) => toast(e.message, true));
 }
@@ -640,7 +643,7 @@ function renderTree() {
         wa.onclick = (e) => { e.stopPropagation(); pickProfile(w.path); };
         wh.appendChild(wa);
         wh.onclick = selectWorktree;
-        sortable(wh, wt, '.wt', (t, side) => moveWorktree(p, w.path, t.dataset.path, side));
+        sortable(wh, wt, '.wt', (t, side) => moveWorktree(p.key, w.path, t.dataset.path, side));
         wt.appendChild(wh);
         for (const s of M.slots.filter((s) => s.worktree === w.path)) {
           n++;
@@ -1561,6 +1564,7 @@ function apply(st) {
   for (const sl of M.slots) for (const x of sl.sessions) {
     const a = M.agents[x.pty];
     if (a?.synapseId && (a.transcript || !x.resume)) x.resume = { synapseId: a.synapseId, transcript: a.transcript || null };
+    if (a && agentWorking(a)) x.ran = true; // noted here, not on draw, so a folded workspace's agents count too
   }
   refreshPullRequests();
   render();
