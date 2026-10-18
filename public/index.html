@@ -1638,16 +1638,17 @@ function physics() {
       if (held !== rb.a.id) { rb.vx += ux * f; rb.vy += uy * f; }
     }
   }
-  // pull each agent gently toward the middle of its project, so projects form clusters
+  // pull each agent gently toward the middle of its project, so projects form clusters. Only free nodes
+  // count: a tree's children hang below its root and follow it, so counting them drags the root down forever
   const mid = new Map();
-  for (const [, n] of list) { const m = mid.get(n.a.frameKey) || { x: 0, y: 0, c: 0 }; m.x += n.x; m.y += n.y; m.c++; mid.set(n.a.frameKey, m); }
+  for (const [, n] of list) if (!n.slot) { const m = mid.get(n.a.frameKey) || { x: 0, y: 0, c: 0 }; m.x += n.x; m.y += n.y; m.c++; mid.set(n.a.frameKey, m); }
   for (const [id, n] of list) {
     const m = mid.get(n.a.frameKey);
-    if (m.c > 1 && held !== id && !n.slot) { n.vx += (m.x / m.c - n.x) * 0.0016; n.vy += (m.y / m.c - n.y) * 0.0016; }
+    if (m?.c > 1 && held !== id && !n.slot) { n.vx += (m.x / m.c - n.x) * 0.0016; n.vy += (m.y / m.c - n.y) * 0.0016; }
   }
   // and, more gently, toward the middle of their repo, so a repo's worktree frames stay together
   const repo = new Map();
-  for (const [, n] of list) { const m = repo.get(n.a.projectKey) || { x: 0, y: 0, c: 0, f: new Set() }; m.x += n.x; m.y += n.y; m.c++; m.f.add(n.a.frameKey); repo.set(n.a.projectKey, m); }
+  for (const [, n] of list) if (!n.slot) { const m = repo.get(n.a.projectKey) || { x: 0, y: 0, c: 0, f: new Set() }; m.x += n.x; m.y += n.y; m.c++; m.f.add(n.a.frameKey); repo.set(n.a.projectKey, m); }
   for (const [id, n] of list) {
     const m = repo.get(n.a.projectKey);
     if (m.f.size > 1 && drag?.id !== id) { n.vx += (m.x / m.c - n.x) * 0.0008; n.vy += (m.y / m.c - n.y) * 0.0008; }
