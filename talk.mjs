@@ -116,7 +116,9 @@ export function receiveAsk(peer, item, now = Date.now()) {
     c.turns.push({ seq: item.seq, q: question, a: null, askedAt: now });
     c.lastAt = now;
     s.queue.push({ conv: c.id, seq: item.seq });
-    const position = s.queue.filter((j) => convOf(s, j.conv)?.target === c.target).length;
+    // the answer already running counts: behind one answering, you are second
+    const ahead = (list) => list.filter((j) => convOf(s, j.conv)?.target === c.target).length;
+    const position = ahead(s.queue) + ahead(s.running);
     return [{ type: 'talk-status', conv: c.id, seq: item.seq, state: 'queued', position }];
   });
 }

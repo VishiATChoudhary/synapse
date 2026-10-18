@@ -133,8 +133,7 @@ test('3 a busy line queues the second question, then answers it', { skip }, asyn
   assert.equal(fakeOut(a).stdin, 'first of two');
   assert.equal(fakeOut(b).stdin, 'second of two');
   const turns = convs(HOME_A, 'asker').find((c) => c.id === conv).turns;
-  // the position counts the waiting line, so with the first already answering she is first in it
-  assert.ok(turns.find((t) => t.q === 'second of two').position >= 1, 'alice was told where she stands');
+  assert.equal(turns.find((t) => t.q === 'second of two').position, 2, 'behind the running answer she is second');
   const owner = convs(HOME_B, 'owner')[0].turns;
   assert.ok(owner.find((t) => t.q === 'first of two').answeredAt <= owner.find((t) => t.q === 'second of two').answeredAt, 'answered in order');
 });
@@ -142,12 +141,12 @@ test('3 a busy line queues the second question, then answers it', { skip }, asyn
 test('7 sync only: reading works, asking says talk is off', { skip }, async () => {
   const read = await cli(HOME_A, ['read', 'api-review@bob'], { SYNAPSE_AGENT: WEB });
   assert.match(read, /P1/);
-  await assert.rejects(aliceAsk('api-review@bob', 'anything?'), /reading only/);
+  await assert.rejects(aliceAsk('api-review@bob', 'anything?'), /talk is off/);
   // and turning talk off again closes the line
   await cliJSON(HOME_B, ['talk', 'ml-eval', 'off']);
   await until(() => !convs(HOME_B, 'owner').some((c) => c.status === 'open'));
   await aliceSees('demo-ml-eval', null);
-  await assert.rejects(aliceAsk('ml-eval@bob', 'still there?'), /reading only/);
+  await assert.rejects(aliceAsk('ml-eval@bob', 'still there?'), /talk is off/);
 });
 
 test('5 an agent bob never shared cannot be asked', { skip }, async () => {

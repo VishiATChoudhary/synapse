@@ -152,7 +152,7 @@ export async function ask(me, query, question, { conversation, waitMs = talk.LIM
   if (!other.remote) throw new Error(`${other.name} runs on this machine. Use "send" to message it; ask is for a friend's agent.`);
   const edges = readJSON(FILES.edges, []);
   if (!edges.some((e) => e.mirrored && e.from === other.id && e.to === me.id && e.mode === 'talk')) {
-    throw new Error(`${other.remote.owner} shares ${other.name} with you for reading only. Questions work once ${other.remote.owner} turns on talk for it (use "read" meanwhile).`);
+    throw new Error(`talk is off: ${other.remote.owner} shares ${other.name} with you for reading only. Questions work once ${other.remote.owner} turns on talk for it (use "read" meanwhile).`);
   }
   const q = String(question ?? '').trim();
   if (!q) throw new Error('Give a question to ask.');
