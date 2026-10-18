@@ -123,7 +123,7 @@ test('2 a follow-up resumes the same fork', { skip }, async () => {
 });
 
 test('3 a busy line queues the second question, then answers it', { skip }, async () => {
-  setSleep(2500);
+  setSleep(4000);
   const conv = convs(HOME_B, 'owner')[0].id;
   const one = aliceAsk('ml-eval@bob', 'first of two', ['--conversation', conv]);
   await until(() => convs(HOME_B, 'owner')[0].turns.some((t) => t.q === 'first of two'));
@@ -150,8 +150,8 @@ test('7 sync only: reading works, asking says talk is off', { skip }, async () =
 });
 
 test('5 an agent bob never shared cannot be asked', { skip }, async () => {
-  await assert.rejects(aliceAsk('docs@bob', 'hello?'));
-  await assert.rejects(aliceAsk('web-checkout@bob', 'hello?'));
+  await assert.rejects(aliceAsk('docs@bob', 'hello?'), /No live agent matches "docs@bob"/);
+  await assert.rejects(aliceAsk('web-checkout@bob', 'hello?'), /No live agent matches "web-checkout@bob"/);
   assert.equal(convs(HOME_B, 'owner').filter((c) => c.target === 'demo-docs').length, 0);
 });
 
@@ -163,8 +163,8 @@ test('9 a codex target is answered by replaying its transcript', { skip }, async
   assert.ok(!out.argv.includes('--resume'));
   assert.ok(!out.argv.includes('--fork-session'));
   assert.ok(out.argv.includes('--session-id'));
-  assert.match(out.argv.join(' '), /--tools\s+--strict-mcp-config|--tools/);
-  assert.match(out.stdin, /Token bucket per tenant/);
+  assert.ok(out.argv.includes('--tools') && out.argv.includes('--strict-mcp-config'));
+  assert.ok(out.stdin.includes('Token bucket per tenant in Redis. Limits live in `config/limits.yaml`. 42 tests passing.'), 'a line of its demo transcript');
   assert.match(out.stdin, /Where do the limits live\?/);
   assert.equal(convs(HOME_B, 'owner').find((c) => c.target === 'demo-api-rate-limit').mode, 'replay');
 });
@@ -174,7 +174,8 @@ test('6 the owner cuts a conversation during a slow answer', { skip }, async () 
   await aliceSees('demo-api-auth', 'talk');
   setSleep(5000);
   const pending = aliceAsk('api-auth@bob', 'explain the refresh rotation');
-  await until(() => readJSON(path.join(HOME_B, 'talks.json'), {}).running?.length);
+  const pid = (await until(() => readJSON(path.join(HOME_B, 'talks.json'), {}).running?.find((r) => r.pid))).pid;
+  process.kill(pid, 0); // the answering child is alive before the cut
   const edge = edgesOf(HOME_B).find((e) => !e.mirrored && e.from === 'demo-api-auth' && e.to.startsWith('r-'));
   const cutAt = Date.now();
   const res = await fetch(`http://127.0.0.1:${portB}/api/edges/${edge.id}`, { method: 'DELETE' });
@@ -186,7 +187,8 @@ test('6 the owner cuts a conversation during a slow answer', { skip }, async () 
   assert.ok(Date.now() - cutAt < 5000, `told within 5 s (${Date.now() - cutAt} ms)`);
   assert.equal(readJSON(path.join(HOME_B, 'talks.json'), {}).running.length, 0);
   await until(() => !edgesOf(HOME_A).some((e) => e.mirrored && e.from.endsWith('-demo-api-auth')));
-  await assert.rejects(aliceAsk('api-auth@bob', 'one more?'));
+  await until(() => { try { process.kill(pid, 0); return false; } catch (e) { return e.code === 'ESRCH'; } }, 3000);
+  await assert.rejects(aliceAsk('api-auth@bob', 'one more?'), /No live agent matches "api-auth@bob"/);
 });
 
 test('10 both ways: each side asks the other at the same time', { skip }, async () => {
