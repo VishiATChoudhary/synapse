@@ -404,7 +404,23 @@ const asker = (extra = {}) => ({
   id: 'c9', role: 'asker', peer: 'm1', target: 'r-m1-x', status: 'open', turns: [{ seq: 1, q: 'hi', a: null }], createdAt: 1, lastAt: 1, ...extra,
 });
 
-test('malformed talk items never break pull', () => {
+// the production path: remote.sync() polling a stub relay that hands out `items` once (push is refused, which
+// leaves the outbox alone)
+const http = await import('node:http');
+const viaRelay = async (items) => {
+  let first = true;
+  const srv = http.createServer((req, res) => {
+    req.resume();
+    if (req.url === '/v1/poll') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ items: first ? items : [] })); first = false; }
+    else { res.statusCode = 500; res.end('{}'); }
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const cfg = readJSON(FILES.remote, {});
+  writeJSON(FILES.remote, { ...cfg, relay: `http://127.0.0.1:${srv.address().port}` });
+  try { await remote.sync().catch(() => {}); } finally { srv.close(); }
+};
+
+test('malformed talk items never break pull', async () => {
   reset(); talkEdge();
   writeJSON(FILES.remote, {
     relay: 'http://x', token: 't', blocked: [],
@@ -412,13 +428,13 @@ test('malformed talk items never break pull', () => {
   });
   writeJSON(path.join(home, 'remote', 'outbox.json'), []);
   const target = localAgents()[0].id;
-  assert.doesNotThrow(() => remote.handleItems(remote.config(), [
+  await viaRelay([
     null, 7, { type: 'talk-ask', from: 'm1', conv: 'a', seq: 1, target, asker: 'x', question: 'q'.repeat(10_000) },
     { type: 'talk-ask', from: 'm1', conv: 'b', seq: 'x', target, asker: 'x', question: 'q' },
     { type: 'talk-answer', from: 'm1', conv: 'nope', seq: 1, answer: 'a' },
     { type: 'talk-ask', from: 'm2', conv: 'd', seq: 1, target, asker: 'x', question: 'q' },
     { type: 'talk-end', from: 'm3', conv: 'e' },
-  ]));
+  ]);
   assert.deepEqual(state().conversations || [], []);
   const out = readJSON(path.join(home, 'remote', 'outbox.json'), []);
   assert.ok(out.length >= 1);
@@ -649,4 +665,24 @@ test('ask clears waitUntil when it leaves by a throw', async () => {
   const inbox = lib.takeInbox(me().id);
   assert.equal(inbox.length, 1);
   assert.match(inbox[0].text, /mid/);
+});
+
+test('a sync with an empty mailbox still sweeps a dead waiter\'s answer', async () => {
+  sharedWithMe();
+  writeJSON(FILES.talks, { conversations: [asker({ targetName: 'api', peerName: 'Robert', asker: me().id, askerName: me().name, turns: [{ seq: 1, q: 'hi', a: 'stored', waitUntil: Date.now() - 1000 }] })] });
+  await viaRelay([]);
+  const inbox = lib.takeInbox(me().id);
+  assert.equal(inbox.length, 1);
+  assert.match(inbox[0].text, /stored/);
+  await viaRelay([]);
+  assert.equal(lib.takeInbox(me().id).length, 0);
+});
+
+test('ending your own conversation puts nothing in the inbox', async () => {
+  sharedWithMe();
+  const r = await ops.ask(me(), 'api@bob', 'why?', { waitMs: 0, sync: noSync });
+  ops.endTalk(me(), r.conversation);
+  talk.sweepAnswers(Date.now() + 200_000);
+  await viaRelay([]);
+  assert.equal(lib.takeInbox(me().id).length, 0);
 });

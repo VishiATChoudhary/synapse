@@ -251,7 +251,11 @@ async function doSync({ timeout = 8000 } = {}) {
     const pulled = await pull(config(), timeout);
     const pushed = await push(config(), timeout);
     return { pulled, pushed };
-  } finally { unlock(); }
+  } finally {
+    // a synapse_ask that died leaves its answer behind: every sync, empty poll or failed push too, hands it to the inbox
+    try { talk.sweepAnswers(); } catch {}
+    unlock();
+  }
 }
 
 // ---- receiving
@@ -321,14 +325,6 @@ function routeTalk(m, it) {
     else talk.receiveReply(m, it);
   } catch {}
 }
-export function handleItems(c, items) {
-  for (const it of Array.isArray(items) ? items : []) {
-    if (it && typeof it.type === 'string' && it.type.startsWith('talk-') && it.from && c.peers[it.from] && !c.blocked.includes(it.from)) routeTalk(it.from, it);
-  }
-  // a waiting synapse_ask that died leaves its answer behind; any later sync hands it to the inbox
-  try { talk.sweepAnswers(); } catch {}
-}
-
 async function pull(c, timeout) {
   const { items } = await call(c.relay, '/v1/poll', {}, c.token, timeout);
   if (!items?.length) return 0;
@@ -336,6 +332,7 @@ async function pull(c, timeout) {
   let cfgChanged = false;
   const revoked = new Set();
   for (const it of items) {
+    if (!it || typeof it !== 'object') continue; // one bad item must not stop the rest
     // a synapse request was answered (from the cloud, not from a friend's machine)
     if (it.type === 'request' && typeof it.id === 'string') { noteRequest(it); continue; }
     // trust ended: the cloud tells both machines to drop the pairing (friends cannot send this, it carries no pair)

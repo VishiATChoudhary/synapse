@@ -242,6 +242,7 @@ export function endAsked(convId, me, now = Date.now()) {
     if (!c || c.role !== 'asker' || c.asker !== me.id) throw new Error(`No conversation "${convId}".`);
     if (c.status !== 'open') return null;
     end(c, 'asker', null, now);
+    c.endTaken = true; // her own end is never news to her inbox
     return { peer: c.peer, conv: c.id };
   });
 }
