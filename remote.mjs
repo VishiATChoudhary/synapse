@@ -325,6 +325,8 @@ export function handleItems(c, items) {
   for (const it of Array.isArray(items) ? items : []) {
     if (it && typeof it.type === 'string' && it.type.startsWith('talk-') && it.from && c.peers[it.from] && !c.blocked.includes(it.from)) routeTalk(it.from, it);
   }
+  // a waiting synapse_ask that died leaves its answer behind; any later sync hands it to the inbox
+  try { talk.sweepAnswers(); } catch {}
 }
 
 async function pull(c, timeout) {

@@ -167,15 +167,20 @@ export async function ask(me, query, question, { conversation, waitMs = talk.LIM
   if (offline) return done({ status: 'offline', note: `${other.remote.owner} looks offline. The question is queued; the answer will arrive in synapse_inbox.` });
 
   const deadline = now() + waitMs;
-  for (;;) {
-    await Promise.resolve(sync()).catch(() => {});
-    const over = now() >= deadline;
-    const got = talk.takeAnswer(conv, seq, { final: over });
-    if (got.answer != null) return done({ answer: got.answer });
-    if (got.ended) return done({ status: 'ended', reason: got.reason, note: `The conversation ended (${got.reason}${got.note ? `: ${got.note}` : ''}). Ask again to start a new one.` });
-    if (got.gone) return done({ status: 'ended', reason: 'error', note: 'The conversation is gone.' });
-    if (over) return done({ status: 'queued', note: WAIT_NOTE });
-    await sleep(Math.max(0, Math.min(interval, deadline - now())));
+  try {
+    for (;;) {
+      await Promise.resolve(sync()).catch(() => {});
+      const over = now() >= deadline;
+      const got = talk.takeAnswer(conv, seq, { final: over });
+      if (got.answer != null) return done({ answer: got.answer });
+      if (got.ended) return done({ status: 'ended', reason: got.reason, note: `The conversation ended (${got.reason}${got.note ? `: ${got.note}` : ''}). Ask again to start a new one.` });
+      if (got.gone) return done({ status: 'ended', reason: 'error', note: 'The conversation is gone.' });
+      if (over) return done({ status: 'queued', note: WAIT_NOTE });
+      await sleep(Math.max(0, Math.min(interval, deadline - now())));
+    }
+  } finally {
+    // however we leave (a throw, a cancel), the turn must not stay held back from the inbox
+    talk.release(conv, seq);
   }
 }
 

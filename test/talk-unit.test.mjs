@@ -616,3 +616,37 @@ test('endTalk refuses a conversation that is not yours', () => {
   assert.throws(() => ops.endTalk(me(), 'o1'), /conversation/i);
   assert.throws(() => ops.endTalk(me(), 'nope'), /conversation/i);
 });
+
+test('answer survives a waiter that died', () => {
+  sharedWithMe();
+  const t0 = 1_000_000;
+  writeJSON(FILES.talks, { conversations: [asker({ targetName: 'api', peerName: 'Robert', asker: me().id, askerName: me().name, turns: [{ seq: 1, q: 'hi', a: 'stored', waitUntil: t0 + 90_000 }] })] });
+  talk.sweepAnswers(t0 + 1000); // the waiter's deadline has not passed: still its to return
+  assert.equal(lib.takeInbox(me().id).length, 0);
+  talk.sweepAnswers(t0 + 90_001);
+  const inbox = lib.takeInbox(me().id);
+  assert.equal(inbox.length, 1);
+  assert.match(inbox[0].text, /stored/);
+  talk.sweepAnswers(t0 + 200_000);
+  assert.equal(lib.takeInbox(me().id).length, 0);
+});
+
+test('a taken answer is not swept into the inbox', () => {
+  sharedWithMe();
+  writeJSON(FILES.talks, { conversations: [asker({ targetName: 'api', peerName: 'Robert', asker: me().id, turns: [{ seq: 1, q: 'hi', a: 'x', taken: true, waitUntil: null }] })] });
+  talk.sweepAnswers();
+  assert.equal(lib.takeInbox(me().id).length, 0);
+});
+
+test('ask clears waitUntil when it leaves by a throw', async () => {
+  sharedWithMe();
+  let calls = 0;
+  const now = () => { if (++calls > 2) throw new Error('cancelled'); return 1_000_000; };
+  // the answer lands inside the wait, then ask dies before it can take it
+  await assert.rejects(ops.ask(me(), 'api@bob', 'why?', { waitMs: 90_000, interval: 0, now, sync: answerWith('mid', () => 1_000_000) }), /cancelled/);
+  const turn = state().conversations[0].turns[0];
+  assert.equal(turn.waitUntil, null);
+  const inbox = lib.takeInbox(me().id);
+  assert.equal(inbox.length, 1);
+  assert.match(inbox[0].text, /mid/);
+});

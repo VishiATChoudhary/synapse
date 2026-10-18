@@ -130,6 +130,39 @@ const unattended = (turn, now) => turn.waitUntil == null || now > turn.waitUntil
 const fromRemote = (c) => ({ id: remoteId(c.peer, c.target), name: `${c.targetName}@${c.peerName}` });
 const toAsker = (c) => ({ id: c.asker, name: c.askerName });
 
+const answerText = (c, t) => `${c.targetName}@${c.peerName} answered (conversation ${c.id}):\n\n${t.a}`;
+const endText = (c) => `Your conversation with ${c.targetName}@${c.peerName} ended (${c.endReason}) before it answered (conversation ${c.id}).`;
+
+// Hand to the inbox what a waiter left behind: answers (and ends) nobody took, whose waitUntil is past or gone.
+// `only` limits it to one turn. Marked as delivered under the lock, so it happens once.
+function inboxLeftovers(s, now, only) {
+  for (const c of s.conversations) {
+    if (c.role !== 'asker') continue;
+    for (const t of c.turns) {
+      if (only && t !== only) continue;
+      if (t.a != null && !t.inboxed && !t.taken && unattended(t, now)) {
+        postMessage(fromRemote(c), toAsker(c), answerText(c, t));
+        t.inboxed = true;
+      }
+    }
+    if (c.status === 'ended' && !c.endInboxed && !c.endTaken && c.turns.some((t) => t.a == null && (!only || t === only) && unattended(t, now))) {
+      postMessage(fromRemote(c), toAsker(c), endText(c));
+      c.endInboxed = true;
+    }
+  }
+}
+export const sweepAnswers = (now = Date.now()) => update((s) => { inboxLeftovers(s, now); });
+
+// The waiting ask is gone (error, cancel): stop holding the turn back and deliver what already arrived.
+export function release(convId, seq, now = Date.now()) {
+  update((s) => {
+    const t = convOf(s, convId)?.turns.find((x) => x.seq === seq);
+    if (!t) return;
+    t.waitUntil = null;
+    inboxLeftovers(s, now, t);
+  });
+}
+
 export function receiveReply(peer, item, now = Date.now()) {
   if (!item || !isStr(item.conv)) return;
   update((s) => {
@@ -144,13 +177,13 @@ export function receiveReply(peer, item, now = Date.now()) {
       turn.a = item.answer.slice(0, LIMITS.answer);
       turn.answeredAt = now;
       if (unattended(turn, now)) {
-        postMessage(fromRemote(c), toAsker(c), `${c.targetName}@${c.peerName} answered (conversation ${c.id}):\n\n${turn.a}`);
+        postMessage(fromRemote(c), toAsker(c), answerText(c, turn));
         turn.inboxed = true;
       }
     } else if (item.type === 'talk-end') {
       end(c, END_REASONS.includes(item.reason) ? item.reason : 'error', typeof item.note === 'string' ? item.note.slice(0, 200) : null, now);
       if (c.turns.some((t) => t.a == null && unattended(t, now))) {
-        postMessage(fromRemote(c), toAsker(c), `Your conversation with ${c.targetName}@${c.peerName} ended (${c.endReason}) before it answered (conversation ${c.id}).`);
+        postMessage(fromRemote(c), toAsker(c), endText(c));
         c.endInboxed = true;
       }
     } else return;
@@ -196,7 +229,7 @@ export function takeAnswer(convId, seq, { final = false } = {}) {
     const turn = c?.turns.find((t) => t.seq === seq);
     if (!turn) return { gone: true };
     if (turn.a != null && !turn.inboxed) { turn.waitUntil = null; turn.taken = true; return { answer: turn.a }; }
-    if (c.status === 'ended' && turn.a == null) { turn.waitUntil = null; return { ended: true, reason: c.endReason, note: c.endNote || null, inboxed: !!c.endInboxed }; }
+    if (c.status === 'ended' && turn.a == null) { turn.waitUntil = null; c.endTaken = true; return { ended: true, reason: c.endReason, note: c.endNote || null, inboxed: !!c.endInboxed }; }
     if (final) turn.waitUntil = null;
     return { pending: true, position: turn.position ?? null, inboxed: !!turn.inboxed };
   });
