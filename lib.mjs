@@ -375,7 +375,7 @@ export function localAgents() {
   return found.map((a) => {
     const n = names[a.id] ? { ...a, name: names[a.id], autoName: a.name } : a;
     const f = lineage[a.pid];
-    return f ? { ...n, forkOf: f.parent, forkQ: f.question } : n;
+    return f ? { ...n, forkOf: f.parent, forkQ: f.question, forkAt: f.at } : n;
   });
 }
 

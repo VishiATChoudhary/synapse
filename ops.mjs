@@ -108,6 +108,26 @@ export function send(me, query, text) {
   return { sent: true, to: other.name, id: m.id, note: 'Delivered on their next prompt (Claude) or next inbox check (other agents).' };
 }
 
+// What forks found, for their parent to take in: each child's conversation since it was forked (or since
+// the newest message already handed back, `since[id]`), tool calls left out. One message for all of them.
+export function forkReport(children, since = {}, budget = 6000) {
+  const parts = [], newest = {};
+  for (const a of children) {
+    const after = Math.max(a.forkAt || 0, since[a.id] || 0);
+    let msgs = readAgentMessages(a).messages.filter((m) => !m.tool && Date.parse(m.ts) > after);
+    // in case an agent restamps the history a fork inherits, start at the fork's question when it is there
+    const q = (a.forkQ || '').trim().slice(0, 60), asked = q && !since[a.id] ? msgs.findIndex((m) => m.role === 'user' && m.text.trim().startsWith(q)) : -1;
+    if (asked > 0) msgs = msgs.slice(asked);
+    if (!msgs.length) continue;
+    newest[a.id] = Math.max(...msgs.map((m) => Date.parse(m.ts)));
+    parts.push(`<fork name="${a.name}">\n${formatMessages(msgs, budget)}\n</fork>`);
+  }
+  if (!parts.length) return null;
+  const head = parts.length > 1 ? `${parts.length} forks of this session are done. Take in what they found and carry on.`
+    : 'A fork of this session is done. Take in what it found and carry on.';
+  return { text: `${head}\n\n${parts.join('\n\n')}`, count: parts.length, newest };
+}
+
 export function inbox(me) {
   return takeInbox(me.id).map((m) => ({ from: m.fromName, at: new Date(m.t).toISOString(), text: m.text }));
 }
