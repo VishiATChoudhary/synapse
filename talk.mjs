@@ -2,6 +2,7 @@
 // This file holds the conversations, the checks on every ask, the per-agent queue and the runner.
 import fs from 'node:fs';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { FILES, KINDS, CLAUDE, readJSON, writeJSON, localAgents, remoteId, readAgentMessages, formatMessages } from './lib.mjs';
@@ -216,7 +217,7 @@ function profileParts() {
   i++; // the binary: always ours, see answerCommand
   for (; i < words.length; i++) {
     if (words[i] === '--model' && words[i + 1] && !words[i + 1].startsWith('-')) args.push('--model', words[++i]);
-    else if (words[i].startsWith('--model=') && words[i].length > 8) args.push('--model', words[i].slice(8));
+    else if (words[i].startsWith('--model=') && words[i].length > 8 && words[i][8] !== '-') args.push('--model', words[i].slice(8));
   }
   return { env, args };
 }
@@ -233,8 +234,11 @@ export function answerCommand(conv, turn, source) {
     agentName: conv.targetName || source?.name, kind: source?.kind, ownerName: config().name,
     askerHandle: conv.peerHandle, replay,
   });
+  // a first turn names its session up front, so even a run killed before it reports leaves a file we can find
+  // and delete (that --session-id combines with --fork-session gets checked against real claude in Task 9)
+  const session = conv.forkSession ? null : crypto.randomUUID();
   const resume = conv.forkSession ? ['--resume', conv.forkSession]
-    : replay ? [] : ['--resume', source.id, '--fork-session'];
+    : replay ? ['--session-id', session] : ['--resume', source.id, '--fork-session', '--session-id', session];
   const args = ['-p', '--tools', '', '--strict-mcp-config', '--output-format', 'json', ...profile.args, ...resume, '--append-system-prompt', prompt];
   const input = !conv.forkSession && replay
     ? `${oneLine(conv.targetName || source?.name)}'s conversation so far (oldest first, the newest kept when long):\n\n${replayText(source)}\n\n---\n\nThe question:\n${turn.q}`
@@ -245,6 +249,7 @@ export function answerCommand(conv, turn, source) {
     env: { ...process.env, ...profile.env, SYNAPSE_EXTERNAL: '1' },
     cwd: source?.cwd && isDir(source.cwd) ? source.cwd : os.homedir(),
     input,
+    session,
   };
 }
 
@@ -279,10 +284,12 @@ export function kill(convId) {
   if (r) killPid(r.pid);
 }
 
-// A fork's session file goes when its conversation ends. Only that exact file, in any project directory.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// A fork's session file goes when its conversation ends. Only that exact file, in any project directory,
+// and never the agent's own session (claude agent ids are session ids too).
 export function cleanup(conv) {
   const id = conv?.forkSession;
-  if (typeof id !== 'string' || !/^[A-Za-z0-9-]+$/.test(id)) return;
+  if (typeof id !== 'string' || !UUID.test(id) || id === conv.target) return;
   const projects = path.join(CLAUDE, 'projects');
   let dirs = [];
   try { dirs = fs.readdirSync(projects); } catch { return; }
@@ -298,11 +305,12 @@ function finish(convId, seq, outcome, opts) {
     s.running = s.running.filter((r) => r.conv !== convId);
     const c = convOf(s, convId);
     if (!c || c.status !== 'open') return c ? { ...c } : null;
+    // the run must report the session we named for it; anything else (above all the agent's own) is not adopted
+    if (outcome.answer != null && (outcome.session !== c.forkSession || outcome.session === c.target)) outcome = { reason: 'error' };
     if (outcome.answer != null) {
       const turn = c.turns.find((t) => t.seq === seq);
       const answer = String(outcome.answer).slice(0, LIMITS.answer);
       if (turn) { turn.a = answer; turn.answeredAt = Date.now(); }
-      if (!c.forkSession && isStr(outcome.session)) c.forkSession = outcome.session;
       c.lastAt = Date.now();
       s.outgoing.push({ to: c.peer, item: { type: 'talk-answer', conv: convId, seq, answer } });
     } else {
@@ -337,6 +345,7 @@ function start(job, opts) {
     const cur = convOf(s, c.id);
     s.queue = s.queue.filter((j) => !(j.conv === job.conv && j.seq === job.seq));
     if (!cur || cur.status !== 'open') return false;
+    if (cmd.session) cur.forkSession = cmd.session;
     s.running.push({ conv: c.id, seq: job.seq, pid: null, owner: process.pid, startedAt: now() });
     s.outgoing.push({ to: c.peer, item: { type: 'talk-status', conv: c.id, seq: job.seq, state: 'answering' } });
     return true;

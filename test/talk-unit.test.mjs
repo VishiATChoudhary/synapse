@@ -341,3 +341,57 @@ test('state writes are serialized by a lock file', () => {
   talk.endConversation('nope', 'owner');
   assert.equal(fs.existsSync(`${FILES.talks}.lock`), false);
 });
+
+test('first turn passes a pre-made --session-id', async () => {
+  reset(); const { target } = talkEdge('demo-api-auth');
+  await answerOnce(target);
+  const native = echoOf().argv;
+  assert.match(after(native, '--session-id'), /^[0-9a-f-]{36}$/);
+  assert.equal(after(native, '--session-id'), conv0().forkSession);
+  assert.ok(native.includes('--fork-session'));
+  await answerOnce(target, 2);
+  assert.ok(!echoOf(2).argv.includes('--session-id'));
+  reset(); talkEdge('demo-api-rate-limit');
+  await answerOnce('demo-api-rate-limit');
+  const replay = echoOf().argv;
+  assert.equal(after(replay, '--session-id'), conv0().forkSession);
+  assert.ok(!replay.includes('--resume'));
+});
+
+test('killed first turn still gets cleaned up', async () => {
+  reset(); const { target } = talkEdge('demo-api-auth');
+  process.env.FAKE_CLAUDE_SLEEP_MS = '10000';
+  try {
+    talk.receiveAsk('m1', ask(target));
+    await talk.tick();
+    const fork = conv0().forkSession;
+    assert.match(fork, /^[0-9a-f-]{36}$/);
+    assert.ok(lib.externalForks().sessions.has(fork));
+    const dir = path.join(home, 'claude', 'projects', '-dev-killed');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${fork}.jsonl`), '{}\n');
+    talk.endConversation('c1', 'owner');
+    await waitFor(idle);
+    assert.equal(fs.existsSync(path.join(dir, `${fork}.jsonl`)), false);
+  } finally { delete process.env.FAKE_CLAUDE_SLEEP_MS; }
+});
+
+test('session id equal to the agent is rejected', async () => {
+  reset(); const { target } = talkEdge('demo-api-auth');
+  const dir = path.join(home, 'claude', 'projects', '-dev-own');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'demo-api-auth.jsonl'), '{}\n');
+  process.env.FAKE_CLAUDE_SESSION = 'demo-api-auth';
+  try { await answerOnce(target); } finally { delete process.env.FAKE_CLAUDE_SESSION; }
+  assert.equal(conv0().endReason, 'error');
+  assert.notEqual(conv0().forkSession, 'demo-api-auth');
+  assert.equal(conv0().turns[0].a, null);
+  assert.ok(fs.existsSync(path.join(dir, 'demo-api-auth.jsonl')));
+  // cleanup itself refuses the agent's own id and anything not shaped like a session uuid
+  const uuid = '11111111-2222-3333-4444-555555555555';
+  for (const f of [`${uuid}.jsonl`, 'abc.jsonl']) fs.writeFileSync(path.join(dir, f), '{}\n');
+  talk.cleanup({ forkSession: uuid, target: uuid });
+  talk.cleanup({ forkSession: 'abc', target: 'x' });
+  assert.ok(fs.existsSync(path.join(dir, `${uuid}.jsonl`)));
+  assert.ok(fs.existsSync(path.join(dir, 'abc.jsonl')));
+});
