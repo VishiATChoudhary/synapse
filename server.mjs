@@ -10,6 +10,7 @@ import { pipeline } from 'node:stream';
 import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, projectOfAgent, colorOf, renameAgent, renameProject } from './lib.mjs';
 import { createEdge, removeEdge } from './ops.mjs';
 import * as remote from './remote.mjs';
+import * as talk from './talk.mjs';
 
 const PORT = Number(process.env.PORT || 4747);
 // the branch a repo's own folder has checked out, or null (not a repo, detached HEAD)
@@ -79,6 +80,8 @@ setInterval(() => {
   if (!remote.isConnected()) return;
   remote.sync().then(() => { syncError = null; }, (e) => { syncError = e.message; });
 }, Number(process.env.SYNAPSE_SYNC_MS || 3000));
+// Friends' agents ask ours questions: start what is queued, close what can no longer go on.
+setInterval(() => { talk.tick().catch(() => {}); }, Number(process.env.SYNAPSE_SYNC_MS || 3000));
 
 // Context flow events written by the hook become edge pulses in the UI.
 let eventsSize = fs.existsSync(FILES.events) ? fs.statSync(FILES.events).size : 0;
@@ -181,6 +184,8 @@ const server = http.createServer(async (req, res) => {
   const del = p.match(/^\/api\/edges\/([\w-]+)$/);
   if (del && req.method === 'DELETE') {
     removeEdge(del[1]);
+    // a cut talk edge ends its conversations and kills the fork now, not at the next interval
+    try { talk.reconcile(); talk.tick().catch(() => {}); } catch {}
     lastSig = '';
     broadcast('state', state());
     return json(res, 200, { ok: true });

@@ -13,6 +13,8 @@ import { isConnected, sync } from './remote.mjs';
 const BUDGET = Number(process.env.SYNAPSE_BUDGET || 8000);
 
 async function main() {
+  // an answering fork for a friend's agent: no context in, nothing printed
+  if (process.env.SYNAPSE_EXTERNAL === '1') return;
   const input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
   const event = input.hook_event_name || 'UserPromptSubmit';
   // Claude's session_id is its Synapse id; Codex's is not, so find ourselves in the process tree

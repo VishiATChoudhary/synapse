@@ -193,6 +193,7 @@ const toolless = (argv) => {
   assert.ok(argv.includes('--strict-mcp-config'));
   assert.equal(after(argv, '--output-format'), 'json');
   assert.ok(after(argv, '--append-system-prompt').includes('You have no tools'));
+  assert.ok(after(argv, '--append-system-prompt').includes('Never write tool calls'));
 };
 
 test('native first turn forks the session tool-less', async () => {
@@ -394,4 +395,64 @@ test('session id equal to the agent is rejected', async () => {
   talk.cleanup({ forkSession: 'abc', target: 'x' });
   assert.ok(fs.existsSync(path.join(dir, `${uuid}.jsonl`)));
   assert.ok(fs.existsSync(path.join(dir, 'abc.jsonl')));
+});
+
+// ---------------------------------------------------------------- wiring: mailbox, hook
+const remote = await import('../remote.mjs');
+const { spawnSync } = await import('node:child_process');
+const asker = (extra = {}) => ({
+  id: 'c9', role: 'asker', peer: 'm1', target: 'r-m1-x', status: 'open', turns: [{ seq: 1, q: 'hi', a: null }], createdAt: 1, lastAt: 1, ...extra,
+});
+
+test('malformed talk items never break pull', () => {
+  reset(); talkEdge();
+  writeJSON(FILES.remote, {
+    relay: 'http://x', token: 't', blocked: [],
+    peers: { m1: { name: 'Bob', pair: 'p', since: 1, via: 'request' }, m2: { name: 'Eve', pair: 'p', since: 1 } },
+  });
+  writeJSON(path.join(home, 'remote', 'outbox.json'), []);
+  const target = localAgents()[0].id;
+  assert.doesNotThrow(() => remote.handleItems(remote.config(), [
+    null, 7, { type: 'talk-ask', from: 'm1', conv: 'a', seq: 1, target, asker: 'x', question: 'q'.repeat(10_000) },
+    { type: 'talk-ask', from: 'm1', conv: 'b', seq: 'x', target, asker: 'x', question: 'q' },
+    { type: 'talk-answer', from: 'm1', conv: 'nope', seq: 1, answer: 'a' },
+    { type: 'talk-ask', from: 'm2', conv: 'd', seq: 1, target, asker: 'x', question: 'q' },
+    { type: 'talk-end', from: 'm3', conv: 'e' },
+  ]));
+  assert.deepEqual(state().conversations || [], []);
+  const out = readJSON(path.join(home, 'remote', 'outbox.json'), []);
+  assert.ok(out.length >= 1);
+  assert.ok(out.every((o) => o.item.type === 'talk-end' && o.item.reason === 'refused'));
+  assert.equal(out.filter((o) => o.to === 'm2').length, 1);
+});
+
+test('queueItem appends to the outbox', () => {
+  writeJSON(path.join(home, 'remote', 'outbox.json'), []);
+  remote.queueItem('m1', { type: 'talk-end', conv: 'z', reason: 'owner' });
+  assert.deepEqual(readJSON(path.join(home, 'remote', 'outbox.json'), []), [{ to: 'm1', item: { type: 'talk-end', conv: 'z', reason: 'owner' } }]);
+});
+
+test('receiveReply records status, answer and end for the asker only', () => {
+  reset(); peer({ via: 'request' });
+  writeJSON(FILES.talks, { conversations: [asker(), asker({ id: 'o1', role: 'owner' })] });
+  talk.receiveReply('m1', { type: 'talk-status', conv: 'c9', seq: 1, state: 'answering' });
+  assert.equal(state().conversations[0].turns[0].state, 'answering');
+  talk.receiveReply('m2', { type: 'talk-answer', conv: 'c9', seq: 1, answer: 'wrong peer' });
+  talk.receiveReply('m1', { type: 'talk-answer', conv: 'unknown', seq: 1, answer: 'x' });
+  talk.receiveReply('m1', { type: 'talk-answer', conv: 'o1', seq: 1, answer: 'owner role' });
+  assert.equal(state().conversations[0].turns[0].a, null);
+  talk.receiveReply('m1', { type: 'talk-answer', conv: 'c9', seq: 1, answer: 'a'.repeat(9000) });
+  assert.equal(state().conversations[0].turns[0].a.length, 8000);
+  talk.receiveReply('m1', { type: 'talk-end', conv: 'c9', reason: 'owner' });
+  assert.equal(state().conversations[0].status, 'ended');
+  assert.equal(state().conversations[0].endReason, 'owner');
+  assert.equal(state().conversations[1].turns.length, 1);
+});
+
+test('hook is silent for external forks', () => {
+  const run = (env) => spawnSync(process.execPath, [path.join(import.meta.dirname, '..', 'hook.mjs')], {
+    input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'demo-api-auth', prompt: 'hello' }),
+    env: { ...process.env, SYNAPSE_HOME: home, ...env }, encoding: 'utf8',
+  });
+  assert.equal(run({ SYNAPSE_EXTERNAL: '1' }).stdout, '');
 });

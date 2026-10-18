@@ -18,6 +18,7 @@ import { execFileSync } from 'node:child_process';
 import {
   FILES, REMOTE_DIR, KINDS, readJSON, writeJSON, localAgents, readAgentMessages, logEvent, projectOf, remoteId, remoteLog,
 } from './lib.mjs';
+import * as talk from './talk.mjs';
 
 export const DEFAULT_RELAY = 'https://relay-production-b5a8.up.railway.app';
 const SENT = path.join(REMOTE_DIR, 'sent.json');     // how far each shared transcript has been sent, per friend
@@ -216,6 +217,13 @@ export function queueDrop(edge) {
   writeJSON(OUTBOX, out.slice(-200));
 }
 
+// Queue any item for a friend's machine; the next push sends it.
+export function queueItem(machine, item) {
+  const out = readJSON(OUTBOX, []);
+  out.push({ to: machine, item });
+  writeJSON(OUTBOX, out.slice(-200));
+}
+
 // ---------------------------------------------------------------- sync
 
 // One sync at a time per machine: the canvas server, prompt hooks and the CLI all call this.
@@ -306,6 +314,19 @@ function appendLog(m, agentId, messages) {
   return fresh.length;
 }
 
+// Agent talk items. One bad item must never stop the rest of the mailbox, so each is handled on its own.
+function routeTalk(m, it) {
+  try {
+    if (it.type === 'talk-ask') for (const reply of talk.receiveAsk(m, it)) queueItem(m, reply);
+    else talk.receiveReply(m, it);
+  } catch {}
+}
+export function handleItems(c, items) {
+  for (const it of Array.isArray(items) ? items : []) {
+    if (it && typeof it.type === 'string' && it.type.startsWith('talk-') && it.from && c.peers[it.from] && !c.blocked.includes(it.from)) routeTalk(it.from, it);
+  }
+}
+
 async function pull(c, timeout) {
   const { items } = await call(c.relay, '/v1/poll', {}, c.token, timeout);
   if (!items?.length) return 0;
@@ -359,6 +380,8 @@ async function pull(c, timeout) {
           logEvent({ type: 'remote-context', edge: e.id, from, to: e.to, owner: c.peers[m].name, count: n });
         }
       }
+    } else if (typeof it.type === 'string' && it.type.startsWith('talk-')) {
+      routeTalk(m, it);
     } else if (it.type === 'drop' && typeof it.agent === 'string') {
       // they removed the link on their side: stop sharing that agent with that agent of theirs
       const target = remoteId(m, String(it.target || ''));
@@ -420,6 +443,7 @@ async function push(c, timeout) {
   refreshSnapshots(edges, byId);
   const sent = readJSON(SENT, {});
   let outbox = readJSON(OUTBOX, []);
+  outbox.push(...talk.takeOutgoing()); // answers and status lines waiting from the talk runner
   const now = Date.now();
   const brief = locals.map((a) => ({ id: a.id, name: a.name, kind: a.kind, status: a.status, project: projectOf(a.cwd).label, startedAt: a.startedAt }));
   let count = 0;
