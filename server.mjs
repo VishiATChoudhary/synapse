@@ -7,10 +7,15 @@ import path from 'node:path';
 import os from 'node:os';
 import { exec, execFile } from 'node:child_process';
 import { pipeline } from 'node:stream';
-import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, projectOf, colorOf, renameAgent, renameProject } from './lib.mjs';
+import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, projectOfAgent, colorOf, renameAgent, renameProject } from './lib.mjs';
 import { createEdge, removeEdge } from './ops.mjs';
+import * as remote from './remote.mjs';
 
 const PORT = Number(process.env.PORT || 4747);
+// the branch a repo's own folder has checked out, or null (not a repo, detached HEAD)
+const branchOf = (dir) => {
+  try { return fs.readFileSync(path.join(dir, '.git', 'HEAD'), 'utf8').match(/^ref: refs\/heads\/(.+)/)?.[1].trim() || null; } catch { return null; }
+};
 
 // Seed the demo state once: links and a few messages between the fixture agents.
 if (process.env.SYNAPSE_DEMO && !fs.existsSync(FILES.edges)) {
@@ -43,8 +48,12 @@ function agents() {
         previewCache.set(a.id, { mtime, preview });
       }
     }
-    const proj = projectOf(a.cwd);
-    return { ...a, project: proj.label, projectAuto: proj.autoLabel, projectKey: proj.key, color: colorOf(proj.key), lastActivity, preview };
+    const proj = projectOfAgent(a), wt = proj.worktree;
+    // the canvas frames each worktree apart (same colour as its repo), labelled "repo / worktree";
+    // inside the repo's frame each worktree's own frame is labelled `frameSub` (worktree name, or the checkout's branch)
+    return { ...a, project: proj.label, projectAuto: proj.autoLabel, projectKey: proj.key, color: colorOf(proj.key),
+      frameKey: wt ? `${proj.key}#${wt.path}` : proj.key, frame: wt ? `${proj.label} / ${wt.name}` : proj.label,
+      frameSub: wt ? wt.name : a.remote ? null : branchOf(proj.key), lastActivity, preview };
   });
 }
 
@@ -62,6 +71,14 @@ setInterval(() => {
   const sig = JSON.stringify([s.agents.map((a) => [a.id, a.status, a.name, a.lastActivity]), s.edges]);
   if (sig !== lastSig) { lastSig = sig; broadcast('state', s); }
 }, 1000);
+
+// Multiplayer: exchange agents and shared context with friends' machines every few seconds.
+// The state loop above notices what changed (their agents, links they drew) and pushes it to the canvas.
+let syncError = null;
+setInterval(() => {
+  if (!remote.isConnected()) return;
+  remote.sync().then(() => { syncError = null; }, (e) => { syncError = e.message; });
+}, Number(process.env.SYNAPSE_SYNC_MS || 3000));
 
 // Context flow events written by the hook become edge pulses in the UI.
 let eventsSize = fs.existsSync(FILES.events) ? fs.statSync(FILES.events).size : 0;
@@ -136,12 +153,31 @@ const server = http.createServer(async (req, res) => {
     const live = agents();
     const src = live.find((a) => a.id === from), dst = live.find((a) => a.id === to);
     if (!src || !dst || from === to) return json(res, 400, { error: 'bad endpoints' });
-    const { edge, created } = createEdge(src, dst);
+    let made;
+    try { made = createEdge(src, dst); } catch (e) { return json(res, 400, { error: e.message }); }
+    const { edge, created } = made;
     if (!created) return json(res, 409, { error: 'exists' });
     lastSig = '';
     broadcast('state', state());
     return json(res, 201, edge);
   }
+  // ---- multiplayer
+  if (p === '/api/remote' && req.method === 'GET') return json(res, 200, { ...remote.friends(), syncError });
+  if (p === '/api/remote/invite' && req.method === 'POST') {
+    try { return json(res, 200, await remote.invite({ name: (await body(req)).name })); }
+    catch (e) { return json(res, 502, { error: e.message }); }
+  }
+  if (p === '/api/remote/join' && req.method === 'POST') {
+    const b = await body(req);
+    try { const out = await remote.join(b.code, { name: b.name }); lastSig = ''; return json(res, 200, out); }
+    catch (e) { return json(res, 400, { error: e.message }); }
+  }
+  if (p === '/api/remote/name' && req.method === 'POST') return json(res, 200, remote.setName((await body(req)).name));
+  if (p === '/api/remote/unfriend' && req.method === 'POST') {
+    try { const out = remote.unfriend((await body(req)).machineId); lastSig = ''; broadcast('state', state()); return json(res, 200, out); }
+    catch (e) { return json(res, 404, { error: e.message }); }
+  }
+
   const del = p.match(/^\/api\/edges\/([\w-]+)$/);
   if (del && req.method === 'DELETE') {
     removeEdge(del[1]);

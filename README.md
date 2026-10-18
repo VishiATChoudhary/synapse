@@ -116,6 +116,35 @@ agent connects, unlinks or messages you:
 
 Run it with `claude --plugin-dir ./claude-mod`. Its test runs with `claude plugin test claude-mod`.
 
+## Multiplayer: share agents with friends
+
+Link your agents with a friend's, across machines. Their agents show up on your canvas in dashed
+frames marked `⇄ NAME · PROJECT`, and you can share any of your agents with any of theirs.
+
+```bash
+synapse invite                  # prints a code; send it to your friend
+synapse join <code>             # your friend runs this (or pastes the code under FRIENDS on the canvas)
+synapse friends                 # who you are connected with, and whether they are online
+synapse unfriend <friend>
+```
+
+The FRIENDS button in the canvas top bar does the same: pick the name friends see, create an invite,
+paste one, and remove friends.
+
+- **Only the owner shares.** Drag from one of your agents onto a friend's agent and that agent can read
+  yours. They can't link your agents to theirs, and removing the link on either side stops the sharing.
+- **Reading works like on one machine.** Their agent gets your agent's new activity with each prompt
+  (Claude Code, Codex) and through `synapse_read`, labelled with your name. As your agent keeps working,
+  its new activity is sent over, and their canvas pulses the link.
+- **Agents on different machines don't message each other.** `synapse send` stays local.
+- **What leaves your machine:** the names, kinds, projects and status of your running agents (so friends
+  can pick one to link to), and the recent conversation of the agents you share, clipped like local context.
+  Nothing else.
+- **The relay** is a tiny mailbox at `relay/`. It keeps nothing on disk and only passes items between
+  paired machines. Identities, invites and pairings are signed tokens kept in `~/.synapse/remote.json`.
+  The canvas syncs every 3 seconds, and the prompt hook and `synapse read` sync once before they look.
+  Run your own with `cd relay && RELAY_SECRET=... npm start`, and point Synapse at it with `SYNAPSE_RELAY`.
+
 ## Let agents do it themselves
 
 Every agent gets the same six operations, as MCP tools (`synapse_peers`, `synapse_link`, `synapse_unlink`,
@@ -163,10 +192,13 @@ Code and Codex, so you can just say *"connect to the codex agent and ask what it
 | `mcp.mjs` | dependency-free stdio MCP server |
 | `cli.mjs`, `skill/` | the `synapse` CLI and the `/synapse` skill |
 | `claude-mod/` | Claude Code band and toasts |
+| `remote.mjs` | multiplayer: invite, join, friends, and the sync with friends' machines |
+| `relay/` | the multiplayer relay (zero dependencies, deploys anywhere Node runs) |
+| `test/` | end-to-end multiplayer tests: `npm test` (`SYNAPSE_RELAY=<url> npm test` runs them against a deployed relay) |
 | `install.mjs` | idempotent installer. `--dry-run` shows what it would change |
 | `promo/` | the Remotion source of the video above |
 
-Settings: `PORT`, `SYNAPSE_HOME` (state folder, default `~/.synapse`), `SYNAPSE_BUDGET` (characters per link per prompt), `SYNAPSE_AGENT` (force an identity).
+Settings: `PORT`, `SYNAPSE_HOME` (state folder, default `~/.synapse`), `SYNAPSE_BUDGET` (characters per link per prompt), `SYNAPSE_AGENT` (force an identity), `SYNAPSE_RELAY` (multiplayer relay URL), `SYNAPSE_SYNC_MS` (how often the canvas syncs with friends).
 
 ## Desktop app
 
@@ -181,11 +213,10 @@ ad-hoc signed: it runs on the machine that built it, and on another Mac only aft
 - Agents that are already running pick up the MCP server and hooks after a restart.
 - Plain `codex` asks you once to trust the new hook. Gemini only loads MCP servers in folders you have trusted.
 - Shared context is labelled as coming from peers, and agents are told not to treat it as instructions from you.
-- Everything stays on your machine. Synapse makes no network calls.
+- Everything stays on your machine until you add a friend. Without friends Synapse makes no network calls.
 
 ## Roadmap
 
-- **Multiplayer: coming soon.** Link your agents with a teammate's, across machines.
 - Push delivery, so an idle agent wakes up when a message arrives.
 - Readable transcripts for OpenCode, Amp and Copilot.
 

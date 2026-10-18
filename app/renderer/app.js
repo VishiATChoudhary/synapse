@@ -1383,8 +1383,11 @@ function canvasMenu({ hit, agent, group, x, y }) {
     items.push({ label: 'Rename', run: () => tellCanvas({ action: 'rename', id: agent.id }) }, { label: 'Unlink all', run: () => tellCanvas({ action: 'unlink', id: agent.id }) }, '-');
     items.push({ label: mine ? 'Close session' : 'Kill agent', danger: true, run: () => killAgentAsk(agent) });
   } else if (hit === 'group' && group) {
-    const p = M.projects.find((q) => q.key === group.key);
-    const cwd = p?.worktrees[0]?.path || group.cwd;
+    const p = M.projects.find((q) => q.key === (group.project || group.key));
+    // a worktree's frame starts agents in that worktree, the repo's frame in its first checkout
+    const inside = (w) => group.cwd === w.path || group.cwd?.startsWith(`${w.path}/`);
+    const own = p?.worktrees.filter(inside).sort((x, y) => y.path.length - x.path.length)[0];
+    const cwd = (own || p?.worktrees[0])?.path || group.cwd;
     if (cwd) items.push({ label: `New agent in ${group.label}`, sub: agentMenuIn(cwd) });
     if (p) items.push({ label: 'New worktree', run: () => promptWorktree(p) });
     items.push({ label: 'Rename project', run: () => tellCanvas({ action: 'rename-project', key: group.key }) }, '-');
@@ -1418,6 +1421,9 @@ async function openSettings() {
       catch (e) { fcb.checked = !fcb.checked; toast(e.message, true); }
     };
     body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow);
+    const people = el('div', 'people');
+    body.append(el('div', 'sub', 'trusted people'), people);
+    drawPeople(people);
     for (const [title, keys] of SHORTCUTS) {
       const box = el('div', 'keys');
       for (const [k, what] of keys) { const row = el('span'); row.append(el('kbd', '', k), what); box.appendChild(row); }
@@ -1448,7 +1454,7 @@ window.addEventListener('keydown', (e) => {
   closeCanvas();
 }, true);
 window.addEventListener('keydown', (e) => {
-  if (!$('#modal').hidden) return;
+  if (!$('#modal').hidden || !$('#login').hidden) return;
   if (fanOpen && e.key === 'Escape') return closeFan();
   if (fanOpen && e.key === 'Backspace') { const s = focusedSlot(); const t = top(s); if (t?.parent != null) requestCloseSession(s, t.id); return; }
   const agent = agentKey(e);
@@ -1614,6 +1620,349 @@ function apply(st) {
 synapse.onState(apply);
 synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { requestId, parentPty }));
 
+// ---------------------------------------------------------------- account, trusted people, synapse requests
+
+// Signed in through Synapse Cloud, agents can ask trusted people for context. Their requests arrive as a
+// blinking circle on "synapse" at the top right; accepted links turn it green, hovering lists them.
+const ACC = { user: null, feed: { incoming: [], outgoing: [], links: [] }, sticky: false, agents: [], choice: {} };
+const pendingRequests = () => (ACC.feed.incoming || []).filter((r) => r.status === 'pending');
+const personName = (p) => p?.name || (p?.handle ? `@${p.handle}` : p?.email) || 'someone';
+const initials = (u) => (u?.name || u?.handle || u?.email || '?').split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+function avatar(u, cls = 'av') {
+  const a = el('span', cls);
+  if (u?.avatar) { const img = el('img'); img.src = u.avatar; img.alt = ''; img.onerror = () => { img.remove(); a.textContent = initials(u); }; a.appendChild(img); }
+  else a.textContent = initials(u);
+  return a;
+}
+const unwrapUser = (r) => r?.user || r || null;
+
+function renderMe() {
+  const b = $('#me');
+  b.replaceChildren();
+  if (ACC.user) { b.append(avatar(ACC.user), el('span', 'me-name', ACC.user.handle ? `@${ACC.user.handle}` : personName(ACC.user))); b.title = 'account'; b.onclick = openAccount; }
+  else { b.textContent = 'sign in'; b.title = 'sign in to share agents with people you trust'; b.onclick = () => showLogin(); }
+}
+
+function renderDot() {
+  const dot = $('#syn-dot'), p = pendingRequests().length, links = (ACC.feed.links || []).length;
+  dot.hidden = !p && !links;
+  dot.className = p ? 'blink' : links ? 'live' : '';
+  $('#btn-canvas .glyph').hidden = !dot.hidden;
+  dot.setAttribute('aria-label', p ? `${p} synapse request${p > 1 ? 's' : ''}` : `${links} synapsed external agent${links > 1 ? 's' : ''}`);
+  if (dot.hidden) closePop(); else if (!$('#syn-pop').hidden) renderPop();
+}
+
+// the popover: pending requests to answer, then every external agent synapsed with ours
+let popTimer = null;
+function openPop(sticky) {
+  clearTimeout(popTimer);
+  if ($('#syn-dot').hidden) return;
+  if (sticky) ACC.sticky = true;
+  const pop = $('#syn-pop');
+  if (pop.hidden) {
+    pop.hidden = false;
+    renderPop();
+    if (pendingRequests().length) synapse.requests.agents().then((a) => { ACC.agents = a; renderPop(); }).catch(() => {});
+  }
+}
+function closePop() { clearTimeout(popTimer); ACC.sticky = false; $('#syn-pop').hidden = true; }
+const closePopSoon = () => { if (ACC.sticky) return; clearTimeout(popTimer); popTimer = setTimeout(closePop, 250); };
+
+// which of my agents fits a request best: words of its target, note and project against name and project
+function bestAgent(r) {
+  const words = `${r.target || ''} ${r.note || ''} ${r.agent?.project || ''}`.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+  let best = ACC.agents[0]?.id || '', top = 0;
+  for (const a of ACC.agents) {
+    const hay = `${a.name} ${a.project} ${a.kind}`.toLowerCase();
+    const score = words.filter((w) => hay.includes(w)).length;
+    if (score > top) { top = score; best = a.id; }
+  }
+  return best;
+}
+
+function renderPop() {
+  const pop = $('#syn-pop'), dot = $('#syn-dot');
+  pop.replaceChildren();
+  const reqs = pendingRequests(), links = ACC.feed.links || [];
+  if (reqs.length) {
+    pop.append(el('div', 'pop-sec', `requests · ${reqs.length}`));
+    for (const r of reqs) {
+      const box = el('div', 'req');
+      const who = el('div', 'req-who');
+      who.append(avatar(r.from), el('b', '', personName(r.from)));
+      if (r.from?.handle && r.from?.name) who.append(el('span', 'h', `@${r.from.handle}`));
+      const what = el('div', 'req-what');
+      what.append('wants your context for ', el('span', 'ag', `${r.agent?.kind || 'agent'} · ${r.agent?.name || '?'}`));
+      if (r.agent?.project) what.append(` in ${r.agent.project}`);
+      box.append(who, what);
+      if (r.target || r.note) box.append(el('div', 'req-note', [r.target && `asks for: ${r.target}`, r.note].filter(Boolean).join(' · ')));
+      const pick = el('select', 'req-pick');
+      pick.setAttribute('aria-label', 'which of your agents to share');
+      if (!ACC.agents.length) { const o = el('option', '', 'no live agents on this Mac'); o.value = ''; pick.append(o); pick.disabled = true; }
+      else {
+        for (const a of ACC.agents) { const o = el('option', '', `${a.kind} · ${a.name}${a.project ? `  (${a.project})` : ''}`); o.value = a.id; pick.append(o); }
+        if (ACC.agents.length > 1) { const o = el('option', '', 'all live agents'); o.value = '*'; pick.append(o); }
+        pick.value = ACC.choice[r.id] || bestAgent(r);
+      }
+      pick.onchange = () => { ACC.choice[r.id] = pick.value; };
+      const row = el('div', 'req-row');
+      const no = el('button', 'btn', 'Deny'), yes = el('button', 'btn sig', 'Accept');
+      yes.disabled = !ACC.agents.length;
+      no.onclick = async () => {
+        no.disabled = yes.disabled = true;
+        try { await synapse.requests.deny(r.id); toast(`denied ${personName(r.from)}`); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
+      };
+      yes.onclick = async () => {
+        const ids = pick.value === '*' ? ACC.agents.map((a) => a.id) : [pick.value];
+        no.disabled = yes.disabled = true;
+        try { await synapse.requests.accept(r.id, ids); toast(`synapsed with ${personName(r.from)}`); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
+      };
+      row.append(pick, no, yes);
+      box.append(row);
+      pop.append(box);
+    }
+  }
+  pop.append(el('div', 'pop-sec', `synapsed · ${links.length}`));
+  if (!links.length) pop.append(el('div', 'pop-empty', 'no external agents yet'));
+  const byOwner = new Map();
+  for (const l of links) { const k = l.owner || 'friend'; if (!byOwner.has(k)) byOwner.set(k, []); byOwner.get(k).push(l); }
+  for (const [owner, list] of byOwner) {
+    const g = el('div', 'link-group');
+    g.append(el('div', 'link-owner', owner));
+    for (const l of list) {
+      const row = el('div', 'link');
+      const theirs = el('span', 'ag', `${l.agent?.name || '?'}`), mine = el('span', 'mine', l.local?.name || 'you');
+      // in: their agent shares with mine; out: mine shares with theirs
+      if (l.direction === 'in') row.append(theirs, el('span', 'arr', '→'), mine);
+      else row.append(mine, el('span', 'arr', '→'), theirs);
+      row.title = l.direction === 'in' ? `${owner}'s ${l.agent?.name} shares its context with your ${l.local?.name}` : `your ${l.local?.name} shares its context with ${owner}'s ${l.agent?.name}`;
+      g.append(row);
+    }
+    pop.append(g);
+  }
+  // under the dot, kept inside the window
+  const r = dot.getBoundingClientRect(), w = pop.offsetWidth || 360;
+  pop.style.top = `${Math.round(r.bottom + 14)}px`;
+  pop.style.left = `${Math.round(Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w + 40)))}px`;
+}
+
+{
+  const dot = $('#syn-dot'), pop = $('#syn-pop');
+  dot.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); ACC.sticky && !pop.hidden ? closePop() : openPop(true); });
+  dot.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); openPop(true); } });
+  dot.addEventListener('mouseenter', () => openPop(false));
+  dot.addEventListener('mouseleave', closePopSoon);
+  pop.addEventListener('mouseenter', () => clearTimeout(popTimer));
+  pop.addEventListener('mouseleave', closePopSoon);
+  document.addEventListener('pointerdown', (e) => { if (!pop.hidden && !pop.contains(e.target) && e.target !== dot) closePop(); });
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hidden) closePop(); });
+}
+
+// ---- sign in
+
+let loginState = { mode: 'signin', startup: false, device: null };
+async function showLogin({ startup = false, mode = 'signin' } = {}) {
+  loginState = { mode, startup, device: null };
+  $('#login').hidden = false;
+  drawLogin();
+  let prov = null;
+  try { prov = await synapse.account.providers(); } catch {}
+  loginState.providers = prov;
+  if (!$('#login').hidden && !loginState.device) drawLogin();
+}
+function hideLogin() { if (loginState.device) synapse.account.cancelDevice().catch(() => {}); loginState.device = null; $('#login').hidden = true; top(focusedSlot())?.term.focus(); }
+
+function drawLogin() {
+  const card = $('#login-card'), st = loginState;
+  card.replaceChildren();
+  const head = el('div', 'login-head');
+  head.append(el('div', 'wordmark', 'synapse'), el('div', 'login-tag', 'share agents with people you trust'));
+  if (!st.startup) { const x = el('button', 'login-x', '×'); x.title = 'close'; x.onclick = hideLogin; head.append(x); }
+  card.append(head);
+  if (st.device) {
+    const d = el('div', 'device');
+    d.append(el('div', 'device-k', `finish signing in with ${st.device.provider} in your browser`), el('div', 'device-code', st.device.userCode || '...'), el('div', 'device-k wait', 'waiting for the browser'));
+    const row = el('div', 'row');
+    const again = el('button', 'btn', 'open browser again'); again.onclick = () => synapse.account.device(st.device.provider).then((r) => { st.device.userCode = r.userCode; drawLogin(); }).catch((e) => { st.device = null; drawLogin(); $('#login-card .login-err').textContent = e.message; });
+    const cancel = el('button', 'btn', 'cancel'); cancel.onclick = () => { synapse.account.cancelDevice().catch(() => {}); st.device = null; drawLogin(); };
+    row.append(again, cancel);
+    card.append(d, row);
+    return;
+  }
+  const seg = el('div', 'seg');
+  for (const [m, label] of [['signin', 'sign in'], ['signup', 'create account']]) {
+    const b = el('button', st.mode === m ? 'on' : '', label);
+    b.onclick = () => { st.mode = m; drawLogin(); };
+    seg.append(b);
+  }
+  card.append(seg);
+  const form = el('form', 'login-form');
+  const field = (type, name, placeholder, auto) => { const i = el('input'); i.type = type; i.name = name; i.placeholder = placeholder; i.autocomplete = auto; i.spellcheck = false; form.append(i); return i; };
+  const name = st.mode === 'signup' ? field('text', 'name', 'your name', 'name') : null;
+  const email = field('email', 'email', 'email', 'email');
+  const pass = field('password', 'password', st.mode === 'signup' ? 'password (8+ characters)' : 'password', st.mode === 'signup' ? 'new-password' : 'current-password');
+  const err = el('div', 'hint err login-err');
+  const go = el('button', 'btn sig login-go', st.mode === 'signup' ? 'create account' : 'sign in');
+  go.type = 'submit';
+  form.append(err, go);
+  const setErr = (t, ok = false) => { err.textContent = t || ''; err.classList.toggle('ok', ok); };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!email.value.trim() || !pass.value) return setErr('enter your email and password');
+    go.disabled = true; setErr('');
+    try {
+      const b = { email: email.value.trim(), password: pass.value };
+      const u = st.mode === 'signup' ? await synapse.account.signup({ ...b, name: name.value.trim() }) : await synapse.account.login(b);
+      ACC.user = unwrapUser(u) || ACC.user; renderMe(); hideLogin();
+      toast(st.mode === 'signup' ? 'account created · check your email to verify it' : `signed in as ${personName(ACC.user)}`);
+    } catch (e2) { setErr(e2.message); go.disabled = false; }
+  };
+  card.append(form);
+  if (st.mode === 'signin') {
+    const forgot = el('button', 'login-link', 'forgot password?');
+    forgot.onclick = async () => {
+      if (loginState.providers?.mail === false) { setErr('password reset by email is not switched on yet'); return; }
+      if (!email.value.trim()) { setErr('enter your email first, then press forgot password'); email.focus(); return; }
+      try { await synapse.account.forgot(email.value.trim()); setErr('if that email has an account, a reset link is on its way', true); } catch (e) { setErr(e.message); }
+    };
+    card.append(forgot);
+  }
+  const prov = st.providers;
+  const list = [['github', 'GitHub'], ['google', 'Google'], ['x', 'X']].filter(([k]) => !prov || prov[k]);
+  if (list.length) {
+    card.append(el('div', 'login-or', 'or continue with'));
+    const row = el('div', 'login-prov');
+    for (const [k, label] of list) {
+      const b = el('button', 'btn', label);
+      b.onclick = async () => {
+        b.disabled = true;
+        try { const r = await synapse.account.device(k); st.device = { provider: label, userCode: r.userCode }; drawLogin(); }
+        catch (e) { b.disabled = false; setErr(e.message); }
+      };
+      row.append(b);
+    }
+    card.append(row);
+  }
+  if (st.startup) {
+    const skip = el('button', 'login-link skip', 'continue without an account');
+    skip.onclick = async () => { await synapse.account.skip().catch(() => {}); hideLogin(); };
+    card.append(skip);
+  }
+  (name || email).focus();
+}
+synapse.account.onDevice((d) => {
+  if (!loginState.device) return;
+  if (d.status === 'approved') { loginState.device = null; hideLogin(); return; }
+  loginState.device = null;
+  drawLogin();
+  const err = $('#login-card .login-err');
+  if (err) err.textContent = d.status === 'expired' ? 'the sign-in link expired, try again' : d.error || 'sign-in failed';
+});
+synapse.account.onChange((u) => {
+  const was = ACC.user;
+  ACC.user = u; renderMe();
+  if (u && !$('#login').hidden) { hideLogin(); if (!was) toast(`signed in as ${personName(u)}`); }
+});
+synapse.requests.onChange((f) => { ACC.feed = f || ACC.feed; renderDot(); });
+synapse.requests.onOpen(() => openPop(true));
+
+// ---- account (profile)
+
+async function openAccount() {
+  let u = ACC.user;
+  try { u = unwrapUser(await synapse.account.me()) || u; ACC.user = u; renderMe(); } catch {}
+  if (!u) return showLogin();
+  modal('account', (body, close) => {
+    const head = el('div', 'acct-head');
+    const info = el('div', 'acct-info');
+    info.append(el('div', 'acct-name', personName(u)), el('div', 'acct-sub', [u.handle && `@${u.handle}`, u.email].filter(Boolean).join(' · ')));
+    const badge = el('span', u.emailVerified ? 'badge ok' : 'badge', u.emailVerified ? 'verified' : 'not verified');
+    if (u.email) info.querySelector('.acct-sub').append(' ', badge);
+    head.append(avatar(u, 'av big'), info);
+    body.append(head);
+    if (u.email && !u.emailVerified) {
+      const row = el('div', 'opt set'), b = el('button', 'btn', 'resend');
+      row.append(el('span', 'k', 'verify email'), el('span', 'c', `we sent a link to ${u.email}`), b);
+      b.onclick = async () => { b.disabled = true; try { await synapse.account.resend(); toast('verification email sent'); } catch (e) { toast(e.message, true); b.disabled = false; } };
+      body.append(row);
+    }
+    body.append(el('div', 'sub', 'profile'));
+    const field = (label, value, placeholder) => { const r = el('label', 'field'); const i = el('input'); i.value = value || ''; i.placeholder = placeholder; i.spellcheck = false; r.append(el('span', 'fk', label), i); body.append(r); return i; };
+    const nm = field('name', u.name, 'your name'), hd = field('handle', u.handle, 'handle'), av = field('avatar', u.avatar, 'https://… image url');
+    const perr = el('div', 'hint err');
+    const prow = el('div', 'row'), save = el('button', 'btn sig', 'save profile');
+    save.onclick = async () => {
+      save.disabled = true; perr.textContent = '';
+      try { const r = await synapse.account.update({ name: nm.value.trim(), handle: hd.value.trim().replace(/^@/, ''), avatar: av.value.trim() }); ACC.user = unwrapUser(r) || ACC.user; renderMe(); toast('profile saved'); close(); }
+      catch (e) { perr.textContent = e.message; save.disabled = false; }
+    };
+    prow.append(save);
+    body.append(perr, prow);
+    body.append(el('div', 'sub', u.hasPassword === false ? 'set a password' : 'password'));
+    const cur = u.hasPassword === false ? null : field('current', '', 'current password');
+    if (cur) cur.type = 'password';
+    const np = field('new', '', 'new password (8+ characters)'); np.type = 'password';
+    const werr = el('div', 'hint err'), wrow = el('div', 'row'), change = el('button', 'btn', 'change password');
+    change.onclick = async () => {
+      if (np.value.length < 8) { werr.textContent = 'use at least 8 characters'; return; }
+      change.disabled = true; werr.textContent = '';
+      try { await synapse.account.password({ current: cur?.value || undefined, password: np.value }); toast('password changed'); if (cur) cur.value = ''; np.value = ''; change.disabled = false; }
+      catch (e) { werr.textContent = e.message; change.disabled = false; }
+    };
+    wrow.append(change);
+    body.append(werr, wrow);
+    const foot = el('div', 'row');
+    const web = el('button', 'btn', 'account settings on the web'), out = el('button', 'btn danger', 'sign out');
+    web.onclick = () => synapse.account.openWeb('/settings').catch((e) => toast(e.message, true));
+    out.onclick = async () => { try { await synapse.account.logout(); ACC.user = null; ACC.feed = { incoming: [], outgoing: [], links: [] }; renderMe(); renderDot(); close(); toast('signed out'); } catch (e) { toast(e.message, true); } };
+    foot.append(web, out);
+    body.append(foot);
+    body.tabIndex = 0; body.onkeydown = (e) => { if (e.key === 'Escape') close(); };
+  });
+}
+
+// ---- trusted people (in settings)
+
+async function drawPeople(box) {
+  box.replaceChildren();
+  if (!ACC.user) {
+    const row = el('div', 'opt set'), b = el('button', 'btn', 'sign in');
+    row.append(el('span', 'k', 'not signed in'), el('span', 'c', 'sign in to add trusted people: they can ask your agents for context, and you decide on each request'), b);
+    b.onclick = () => { $('#modal').hidden = true; showLogin(); };
+    box.append(row);
+    return;
+  }
+  const add = el('div', 'people-add'), inp = el('input'), go = el('button', 'btn', 'add');
+  inp.placeholder = 'email or @handle'; inp.spellcheck = false;
+  const err = el('div', 'hint err');
+  const submit = async () => {
+    const who = inp.value.trim(); if (!who) return;
+    go.disabled = true; err.textContent = '';
+    try { await synapse.people.add(who); inp.value = ''; await drawPeople(box); toast(`${who} is trusted`); }
+    catch (e) { err.textContent = e.message; go.disabled = false; }
+  };
+  go.onclick = submit;
+  inp.onkeydown = (e) => { if (e.key === 'Enter') { e.stopPropagation(); submit(); } };
+  add.append(inp, go);
+  let list = [];
+  try { const r = await synapse.people.list(); list = Array.isArray(r) ? r : r?.trusted || []; }
+  catch (e) { box.append(el('div', 'hint err', e.message)); }
+  if (!list.length) box.append(el('div', 'hint', 'nobody yet · your agents can only ask people on this list'));
+  for (const p of list) {
+    const row = el('div', 'person');
+    const meta = el('span', 'c', p.handle ? `@${p.handle}` : p.email && p.name && p.name !== p.email ? p.email : '');
+    row.append(avatar(p), el('span', 'k', p.name || p.handle || p.email || '?'), meta);
+    if (p.pending) row.append(el('span', 'badge', 'invited'));
+    if (p.trustsYou) row.append(el('span', 'badge ok', 'trusts you'));
+    const x = el('button', 'tab-close', '×');
+    x.title = `remove ${p.name || p.email || p.handle}`;
+    x.onclick = async () => { try { await synapse.people.remove(p.id); await drawPeople(box); } catch (e) { toast(e.message, true); } };
+    row.append(x);
+    box.append(row);
+  }
+  box.append(add, err);
+}
+
 // ---------------------------------------------------------------- boot
 
 (async () => {
@@ -1638,6 +1987,16 @@ synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { 
     await fork('where is the refresh handler?');
     render();
   }
+  // signed in? the requests feed and, on a first start, the sign-in screen
+  ACC.user = await synapse.account.get().catch(() => null);
+  renderMe();
+  synapse.requests.list().then((f) => { ACC.feed = f || ACC.feed; renderDot(); }).catch(() => {});
+  if (!ACC.user && !flags.shot && !(await synapse.account.skipped().catch(() => true))) showLogin({ startup: true });
+  if (flags.shot.startsWith('login')) setTimeout(() => showLogin({ startup: true, mode: flags.shot.split(':')[1] || 'signin' }), 600);
+  if (flags.shot === 'account') setTimeout(openAccount, 800);
+  if (flags.shot === 'settings') setTimeout(openSettings, 800);
+  if (flags.shot === 'requests') setTimeout(() => openPop(true), 1200);
+  if (flags.shot === 'links') setTimeout(() => $('#syn-dot').dispatchEvent(new MouseEvent('mouseenter')), 1200);
   if (flags.shot === 'fan') setTimeout(openFan, 800);
   if (flags.shot.startsWith('addws')) setTimeout(() => {
     // addws:<mode>[:<value>] opens the dialog, and with a value submits it (used to try the flows headless)

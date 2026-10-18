@@ -26,6 +26,43 @@ $S rename-project <project> "<name>"   # rename a project (its frame on the canv
 
 `<agent>` takes a name, an id, or a unique prefix of either (e.g. `codex-agent`).
 
+## Agents on someone else's machine (Synapse accounts)
+
+When the user wants context from an agent a colleague or friend is running on their own machine,
+ask them for it with a **synapse request**. It goes to a **trusted person**: someone the user added
+under Settings → trusted people in the Synapse app (or with `trust`), who has added the user back.
+The person accepts or denies in their Synapse app; on accept they pick which of their agents to
+share with you, and you see only those. If either side removes the other, the share ends.
+
+```bash
+$S people                      # trusted people you can send a request to
+$S request <person> --target "their api agent" --note "need the auth refactor plan"
+$S requests                    # has it been accepted, denied, still pending?
+$S read <name>@<owner>         # once accepted: their agent shows up in peers --all with an owner
+$S trust <email|@handle>       # add a trusted person (the user should ask for this)
+$S whoami                      # which Synapse account this machine is signed in as
+```
+
+The same is available as MCP tools: `synapse_people`, `synapse_request`, `synapse_requests`.
+Requests come from you (the agent that runs the command), so the person sees which agent asked.
+If a command says "Not signed in to Synapse", ask the user to sign in in the Synapse app or run
+`synapse login`. Don't send a request the user didn't ask for, and don't add trusted people on your own.
+
+## Friends' agents (multiplayer)
+
+Agents on a friend's machine show up in `peers --all` with an `owner`. Address them as `name@owner`
+(e.g. `read api-auth@sam`). Only their owner can share them, so `read` works once the friend has linked
+that agent to you. You can share yours with them (`link api-auth@sam` links one way, from you to them),
+but agents on different machines can't message each other.
+
+Without accounts, two machines can still pair with an invite code (the fallback):
+
+```bash
+$S invite                      # an invite code for a friend (they run: synapse join <code>)
+$S join <code>                 # accept a friend's invite
+$S friends                     # who you are connected with
+```
+
 ## How to use it
 
 1. **Start with `peers --all`** so you know the exact names. Pick the agent whose name, project or

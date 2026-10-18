@@ -3,10 +3,11 @@
 import crypto from 'node:crypto';
 import {
   FILES, readJSON, writeJSON, listAgents, findAgent, readAgentMessages, formatMessages,
-  postMessage, takeInbox, linked, projectOf, colorOf,
+  postMessage, takeInbox, linked, projectOfAgent, colorOf,
 } from './lib.mjs';
+import { queueDrop } from './remote.mjs';
 
-const brief = (a) => ({ name: a.name, id: a.id, kind: a.kind, cwd: a.cwd, status: a.status });
+const brief = (a) => ({ name: a.name, id: a.id, kind: a.kind, cwd: a.cwd, status: a.status, ...(a.remote ? { owner: a.remote.owner } : {}) });
 
 function resolve(agents, query) {
   const a = findAgent(agents, query);
@@ -17,10 +18,12 @@ function resolve(agents, query) {
 // extra.onDemand: the target reads the source when it asks (synapse_read); the hook pushes nothing
 export function createEdge(from, to, extra = {}) {
   if (from.id === to.id) throw new Error('An agent cannot link to itself.');
+  // only the owner of an agent decides who sees it: a friend's agent is shared from their machine
+  if (from.remote) throw new Error(`${from.name} runs on ${from.remote.owner}'s machine. Only ${from.remote.owner} can share it.`);
   const edges = readJSON(FILES.edges, []);
   const existing = edges.find((e) => e.from === from.id && e.to === to.id);
   if (existing) return { edge: existing, created: false };
-  const color = (a) => colorOf(projectOf(a.cwd).key);
+  const color = (a) => colorOf(projectOfAgent(a).key);
   const edge = {
     id: crypto.randomUUID(), from: from.id, to: to.id, fromName: from.name, toName: to.name,
     fromColor: color(from), toColor: color(to), fromKind: from.kind, toKind: to.kind, createdAt: Date.now(), ...extra,
@@ -31,6 +34,8 @@ export function createEdge(from, to, extra = {}) {
 }
 
 export function removeEdge(id) {
+  const edge = readJSON(FILES.edges, []).find((e) => e.id === id);
+  if (edge?.mirrored) queueDrop(edge); // a friend shares this one: ask their machine to stop
   writeJSON(FILES.edges, readJSON(FILES.edges, []).filter((e) => e.id !== id));
   const cursors = readJSON(FILES.cursors, {});
   delete cursors[id];
@@ -52,6 +57,8 @@ export function peers(me, { all = false } = {}) {
 // direction: 'in' (they share with me), 'out' (I share with them), 'both'
 export function link(me, query, direction = 'both') {
   const other = resolve(listAgents(), query);
+  if (other.remote && direction === 'in') throw new Error(`${other.name} runs on ${other.remote.owner}'s machine. Only ${other.remote.owner} can share it with you.`);
+  if (other.remote) direction = 'out'; // across machines a link only goes from the owner's agent
   const made = [];
   if (direction === 'in' || direction === 'both') made.push(createEdge(other, me));
   if (direction === 'out' || direction === 'both') made.push(createEdge(me, other));
@@ -73,6 +80,13 @@ export function readContext(me, query, maxChars = 12000) {
     throw new Error(`${other.name} does not share context with you. Link it first ("link ${other.name}").`);
   }
   const { messages } = readAgentMessages(other);
+  if (other.remote) {
+    return {
+      agent: brief(other),
+      context: messages.length ? formatMessages(messages, maxChars) : `(${other.remote.owner} shares ${other.name} with you, but nothing has arrived yet.)`,
+      recentMessagesToYou: [],
+    };
+  }
   const shared = readJSON(FILES.messages, []).filter((m) => m.from === other.id && m.to === me.id).slice(-5);
   return {
     agent: brief(other),
@@ -86,6 +100,7 @@ export function readContext(me, query, maxChars = 12000) {
 // Send a message. Allowed when the two agents are linked in either direction.
 export function send(me, query, text) {
   const other = resolve(listAgents(), query);
+  if (other.remote) throw new Error(`${other.name} runs on ${other.remote.owner}'s machine. Agents on different machines do not message each other; it can read what you share with it.`);
   if (!linked(readJSON(FILES.edges, []), me.id, other.id)) {
     throw new Error(`You are not linked to ${other.name}. Link first ("link ${other.name}").`);
   }

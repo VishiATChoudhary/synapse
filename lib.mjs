@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
 const HOME = os.homedir();
-export const CLAUDE = path.join(HOME, '.claude');
+export const CLAUDE = process.env.SYNAPSE_CLAUDE_HOME || path.join(HOME, '.claude');
 export const DATA = process.env.SYNAPSE_HOME || path.join(HOME, '.synapse');
 fs.mkdirSync(DATA, { recursive: true });
 
@@ -26,7 +26,12 @@ export const FILES = {
   forks: path.join(DATA, 'forks.json'),
   lineage: path.join(DATA, 'lineage.json'),
   app: path.join(DATA, 'app.json'),
+  remote: path.join(DATA, 'remote.json'),           // multiplayer: this machine's relay identity and its friends
+  peerState: path.join(DATA, 'remote', 'state.json'), // the agents each friend's machine last reported
+  account: path.join(DATA, 'account.json'),         // Synapse Cloud sign-in: { cloud, token, user }
+  requests: path.join(DATA, 'requests.json'),       // synapse requests last fetched from the cloud
 };
+export const REMOTE_DIR = path.join(DATA, 'remote');
 
 export function readJSON(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
@@ -97,7 +102,10 @@ function toolLine(name, input) {
   return `[${name}${what ? `: ${clip(String(what).replace(/\s+/g, ' '), 120)}` : ''}]`;
 }
 
-const PARSERS = { claude: claudeMessage, codex: codexMessage };
+// friends' agents arrive as our own JSONL of {role, text, ts, tool} (see remote.mjs)
+const remoteMessage = (e) => (e.role && typeof e.text === 'string' ? { role: e.role, text: e.text, ts: e.ts, tool: e.tool } : null);
+
+const PARSERS = { claude: claudeMessage, codex: codexMessage, remote: remoteMessage };
 
 // Read messages from a JSONL transcript starting at a byte offset (or the tail when offset is null).
 // Returns the messages plus the byte offset of the last complete line consumed.
@@ -323,7 +331,42 @@ function processAgents() {
   });
 }
 
+// ---------------------------------------------------------------- friends' agents (multiplayer)
+
+// A friend's agent gets an id of its own here: their machine id plus the id it has over there.
+export const remoteId = (machine, agentId) => `r-${machine}-${agentId}`;
+export const remoteLog = (machine, agentId) => path.join(REMOTE_DIR, machine, `${String(agentId).replace(/[^\w.-]/g, '_')}.jsonl`);
+export const REMOTE_STALE = 10 * 60_000;  // a friend's agents leave the canvas this long after their machine went quiet
+export const REMOTE_OFFLINE = 90_000;     // ... and show as offline after this
+
+function remoteAgents() {
+  const cfg = readJSON(FILES.remote, null);
+  if (!cfg?.peers) return [];
+  const states = readJSON(FILES.peerState, {});
+  const now = Date.now(), out = [];
+  for (const [m, peer] of Object.entries(cfg.peers)) {
+    const st = states[m];
+    if (!st || now - st.seen > REMOTE_STALE) continue;
+    const owner = st.name || peer.name;
+    for (const a of st.agents || []) {
+      const log = remoteLog(m, a.id);
+      out.push({
+        id: remoteId(m, a.id), pid: null, kind: a.kind, name: a.name, cwd: `${owner}'s machine · ${a.project}`,
+        status: now - st.seen > REMOTE_OFFLINE ? 'offline' : a.status, startedAt: a.startedAt, updatedAt: st.seen,
+        transcript: fs.existsSync(log) ? log : null, format: 'remote',
+        remote: { machine: m, owner, agentId: a.id, project: a.project },
+      });
+    }
+  }
+  return out;
+}
+
+// Every agent Synapse knows about: this machine's, then friends' (multiplayer). Friends' agents carry `remote`.
 export function listAgents() {
+  return [...localAgents(), ...remoteAgents()];
+}
+
+export function localAgents() {
   const found = DEMO ? DEMO.demoAgents() : [...claudeAgents(), ...processAgents()];
   // names given in the canvas or with `synapse rename` win over the generated ones
   const names = readJSON(FILES.names, {});
@@ -348,8 +391,9 @@ export function recordFork(pid, parent, question) {
 
 // Rename an agent; an empty name goes back to the generated one. Links keep the new name too.
 export function renameAgent(agent, name) {
+  if (agent.remote) throw new Error(`${agent.name} runs on ${agent.remote.owner}'s machine; only they can rename it`);
   name = String(name ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 48);
-  const others = listAgents().filter((a) => a.id !== agent.id);
+  const others = localAgents().filter((a) => a.id !== agent.id);
   if (name && others.some((a) => a.name.toLowerCase() === name.toLowerCase())) throw new Error(`another agent is already called "${name}"`);
   const names = readJSON(FILES.names, {});
   if (name) names[agent.id] = name; else delete names[agent.id];
@@ -367,7 +411,7 @@ export function renameAgent(agent, name) {
 
 // Find which agent a process belongs to by walking up its parents (used by the MCP server).
 export function agentForProcess(pid) {
-  const agents = listAgents();
+  const agents = localAgents();
   const rows = new Map(processTable().map((r) => [r.pid, r]));
   for (let p = pid, guard = 0; p > 1 && guard < 64; p = rows.get(p)?.ppid, guard++) {
     const a = agents.find((x) => x.pid === p);
@@ -376,10 +420,11 @@ export function agentForProcess(pid) {
   return null;
 }
 
-// Resolve "name", "id" or a unique prefix of either.
+// Resolve "name", "id" or a unique prefix of either. A friend's agent also answers to "name@friend".
 export function findAgent(agents, query) {
   const q = String(query || '').toLowerCase().trim();
   return agents.find((a) => a.id === query || a.name.toLowerCase() === q)
+    || agents.find((a) => a.remote && `${a.name}@${a.remote.owner}`.toLowerCase() === q)
     || agents.find((a) => a.name.toLowerCase().startsWith(q) || a.id.startsWith(q)) || null;
 }
 
@@ -387,33 +432,44 @@ export function findAgent(agents, query) {
 
 // Group sessions by real project: worktrees share their main repo's git dir.
 // `label` is what is shown (a name given in the canvas or with `synapse rename-project` wins),
-// `autoLabel` is the generated one.
+// `autoLabel` is the generated one. `worktree` is set when cwd is in a linked worktree.
 const projectCache = new Map();
 export function projectOf(cwd) {
   let p = projectCache.get(cwd);
   if (!p) {
-    let key = cwd, label = path.basename(cwd), isGit = false;
+    let key = null, label = path.basename(cwd), worktree = null;
     try {
-      const common = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).trim();
+      const [top, common] = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).trim().split('\n');
       key = common.replace(/\/\.git\/?$/, '');
-      isGit = true;
       label = path.basename(key);
+      if (top && top !== key) worktree = { path: top, name: path.basename(top) }; // a linked worktree, not the repo's own folder
     } catch {}
     const wt = cwd.match(/\/worktrees\/([^/]+)\//); // e.g. ~/.superset/worktrees/<Project>/<branch>
     if (wt) label = wt[1];
-    if (!isGit) key = `project:${label}`; // not a git repo: group by name
-    p = { key, autoLabel: label };
+    if (!key) key = `project:${label}`; // not a git repo: group by name
+    else if (!worktree) { // a repo's own folder was once keyed by name: carry its given name over
+      const given = readJSON(FILES.projects, {}), old = `project:${label}`;
+      if (given[old] && !given[key]) { given[key] = given[old]; delete given[old]; writeJSON(FILES.projects, given); }
+    }
+    p = { key, autoLabel: label, worktree };
     projectCache.set(cwd, p);
   }
   const given = readJSON(FILES.projects, {})[p.key];
-  return { key: p.key, label: given || p.autoLabel, autoLabel: p.autoLabel };
+  return { key: p.key, label: given || p.autoLabel, autoLabel: p.autoLabel, worktree: p.worktree };
+}
+
+// A friend's agents are grouped by friend and project, apart from this machine's projects.
+export function projectOfAgent(a) {
+  if (!a.remote) return projectOf(a.cwd);
+  const label = `${a.remote.owner} · ${a.remote.project}`;
+  return { key: `remote:${a.remote.machine}:${a.remote.project}`, label, autoLabel: label };
 }
 
 // Rename a project; an empty name goes back to the generated one.
 export function renameProject(key, name) {
   name = String(name ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 48);
-  const live = new Map(listAgents().map((a) => { const p = projectOf(a.cwd); return [p.key, p]; }));
+  const live = new Map(localAgents().map((a) => { const p = projectOf(a.cwd); return [p.key, p]; }));
   if (name && [...live.values()].some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) {
     throw new Error(`another project is already called "${name}"`);
   }

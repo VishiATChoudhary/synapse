@@ -1,0 +1,13 @@
+{
+  "name": "synapse-cloud",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Accounts, trusted people, synapse requests and the machine mailbox for Synapse",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}
