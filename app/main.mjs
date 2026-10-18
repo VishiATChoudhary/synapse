@@ -9,8 +9,8 @@ import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
 import { git, listChoices, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
-import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork } from '../lib.mjs';
-import { createEdge } from '../ops.mjs';
+import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, postMessage } from '../lib.mjs';
+import { createEdge, forkReport } from '../ops.mjs';
 import { createUpdater, bundleOf, MANIFEST_URL } from './updater.mjs';
 
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
@@ -396,6 +396,14 @@ function prefill(id, text) {
   const cap = setTimeout(() => { if (seen) done(); else sub.dispose(); }, 20000);
 }
 
+// Paste text into a session's prompt and press Enter once the TUI has taken the paste in.
+function submit(id, text) {
+  const t = ptys.get(id);
+  if (!t) return;
+  t.p.write(`\x1b[200~${text}\x1b[201~`);
+  setTimeout(() => { if (ptys.get(id) === t) t.p.write('\r'); }, 400);
+}
+
 // ---------------------------------------------------------------- synapse canvas
 
 // The canvas is Synapse's own web UI, served by this checkout's server on a port of its own: a server started
@@ -691,9 +699,18 @@ handle('update:check', async () => ({ ...(await updater.check()), enabled: UPDAT
 handle('update:install', () => { if (updater.install({ relaunch: true, open: UPDATE_OPEN })) setTimeout(() => app.quit(), 50); });
 handle('update:download', () => { const u = updater.state.dmg; if (u) shell.openExternal(u); });
 handle('links', async () => (FAKE ? fake().links : (await acct()).externalLinks()));
-// a collapsed child shares with its parent on demand: the parent can read it, nothing is pushed into its prompt
-handle('fork:link', ({ child, parent }) => {
-  const agents = listAgents(), from = agents.find((a) => a.id === child), to = agents.find((a) => a.id === parent);
-  if (!from || !to) throw new Error('that agent is gone');
-  return createEdge(from, to, { onDemand: true }).created;
+// Collapsing forks hands their work back: what the children said goes into the parent's prompt and is
+// sent, so the parent takes it in right away. A parent with no session here gets it as a synapse message.
+const handedBack = {}; // child id -> time of the newest message already handed back
+handle('fork:merge', ({ children, parent }) => {
+  const agents = listAgents(), to = agents.find((a) => a.id === parent);
+  const kids = children.map((id) => agents.find((a) => a.id === id)).filter(Boolean);
+  if (!to || !kids.length) throw new Error('that agent is gone');
+  const report = forkReport(kids, handedBack);
+  if (!report) return { count: 0 };
+  Object.assign(handedBack, report.newest);
+  const byPty = agentsByPty(), ptyId = Object.keys(byPty).find((k) => byPty[k].synapseId === parent);
+  if (ptyId) submit(ptyId, report.text);
+  else postMessage(kids[0], to, report.text);
+  return { count: report.count, typed: !!ptyId };
 });

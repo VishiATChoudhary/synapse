@@ -752,9 +752,13 @@ function setChildrenCollapsed(s, targets, collapsed) {
     if (collapsed) M.collapsed.add(x.id);
     else for (const id of sessionBranch(s, x.id)) M.collapsed.delete(id);
   }
-  if (collapsed) for (const x of targets) {
-    const child = M.agents[x.pty]?.synapseId, parent = M.agents[sess(s, x.parent)?.pty]?.synapseId;
-    if (child && parent) linkToParent(child, parent, x.title);
+  if (collapsed) {
+    const byParent = new Map(); // collapse all: one message per parent with every child in it
+    for (const x of targets) {
+      const child = M.agents[x.pty]?.synapseId, parent = M.agents[sess(s, x.parent)?.pty]?.synapseId;
+      if (child && parent) byParent.set(parent, [...(byParent.get(parent) || []), child]);
+    }
+    for (const [parent, kids] of byParent) mergeIntoParent(kids, parent);
   }
   // If the current session was hidden, return to the nearest visible ancestor.
   const visible = new Set(visibleSessions(s).map((x) => x.id));
@@ -765,10 +769,12 @@ function setChildrenCollapsed(s, targets, collapsed) {
   else if (!canvasOpen && $('#modal').hidden) top(focusedSlot())?.term.focus();
 }
 
-// collapsing a child links it to its parent on demand: the parent can read it, nothing is pushed into its prompt
-async function linkToParent(child, parent, name) {
-  try { if (await synapse.fork.link(child, parent)) toast(`⇠ the parent can read "${name}" when it needs to`); }
-  catch (e) { toast(e.message, true); }
+// collapsing children hands what they found to their parent: it lands in the parent's prompt and is sent
+async function mergeIntoParent(children, parent) {
+  try {
+    const r = await synapse.fork.merge(children, parent);
+    if (r.count) toast(`⇠ ${r.count > 1 ? `${r.count} forks` : 'the fork'} handed back${r.typed ? '' : ': the parent gets it on its next prompt'}`);
+  } catch (e) { toast(e.message, true); }
 }
 
 function sessionActions(s, x) {
@@ -1391,11 +1397,11 @@ function canvasMenu({ hit, agent, group, x, y }) {
     if (mine) items.push(...sessionActions(mine, mine.sessions.find((q) => q.pty === ptyId)), '-', { label: 'Open session', run: () => { const z = mine.sessions.find((q) => q.pty === ptyId); M.focused = mine.id; focusPath(mine, z.id); if (canvasOpen) toggleCanvas(); render(); } });
     if (!mine) {
       const kids = agent.children || [];
-      const collapse = (k) => { tellCanvas({ action: 'collapse-branch', id: k.id }); linkToParent(k.id, agent.id, k.name); };
-      if (kids.some((k) => !k.hidden)) items.push({ label: 'Collapse all children', run: () => kids.filter((k) => !k.hidden).forEach(collapse) });
+      const collapse = (ks) => { for (const k of ks) tellCanvas({ action: 'collapse-branch', id: k.id }); mergeIntoParent(ks.map((k) => k.id), agent.id); };
+      if (kids.some((k) => !k.hidden)) items.push({ label: 'Collapse all children', run: () => collapse(kids.filter((k) => !k.hidden)) });
       if (kids.some((k) => k.hidden)) items.push({ label: 'Expand all children', run: () => tellCanvas({ action: 'expand-children', id: agent.id }) });
-      for (const child of kids) items.push({ label: `${child.hidden ? 'Expand' : 'Collapse'} child: ${child.name}`, run: () => child.hidden ? tellCanvas({ action: 'expand-branch', id: child.id }) : collapse(child) });
-      if (agent.parentId) items.push({ label: 'Collapse this child', run: () => { tellCanvas({ action: 'collapse-branch', id: agent.id }); linkToParent(agent.id, agent.parentId, agent.name); } });
+      for (const child of kids) items.push({ label: `${child.hidden ? 'Expand' : 'Collapse'} child: ${child.name}`, run: () => child.hidden ? tellCanvas({ action: 'expand-branch', id: child.id }) : collapse([child]) });
+      if (agent.parentId) items.push({ label: 'Collapse this child', run: () => { tellCanvas({ action: 'collapse-branch', id: agent.id }); mergeIntoParent([agent.id], agent.parentId); } });
     }
     if (agent.cwd) items.push({ label: 'New agent in this folder', sub: agentMenuIn(agent.cwd) });
     items.push({ label: 'Rename', run: () => tellCanvas({ action: 'rename', id: agent.id }) }, { label: 'Unlink all', run: () => tellCanvas({ action: 'unlink', id: agent.id }) }, '-');
