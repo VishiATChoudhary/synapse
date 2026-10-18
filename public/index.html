@@ -1552,6 +1552,7 @@ function separateFrames() {
   const rs = groupRects();
   const heldIds = new Set(drag?.mode === 'move' ? [drag.id] : drag?.mode === 'group' ? (rs.find((r) => r.key === drag.key)?.nodes || []).map(([id]) => id) : []);
   const holds = (r) => r.nodes.some(([id]) => heldIds.has(id));
+  const mass = (r) => r.nodes.filter(([, n]) => !n.slot).length || 1; // what a shift moves: a tree moves as one, through its root
   let moved = false;
   const apart = (list, GAP) => {
     for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
@@ -1560,7 +1561,10 @@ function separateFrames() {
       if (ox <= 0 || oy <= 0) continue;
       const horiz = ox < oy, amt = Math.min(horiz ? ox : oy, 60) * 0.35;
       const dir = horiz ? Math.sign((b.x0 + b.x1) - (a.x0 + a.x1)) || 1 : Math.sign((b.top + b.y1) - (a.top + a.y1)) || 1;
-      const ha = holds(a), hb = holds(b), sa = ha && !hb ? 0 : hb && !ha ? 1 : 0.5, sb = 1 - sa;
+      // the lighter frame yields more, so the pair's centre of mass stays put. An even split moved it every
+      // frame, the pull toward the (moved) middle closed the gap again, and the whole repo crept sideways.
+      const ha = holds(a), hb = holds(b), ma = mass(a), mb = mass(b);
+      const sa = ha && !hb ? 0 : hb && !ha ? 1 : mb / (ma + mb), sb = 1 - sa;
       shiftGroup(a, horiz ? -dir * amt * sa : 0, horiz ? 0 : -dir * amt * sa);
       shiftGroup(b, horiz ? dir * amt * sb : 0, horiz ? 0 : dir * amt * sb);
       moved = true;
@@ -1638,17 +1642,20 @@ function physics() {
       if (held !== rb.a.id) { rb.vx += ux * f; rb.vy += uy * f; }
     }
   }
-  // pull each agent gently toward the middle of its project, so projects form clusters
+  // pull each agent gently toward the middle of its project, so projects form clusters. The middle is
+  // taken over free nodes only: a tree counts once, at its root. Counting its children too put the target
+  // below the root, and since the children follow the root the target ran away with it, forever.
+  const free = list.filter(([, n]) => !n.slot);
   const mid = new Map();
-  for (const [, n] of list) { const m = mid.get(n.a.frameKey) || { x: 0, y: 0, c: 0 }; m.x += n.x; m.y += n.y; m.c++; mid.set(n.a.frameKey, m); }
-  for (const [id, n] of list) {
+  for (const [, n] of free) { const m = mid.get(n.a.frameKey) || { x: 0, y: 0, c: 0 }; m.x += n.x; m.y += n.y; m.c++; mid.set(n.a.frameKey, m); }
+  for (const [id, n] of free) {
     const m = mid.get(n.a.frameKey);
-    if (m.c > 1 && held !== id && !n.slot) { n.vx += (m.x / m.c - n.x) * 0.0016; n.vy += (m.y / m.c - n.y) * 0.0016; }
+    if (m.c > 1 && held !== id) { n.vx += (m.x / m.c - n.x) * 0.0016; n.vy += (m.y / m.c - n.y) * 0.0016; }
   }
   // and, more gently, toward the middle of their repo, so a repo's worktree frames stay together
   const repo = new Map();
-  for (const [, n] of list) { const m = repo.get(n.a.projectKey) || { x: 0, y: 0, c: 0, f: new Set() }; m.x += n.x; m.y += n.y; m.c++; m.f.add(n.a.frameKey); repo.set(n.a.projectKey, m); }
-  for (const [id, n] of list) {
+  for (const [, n] of free) { const m = repo.get(n.a.projectKey) || { x: 0, y: 0, c: 0, f: new Set() }; m.x += n.x; m.y += n.y; m.c++; m.f.add(n.a.frameKey); repo.set(n.a.projectKey, m); }
+  for (const [id, n] of free) {
     const m = repo.get(n.a.projectKey);
     if (m.f.size > 1 && drag?.id !== id) { n.vx += (m.x / m.c - n.x) * 0.0008; n.vy += (m.y / m.c - n.y) * 0.0008; }
   }
