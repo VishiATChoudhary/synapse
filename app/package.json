@@ -13,7 +13,8 @@
     "test:library": "electron tests/library.cjs",
     "test:tabs": "node tests/tabs.cjs",
     "test:drag": "node tests/drag.cjs",
-    "rebuild": "electron-rebuild -f -w node-pty"
+    "rebuild": "electron-rebuild -f -w node-pty",
+    "test:updater": "node tests/updater.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
