@@ -3,9 +3,9 @@
 import crypto from 'node:crypto';
 import {
   FILES, readJSON, writeJSON, listAgents, findAgent, readAgentMessages, formatMessages,
-  postMessage, takeInbox, linked, projectOfAgent, colorOf,
+  postMessage, takeInbox, linked, projectOfAgent, colorOf, remoteId, localAgents,
 } from './lib.mjs';
-import { queueDrop } from './remote.mjs';
+import { queueDrop, config } from './remote.mjs';
 
 const brief = (a) => ({ name: a.name, id: a.id, kind: a.kind, cwd: a.cwd, status: a.status, ...(a.remote ? { owner: a.remote.owner } : {}) });
 
@@ -42,13 +42,38 @@ export function removeEdge(id) {
   writeJSON(FILES.cursors, cursors);
 }
 
+// Share edge mode: 'sync' (default, the friend's agent reads my context) or 'talk' (the friend's agent may ask mine).
+// Talk keeps a snapshot of the source so the friend can still ask after the session closes.
+export function setMode(edgeId, mode) {
+  if (mode !== 'sync' && mode !== 'talk') throw new Error('mode is "sync" or "talk".');
+  const edges = readJSON(FILES.edges, []);
+  const edge = edges.find((e) => e.id === edgeId);
+  if (!edge) throw new Error('No such share.');
+  if (edge.mirrored) throw new Error(`${edge.owner || 'The owner'} shares this one; only the owner can change how it is shared.`);
+  const peer = Object.entries(config().peers).find(([m]) => edge.to.startsWith(remoteId(m, '')));
+  if (!peer) throw new Error("Only a share to a friend's agent can be set to talk.");
+  if (mode === 'talk') {
+    if (peer[1].via !== 'request') throw new Error('Talk works only with friends you connected through a synapse request.');
+    const a = localAgents().find((x) => x.id === edge.from);
+    if (!a) throw new Error('The agent has to be running to turn talk on.');
+    edge.mode = 'talk';
+    edge.snapshot = { kind: a.kind, name: a.name, cwd: a.cwd, transcript: a.transcript, format: a.format };
+  } else {
+    delete edge.mode;
+    delete edge.snapshot;
+  }
+  writeJSON(FILES.edges, edges);
+  return { edge };
+}
+
 // Who am I connected to?
 export function peers(me, { all = false } = {}) {
   const agents = listAgents();
   const edges = readJSON(FILES.edges, []);
   const byId = new Map(agents.map((a) => [a.id, a]));
-  const readsFrom = edges.filter((e) => e.to === me.id && byId.has(e.from)).map((e) => brief(byId.get(e.from)));
-  const sharesWith = edges.filter((e) => e.from === me.id && byId.has(e.to)).map((e) => brief(byId.get(e.to)));
+  const tag = (e, other) => ({ ...brief(other), ...(e.mode === 'talk' ? { talk: true } : {}) });
+  const readsFrom = edges.filter((e) => e.to === me.id && byId.has(e.from)).map((e) => tag(e, byId.get(e.from)));
+  const sharesWith = edges.filter((e) => e.from === me.id && byId.has(e.to)).map((e) => tag(e, byId.get(e.to)));
   const out = { me: brief(me), readsFrom, sharesWith };
   if (all) out.allAgents = agents.filter((a) => a.id !== me.id).map(brief);
   return out;

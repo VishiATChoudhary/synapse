@@ -103,9 +103,9 @@ export async function cloudMachine(cloud, sessionToken) {
 
 // A friend made through an accepted request: the cloud signed the pairing. Such a friend only ever
 // sees the agents shared with them (see push), never the rest of this machine.
-export function addPeer(machineId, { name, pair }) {
+export function addPeer(machineId, { name, pair, handle }) {
   const c = config();
-  c.peers[machineId] = { ...c.peers[machineId], name: clean(name, 40) || 'friend', pair, via: 'request', since: c.peers[machineId]?.since || Date.now() };
+  c.peers[machineId] = { ...c.peers[machineId], name: clean(name, 40) || 'friend', pair, via: 'request', ...(clean(handle, 24) ? { handle: clean(handle, 24) } : {}), since: c.peers[machineId]?.since || Date.now() };
   c.blocked = c.blocked.filter((m) => m !== machineId);
   saveConfig(c);
   return c.peers[machineId];
@@ -252,13 +252,13 @@ const ROLES = new Set(['user', 'assistant']);
 function cleanAgents(list) {
   return (Array.isArray(list) ? list : []).slice(0, 200).filter((a) => a && typeof a.id === 'string').map((a) => ({
     id: clean(a.id, 120), name: clean(a.name, 48) || 'agent', kind: KINDS.includes(a.kind) ? a.kind : 'agent',
-    status: a.status === 'busy' ? 'busy' : 'idle', project: clean(a.project, 60) || 'project',
+    status: a.status === 'busy' || a.status === 'closed' ? a.status : 'idle', project: clean(a.project, 60) || 'project',
     startedAt: Number(a.startedAt) || null,
   }));
 }
 function cleanShares(list) {
   return (Array.isArray(list) ? list : []).slice(0, 500).filter((s) => s && typeof s.from === 'string' && typeof s.to === 'string')
-    .map((s) => ({ from: clean(s.from, 120), to: clean(s.to, 160), fromName: clean(s.fromName, 48) }));
+    .map((s) => ({ from: clean(s.from, 120), to: clean(s.to, 160), fromName: clean(s.fromName, 48), ...(s.mode === 'talk' ? { mode: 'talk' } : {}) }));
 }
 
 // The links a friend has drawn from their agents to ours live in our edges.json too ("mirrored"),
@@ -272,10 +272,10 @@ function mirror(m, shares, owner) {
     const old = before.find((e) => e.id === id);
     return {
       id, from: remoteId(m, s.from), to: s.to, fromName: s.fromName, toName: locals.get(s.to)?.name || old?.toName || s.to,
-      fromKind: old?.fromKind, toKind: locals.get(s.to)?.kind, mirrored: true, remote: m, owner, createdAt: old?.createdAt || Date.now(),
+      ...(s.mode ? { mode: s.mode } : {}), fromKind: old?.fromKind, toKind: locals.get(s.to)?.kind, mirrored: true, remote: m, owner, createdAt: old?.createdAt || Date.now(),
     };
   });
-  const same = before.length === next.length && before.every((e) => next.some((x) => x.id === e.id && x.fromName === e.fromName && x.owner === e.owner));
+  const same = before.length === next.length && before.every((e) => next.some((x) => x.id === e.id && x.fromName === e.fromName && x.owner === e.owner && x.mode === e.mode));
   if (same) return;
   writeJSON(FILES.edges, [...edges.filter((e) => !(e.mirrored && e.remote === m)), ...next]);
   const gone = before.filter((e) => !next.some((x) => x.id === e.id));
@@ -334,10 +334,15 @@ async function pull(c, timeout) {
       // a friend who joined our invite, or who accepted our request: the cloud vouches for the pairing token it carries
       if (!it.pair) continue;
       c.peers[m] = { name: clean(it.name, 40) || 'friend', pair: it.pair, ...(it.type === 'paired' && it.via === 'request' ? { via: 'request' } : {}), since: Date.now() };
+      if (it.type === 'paired' && clean(it.handle, 24)) c.peers[m].handle = clean(it.handle, 24);
       cfgChanged = true;
       logEvent({ type: 'friend', name: c.peers[m].name });
     } else if (it.type === 'paired' && it.via === 'request' && c.peers[m].via !== 'request') {
       c.peers[m].via = 'request';
+      cfgChanged = true;
+    }
+    if (it.type === 'paired' && clean(it.handle, 24) && c.peers[m].handle !== clean(it.handle, 24)) {
+      c.peers[m].handle = clean(it.handle, 24);
       cfgChanged = true;
     }
     if (it.type === 'state') {
@@ -396,10 +401,23 @@ function pack(messages) {
   return out.reverse();
 }
 
+// While a talk source is live, keep its snapshot current so the answer can come from it after it closes.
+function refreshSnapshots(edges, byId) {
+  let changed = false;
+  for (const e of edges) {
+    const a = e.mode === 'talk' && !e.mirrored && byId.get(e.from);
+    if (!a || e.snapshot?.transcript === a.transcript) continue;
+    e.snapshot = { kind: a.kind, name: a.name, cwd: a.cwd, transcript: a.transcript, format: a.format };
+    changed = true;
+  }
+  if (changed) writeJSON(FILES.edges, edges);
+}
+
 async function push(c, timeout) {
   const locals = localAgents();
   const byId = new Map(locals.map((a) => [a.id, a]));
   const edges = readJSON(FILES.edges, []);
+  refreshSnapshots(edges, byId);
   const sent = readJSON(SENT, {});
   let outbox = readJSON(OUTBOX, []);
   const now = Date.now();
@@ -408,8 +426,11 @@ async function push(c, timeout) {
 
   for (const [m, peer] of Object.entries(c.peers)) {
     const prefix = remoteId(m, '');
-    const shares = edges.filter((e) => !e.mirrored && byId.has(e.from) && e.to.startsWith(prefix))
-      .map((e) => ({ from: e.from, to: e.to.slice(prefix.length), fromName: byId.get(e.from).name }));
+    // a talk edge outlives its session: the friend still sees the agent (closed) and can ask it
+    const shares = edges.filter((e) => !e.mirrored && e.to.startsWith(prefix) && (byId.has(e.from) || (e.mode === 'talk' && e.snapshot)))
+      .map((e) => (byId.has(e.from)
+        ? { from: e.from, to: e.to.slice(prefix.length), fromName: byId.get(e.from).name, ...(e.mode === 'talk' ? { mode: 'talk' } : {}) }
+        : { from: e.from, to: e.to.slice(prefix.length), fromName: e.snapshot.name, mode: 'talk', dormant: true }));
     const items = [];
     const marks = {};
     const sharedFrom = [...new Set(shares.map((s) => s.from))];
@@ -421,6 +442,11 @@ async function push(c, timeout) {
       const theirs = new Set(edges.filter((e) => e.mirrored && e.remote === m).map((e) => e.to));
       agents = brief.filter((a) => sharedFrom.includes(a.id) || theirs.has(a.id));
     }
+    for (const e of edges) {
+      if (e.mirrored || !e.to.startsWith(prefix) || byId.has(e.from) || e.mode !== 'talk' || !e.snapshot) continue;
+      if (agents.some((a) => a.id === e.from)) continue;
+      agents = [...agents, { id: e.from, name: e.snapshot.name, kind: e.snapshot.kind, status: 'closed', project: projectOf(e.snapshot.cwd).label, startedAt: null }];
+    }
     const sig = sha(JSON.stringify([c.name, agents.map((a) => [a.id, a.name, a.status, a.project]), shares]));
     const last = sent[`state:${m}`];
     if (!last || last.sig !== sig || now - last.t > HEARTBEAT) {
@@ -428,7 +454,7 @@ async function push(c, timeout) {
       marks[`state:${m}`] = { sig, t: now };
     }
 
-    for (const from of sharedFrom) {
+    for (const from of sharedFrom.filter((x) => byId.has(x))) {
       const a = byId.get(from), key = `${m}:${from}`;
       if (!a.transcript) continue;
       const { messages, end } = readAgentMessages(a, sent[key]?.cursor ?? null, { tailBytes: 300_000, minMessages: 6 });

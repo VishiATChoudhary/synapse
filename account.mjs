@@ -146,7 +146,7 @@ export async function accept(id, agentIds = []) {
   const out = await api('POST', `/v1/requests/${encodeURIComponent(req.id)}/accept`, { machineId: c.machineId, agents: chosen.map(agentBrief) });
   const m = out.peer?.machineId || req.fromMachine;
   const owner = out.peer?.name || req.from?.name || req.from?.handle || 'friend';
-  remote.addPeer(m, { name: owner, pair: out.pair });
+  remote.addPeer(m, { name: owner, pair: out.pair, handle: req.from?.handle });
   // share each chosen agent with the agent that asked; the next sync ships their context
   const asker = { id: remoteId(m, req.agent.id), name: req.agent.name, kind: req.agent.kind, remote: { machine: m, owner, agentId: req.agent.id, project: req.agent.project } };
   for (const a of chosen) createEdge(a, asker);

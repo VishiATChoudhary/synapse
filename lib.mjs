@@ -30,6 +30,7 @@ export const FILES = {
   peerState: path.join(DATA, 'remote', 'state.json'), // the agents each friend's machine last reported
   account: path.join(DATA, 'account.json'),         // Synapse Cloud sign-in: { cloud, token, user }
   requests: path.join(DATA, 'requests.json'),       // synapse requests last fetched from the cloud
+  talks: path.join(DATA, 'talks.json'),             // agent talk: conversations with friends' agents
 };
 export const REMOTE_DIR = path.join(DATA, 'remote');
 
@@ -349,12 +350,13 @@ function remoteAgents() {
     if (!st || now - st.seen > REMOTE_STALE) continue;
     const owner = st.name || peer.name;
     for (const a of st.agents || []) {
+      const closed = a.status === 'closed'; // a talk agent whose session ended; its owner still answers from a snapshot
       const log = remoteLog(m, a.id);
       out.push({
         id: remoteId(m, a.id), pid: null, kind: a.kind, name: a.name, cwd: `${owner}'s machine · ${a.project}`,
-        status: now - st.seen > REMOTE_OFFLINE ? 'offline' : a.status, startedAt: a.startedAt, updatedAt: st.seen,
+        status: closed ? 'closed' : now - st.seen > REMOTE_OFFLINE ? 'offline' : a.status, startedAt: a.startedAt, updatedAt: st.seen,
         transcript: fs.existsSync(log) ? log : null, format: 'remote',
-        remote: { machine: m, owner, agentId: a.id, project: a.project },
+        remote: { machine: m, owner, handle: peer.handle || null, agentId: a.id, project: a.project },
       });
     }
   }
@@ -420,11 +422,11 @@ export function agentForProcess(pid) {
   return null;
 }
 
-// Resolve "name", "id" or a unique prefix of either. A friend's agent also answers to "name@friend".
+// Resolve "name", "id" or a unique prefix of either. A friend's agent also answers to "name@friend" (their name or their handle).
 export function findAgent(agents, query) {
   const q = String(query || '').toLowerCase().trim();
   return agents.find((a) => a.id === query || a.name.toLowerCase() === q)
-    || agents.find((a) => a.remote && `${a.name}@${a.remote.owner}`.toLowerCase() === q)
+    || agents.find((a) => a.remote && (`${a.name}@${a.remote.owner}`.toLowerCase() === q || (a.remote.handle && `${a.name}@${a.remote.handle}`.toLowerCase() === q)))
     || agents.find((a) => a.name.toLowerCase().startsWith(q) || a.id.startsWith(q)) || null;
 }
 
