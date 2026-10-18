@@ -368,8 +368,19 @@ export function listAgents() {
   return [...localAgents(), ...remoteAgents()];
 }
 
+// The processes and sessions answering a friend's questions (agent talk). They are never agents of their own:
+// not listed, linked, shared or resumable. Read here rather than in talk.mjs, which imports this file.
+export function externalForks() {
+  const s = readJSON(FILES.talks, {});
+  const sessions = new Set((s.conversations || []).map((c) => c.forkSession).filter((v) => typeof v === 'string' && v));
+  const pids = new Set((s.running || []).map((r) => r.pid).filter(Number.isInteger));
+  return { sessions, pids };
+}
+
 export function localAgents() {
-  const found = DEMO ? DEMO.demoAgents() : [...claudeAgents(), ...processAgents()];
+  const ext = externalForks();
+  const found = (DEMO ? DEMO.demoAgents() : [...claudeAgents(), ...processAgents()])
+    .filter((a) => !ext.sessions.has(a.id) && !ext.pids.has(a.pid));
   // names given in the canvas or with `synapse rename` win over the generated ones
   const names = readJSON(FILES.names, {});
   // forks: which agent each one was forked from and the question it was given (the app records it by pid)

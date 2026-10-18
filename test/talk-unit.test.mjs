@@ -8,6 +8,7 @@ import path from 'node:path';
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-talk-'));
 process.env.SYNAPSE_HOME = home;
 process.env.SYNAPSE_DEMO = '1';
+process.env.SYNAPSE_CLAUDE_HOME = path.join(home, 'claude');
 const lib = await import('../lib.mjs');
 const ops = await import('../ops.mjs');
 const { FILES, readJSON, writeJSON, listAgents, localAgents, findAgent } = lib;
@@ -171,4 +172,172 @@ test('reconcile ends a conversation whose peer is gone', () => {
   writeJSON(FILES.remote, { relay: 'http://x', token: 't', peers: {}, blocked: [] });
   assert.deepEqual(talk.reconcile(), ['c1']);
   assert.equal(state().conversations[0].endReason, 'revoked');
+});
+
+// ---------------------------------------------------------------- talk.mjs: the answering runner
+import { spawn as realSpawn } from 'node:child_process';
+const FAKE = new URL('./fixtures/fake-claude.mjs', import.meta.url).pathname;
+process.env.SYNAPSE_TALK_CLAUDE = FAKE;
+const waitFor = async (fn, ms = 8000) => {
+  const t0 = Date.now();
+  while (!fn()) { if (Date.now() - t0 > ms) throw new Error('timed out waiting'); await new Promise((r) => setTimeout(r, 20)); }
+};
+const idle = () => (state().running || []).length === 0;
+const conv0 = () => state().conversations[0];
+const echoOf = (seq = 1) => JSON.parse(conv0().turns.find((t) => t.seq === seq).a);
+const after = (argv, flag) => argv[argv.indexOf(flag) + 1];
+const answerOnce = async (target, seq = 1, opts = {}) => { talk.receiveAsk('m1', ask(target, seq)); await talk.tick(opts); await waitFor(idle); };
+const toolless = (argv) => {
+  assert.ok(argv.includes('-p'));
+  assert.equal(after(argv, '--tools'), '');
+  assert.ok(argv.includes('--strict-mcp-config'));
+  assert.equal(after(argv, '--output-format'), 'json');
+  assert.ok(after(argv, '--append-system-prompt').includes('You have no tools'));
+};
+
+test('native first turn forks the session tool-less', async () => {
+  reset(); const { target } = talkEdge('demo-api-auth');
+  await answerOnce(target);
+  const e = echoOf();
+  toolless(e.argv);
+  assert.equal(after(e.argv, '--resume'), 'demo-api-auth');
+  assert.ok(e.argv.includes('--fork-session'));
+  assert.equal(e.external, '1');
+  assert.equal(e.stdin.trim(), 'why?');
+  assert.ok(conv0().forkSession);
+  const items = talk.takeOutgoing().map((o) => o.item);
+  assert.deepEqual(items.map((i) => i.type === 'talk-status' ? i.state : i.type), ['answering', 'talk-answer']);
+  assert.equal(items[1].seq, 1);
+});
+
+test('follow-up resumes the fork, not the agent', async () => {
+  reset(); const { target } = talkEdge('demo-api-auth');
+  await answerOnce(target, 1);
+  const fork = conv0().forkSession;
+  await answerOnce(target, 2);
+  const e = echoOf(2);
+  toolless(e.argv);
+  assert.equal(after(e.argv, '--resume'), fork);
+  assert.ok(!e.argv.includes('--fork-session'));
+  assert.ok(!e.argv.includes('demo-api-auth'));
+  assert.equal(conv0().forkSession, fork);
+});
+
+test('replay for a codex agent carries its transcript and no --resume on turn 1', async () => {
+  reset(); const { target } = talkEdge('demo-api-rate-limit');
+  await answerOnce(target);
+  assert.equal(conv0().mode, 'replay');
+  const e = echoOf();
+  toolless(e.argv);
+  assert.ok(!e.argv.includes('--resume'));
+  assert.ok(!e.argv.includes('--fork-session'));
+  assert.match(after(e.argv, '--append-system-prompt'), /a codex agent/);
+  assert.match(e.stdin, /Token bucket per tenant/);
+  assert.match(e.stdin, /why\?/);
+  assert.equal(e.external, '1');
+  // its follow-up resumes the answerer session
+  const fork = conv0().forkSession;
+  await answerOnce(target, 2);
+  assert.equal(after(echoOf(2).argv, '--resume'), fork);
+});
+
+test('profile flags are stripped to the allowlist', () => {
+  writeJSON(FILES.app, { profiles: { claude: { command: 'FOO=bar SYNAPSE_EXTERNAL=0 claude --dangerously-skip-permissions --model opus --mcp-config x.json' } } });
+  try {
+    const conv = { id: 'c', mode: 'native', forkSession: null, targetName: 'api', peerHandle: 'bob', turns: [] };
+    const cmd = talk.answerCommand(conv, { seq: 1, q: 'hi' }, { kind: 'claude', id: 'sess', cwd: '/nope', name: 'api' });
+    assert.equal(after(cmd.args, '--model'), 'opus');
+    for (const bad of ['--dangerously-skip-permissions', '--mcp-config', 'x.json', 'claude']) assert.ok(!cmd.args.includes(bad), bad);
+    toolless(cmd.args);
+    assert.equal(cmd.env.FOO, 'bar');
+    assert.equal(cmd.env.SYNAPSE_EXTERNAL, '1');
+    assert.equal(cmd.bin, FAKE);
+  } finally { fs.rmSync(FILES.app, { force: true }); }
+});
+
+test('times out after 120 s', async () => {
+  reset(); const { target } = talkEdge('demo-api-auth');
+  assert.equal(talk.LIMITS.answerMs, 120_000);
+  talk._setLimit('answerMs', 300);
+  process.env.FAKE_CLAUDE_SLEEP_MS = '10000';
+  try {
+    talk.receiveAsk('m1', ask(target));
+    await talk.tick();
+    const pid = state().running[0].pid;
+    assert.ok(pid > 0);
+    await waitFor(idle);
+    assert.equal(conv0().endReason, 'error');
+    assert.ok(talk.takeOutgoing().some((o) => o.item.type === 'talk-end' && o.item.reason === 'error'));
+    assert.throws(() => process.kill(pid, 0), /ESRCH/);
+  } finally { talk._setLimit('answerMs', 120_000); delete process.env.FAKE_CLAUDE_SLEEP_MS; }
+});
+
+test('crash ends with error', async () => {
+  reset(); const { target } = talkEdge('demo-api-auth');
+  process.env.FAKE_CLAUDE_EXIT = '1';
+  try { await answerOnce(target); } finally { delete process.env.FAKE_CLAUDE_EXIT; }
+  assert.equal(conv0().status, 'ended');
+  assert.equal(conv0().endReason, 'error');
+  assert.equal(conv0().turns[0].a, null);
+});
+
+test('missing transcript is unavailable', async () => {
+  reset(); const { target } = talkEdge('demo-docs');
+  let spawned = 0;
+  await answerOnce(target, 1, { spawn: (...a) => { spawned++; return realSpawn(...a); } });
+  assert.equal(spawned, 0);
+  assert.equal(conv0().endReason, 'unavailable');
+  assert.ok(talk.takeOutgoing().some((o) => o.item.reason === 'unavailable'));
+});
+
+test('no claude binary is unsupported', async () => {
+  reset(); const { target } = talkEdge('demo-api-rate-limit');
+  process.env.SYNAPSE_TALK_CLAUDE = path.join(home, 'no-such-claude');
+  try { await answerOnce(target); } finally { process.env.SYNAPSE_TALK_CLAUDE = FAKE; }
+  assert.equal(conv0().endReason, 'unsupported');
+  assert.equal(conv0().endNote, 'Claude Code is needed to answer for this agent');
+});
+
+test('external forks never show as agents', async () => {
+  reset(); const { target } = talkEdge('demo-api-auth');
+  process.env.FAKE_CLAUDE_SLEEP_MS = '10000';
+  try {
+    talk.receiveAsk('m1', ask(target));
+    await talk.tick();
+    const pid = state().running[0].pid;
+    assert.ok(lib.externalForks().pids.has(pid));
+    assert.ok(!localAgents().some((a) => a.pid === pid));
+    // ending the conversation kills its answer at once
+    talk.endConversation('c1', 'owner');
+    await waitFor(idle);
+    assert.throws(() => process.kill(pid, 0), /ESRCH/);
+    assert.equal(conv0().endReason, 'owner');
+  } finally { delete process.env.FAKE_CLAUDE_SLEEP_MS; }
+  // a demo agent stands in for a fork: by pid while running, by session id afterwards
+  writeJSON(FILES.talks, { conversations: [{ id: 'z', forkSession: 'demo-api-auth', status: 'ended', lastAt: Date.now() }], running: [{ conv: 'z', pid: 102 }] });
+  const ids = localAgents().map((a) => a.id);
+  assert.ok(!ids.includes('demo-api-auth'));
+  assert.ok(!ids.includes('demo-api-review'));
+  assert.ok(ids.includes('demo-docs'));
+});
+
+test('cleanup deletes only the fork session file', async () => {
+  reset(); const { target } = talkEdge('demo-api-auth');
+  await answerOnce(target);
+  const fork = conv0().forkSession;
+  const dir = path.join(home, 'claude', 'projects', '-dev-acme-api');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const f of [`${fork}.jsonl`, 'demo-api-auth.jsonl', `${fork}.jsonl.bak`]) fs.writeFileSync(path.join(dir, f), '{}\n');
+  talk.endConversation('c1', 'asker');
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['demo-api-auth.jsonl', `${fork}.jsonl.bak`].sort());
+});
+
+test('state writes are serialized by a lock file', () => {
+  reset();
+  fs.writeFileSync(`${FILES.talks}.lock`, '1');
+  const old = new Date(Date.now() - 10_000);
+  fs.utimesSync(`${FILES.talks}.lock`, old, old);
+  // a stale lock is broken, and the lock is released after the write
+  talk.endConversation('nope', 'owner');
+  assert.equal(fs.existsSync(`${FILES.talks}.lock`), false);
 });
