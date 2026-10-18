@@ -131,8 +131,16 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
   try { ({ id: pty } = await spawn(term.cols, term.rows)); }
   catch (error) { term.dispose(); wrap.remove(); throw error; }
   synapse.pty.resize(pty, term.cols, term.rows); // whatever the spawner defaulted to, the pty and the view agree from the first frame
-  const x = { id: nextId++, pty, kind, title, question, parent, exited: false, term, fit, el: wrap };
-  wrap.addEventListener('pointerdown', () => { if (M.focused !== s.id) selectSession(s, x.id); });
+  const x = { id: nextId++, pty, kind, title, question, parent, exited: false, term, fit, el: wrap, marked: '' };
+  // what is marked goes into the next fork: an xterm selection (codex and most TUIs), or the OSC 52 copy an
+  // agent that owns the mouse sends for its own selection (claude). A new click or a sent prompt forgets it.
+  term.onSelectionChange(() => { if (term.hasSelection()) x.marked = term.getSelection(); });
+  term.parser.registerOscHandler(52, (data) => {
+    const b64 = data.slice(data.indexOf(';') + 1);
+    if (b64 && b64 !== '?') try { x.marked = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))); } catch {}
+    return false;
+  });
+  wrap.addEventListener('pointerdown', () => { x.marked = ''; if (M.focused !== s.id) selectSession(s, x.id); });
   wrap.addEventListener('focusin', () => { if (M.focused !== s.id) selectSession(s, x.id); });
   term.onData(sforkFilter(() => x));
   term.onResize(({ cols, rows }) => synapse.pty.resize(pty, cols, rows));
@@ -160,7 +168,8 @@ function sforkFilter(get) {
     if (d === '\r') {
       const m = line !== null && x.kind !== 'shell' && SFORK.exec(line.trim());
       const typed = line; line = '';
-      if (m) { synapse.pty.write(x.pty, '\x7f'.repeat(typed.length)); fork(m[1].trim(), { parentPty: x.pty }); return; }
+      if (m) { synapse.pty.write(x.pty, '\x7f'.repeat(typed.length)); fork(quoted(x.marked, m[1].trim()), { parentPty: x.pty }); return; }
+      x.marked = '';
     } else if (line !== null) {
       const t = d.replace(/\x1b\[20[01]~/g, ''); // bracketed paste markers
       if (t === '\x7f' || t === '\b') line = line.slice(0, -1);
@@ -215,9 +224,16 @@ function toggleSidebar() {
   $('#toggle-sidebar').setAttribute('aria-expanded', String(!collapsed));
 }
 
-// a fork's tab is named after its question: its first line, cut at a word to fit an agent's name (48)
+// marked text leads the fork's question as a > quote
+function quoted(marked, question = '') {
+  if (!marked.trim()) return question;
+  return `${marked.trim().split('\n').map((l) => `> ${l.trimEnd()}`).join('\n')}\n\n${question}`;
+}
+
+// a fork's tab is named after its question: its first line past any quote, cut at a word to fit an agent's name (48)
 function forkTitle(question) {
-  const line = question.split('\n').find((l) => l.trim())?.replace(/\s+/g, ' ').trim() || 'fork';
+  const lines = question.split('\n').filter((l) => l.trim());
+  const line = (lines.find((l) => !l.startsWith('>')) || lines[0])?.replace(/^>\s*/, '').replace(/\s+/g, ' ').trim() || 'fork';
   if (line.length <= 48) return line;
   const cut = line.slice(0, 47).replace(/\s+\S*$/, '');
   return `${cut.length > 20 ? cut : line.slice(0, 47)}…`;
@@ -231,6 +247,7 @@ async function fork(question, { requestId = null, parentPty = null } = {}) {
   if (parent.kind === 'shell' && !M.demo) return toast('shells have no transcript to fork', true);
   if (parentPty) M.focused = s.id;
   try {
+    parent.marked = '';
     const child = await makeSession(s, {
       kind: parent.kind, title: forkTitle(question), question, parent: parent.id,
       spawn: (cols, rows) => synapse.fork.spawn({ parentPty: parent.pty, question, requestId, cols, rows }),
@@ -960,10 +977,11 @@ function modal(title, build) {
 $('#modal').addEventListener('click', (e) => { if (e.target === $('#modal')) { $('#modal').hidden = true; } });
 
 // multiline: a textarea that grows with its text; Enter submits, ⇧Enter is a newline
-function promptText(title, hint, placeholder, onOk, { multiline = false } = {}) {
+function promptText(title, hint, placeholder, onOk, { multiline = false, value = '' } = {}) {
   modal(title, (body, close) => {
     const inp = el(multiline ? 'textarea' : 'input'); inp.placeholder = placeholder;
-    if (multiline) { inp.rows = 1; inp.oninput = () => { inp.style.height = 'auto'; inp.style.height = `${inp.scrollHeight + 1}px`; }; }
+    inp.value = value; inp.selectionStart = inp.selectionEnd = value.length;
+    if (multiline) { inp.rows = 1; inp.oninput = () => { inp.style.height = 'auto'; inp.style.height = `${inp.scrollHeight + 1}px`; }; requestAnimationFrame(inp.oninput); }
     body.append(inp, el('div', 'hint', hint));
     inp.onkeydown = (e) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (inp.value.trim()) { close(); onOk(inp.value.trim()); } }
@@ -1121,7 +1139,7 @@ function promptWorktree(project) {
 function promptFork(s = focusedSlot(), t = top(s)) {
   if (!t) return toast('no session to fork', true);
   const send = M.autoSendFork ? 'it is sent right away' : 'it waits in the child\'s prompt for you to send';
-  promptText('⑂ fork', `a child of "${t.title}" with its full context · ${send} · ⇧↵ newline`, 'what do you want to dig into?', (q) => { if (fanOpen) closeFan(); fork(q, { parentPty: t.pty }); }, { multiline: true });
+  promptText('⑂ fork', `a child of "${t.title}" with its full context · ${send} · ⇧↵ newline`, 'what do you want to dig into?', (q) => { if (fanOpen) closeFan(); fork(q, { parentPty: t.pty }); }, { multiline: true, value: quoted(t.marked) });
 }
 // Add a workspace by cloning, opening a folder, creating a repo, or choosing from the library.
 const WS_MODES = {

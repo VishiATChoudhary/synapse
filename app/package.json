@@ -14,7 +14,8 @@
     "test:tabs": "node tests/tabs.cjs",
     "test:drag": "node tests/drag.cjs",
     "rebuild": "electron-rebuild -f -w node-pty",
-    "test:updater": "node tests/updater.mjs"
+    "test:updater": "node tests/updater.mjs",
+    "test:fork-marked": "electron tests/fork-marked.cjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
