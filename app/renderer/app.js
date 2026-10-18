@@ -252,11 +252,13 @@ function sessionBranch(s, id) {
 function requestCloseSession(s, id) {
   const x = sess(s, id);
   if (!x) return;
-  const branch = sessionBranch(s, id);
-  const working = branch.some((sid) => statusOf(sess(s, sid)) === 'working');
-  if (branch.length > 1 || working) {
+  const branch = sessionBranch(s, id).map((sid) => sess(s, sid)).filter(Boolean);
+  const working = branch.some((y) => statusOf(y) === 'working');
+  const live = branch.some((y) => !y.exited && y.kind !== 'shell'); // an agent in service, even when idle
+  if (branch.length > 1 || live) {
     const detail = branch.length > 1 ? ` and its ${branch.length - 1} fork${branch.length > 2 ? 's' : ''}` : '';
-    return confirm(`Close "${x.title}"${detail}?${working ? ' An agent is still working.' : ''}`, () => closeSession(s, id));
+    const why = working ? ' An agent is still working.' : live ? ' An agent is still running.' : '';
+    return confirm(`Close "${x.title}"${detail}?${why}`, () => closeSession(s, id));
   }
   closeSession(s, id);
 }
@@ -952,10 +954,11 @@ function modal(title, build) {
   const m = $('#modal'), body = $('#modal-body');
   $('#modal-title').textContent = title;
   body.replaceChildren();
-  body.onkeydown = null;
+  body.onkeydown = null; body.tabIndex = -1;
   build(body, () => { m.hidden = true; top(focusedSlot())?.term.focus(); });
   m.hidden = false;
-  const inp = body.querySelector('input, textarea'); if (inp) inp.focus();
+  // focus only after the card is shown: a display:none element refuses it, and keys would still reach the terminal
+  (body.querySelector('input, textarea, [autofocus]') || (body.tabIndex >= 0 ? body : null))?.focus();
 }
 $('#modal').addEventListener('click', (e) => { if (e.target === $('#modal')) { $('#modal').hidden = true; } });
 
@@ -978,8 +981,8 @@ function confirm(text, onOk, { danger = 'Close' } = {}) {
     const no = el('button', 'btn', 'Keep'); no.onclick = close;
     const yes = el('button', 'btn danger', danger); yes.onclick = () => { close(); onOk(); };
     row.append(no, yes); body.appendChild(row);
-    body.onkeydown = (e) => { if (e.key === 'Enter') { close(); onOk(); } if (e.key === 'Escape') close(); };
-    yes.focus();
+    body.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); close(); onOk(); } if (e.key === 'Escape') close(); };
+    yes.autofocus = true;
   });
 }
 function pickProfile(worktreePath) {
@@ -996,7 +999,7 @@ function pickProfile(worktreePath) {
       body.appendChild(o);
       return o;
     });
-    body.tabIndex = 0; body.focus();
+    body.tabIndex = 0;
     body.onkeydown = (e) => {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { opts[sel].classList.remove('sel'); sel = (sel + (e.key === 'ArrowDown' ? 1 : keys.length - 1)) % keys.length; opts[sel].classList.add('sel'); }
       if (e.key === 'Enter') { close(); newSlot(worktreePath, keys[sel]); }
