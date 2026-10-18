@@ -15,7 +15,8 @@ function resolve(agents, query) {
   return a;
 }
 
-export function createEdge(from, to) {
+// extra.onDemand: the target reads the source when it asks (synapse_read); the hook pushes nothing
+export function createEdge(from, to, extra = {}) {
   if (from.id === to.id) throw new Error('An agent cannot link to itself.');
   // only the owner of an agent decides who sees it: a friend's agent is shared from their machine
   if (from.remote) throw new Error(`${from.name} runs on ${from.remote.owner}'s machine. Only ${from.remote.owner} can share it.`);
@@ -25,7 +26,7 @@ export function createEdge(from, to) {
   const color = (a) => colorOf(projectOfAgent(a).key);
   const edge = {
     id: crypto.randomUUID(), from: from.id, to: to.id, fromName: from.name, toName: to.name,
-    fromColor: color(from), toColor: color(to), fromKind: from.kind, toKind: to.kind, createdAt: Date.now(),
+    fromColor: color(from), toColor: color(to), fromKind: from.kind, toKind: to.kind, createdAt: Date.now(), ...extra,
   };
   edges.push(edge);
   writeJSON(FILES.edges, edges);

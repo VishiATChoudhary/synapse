@@ -157,7 +157,7 @@
   .md pre::-webkit-scrollbar { height: 6px; }
   .md pre::-webkit-scrollbar-thumb { background: var(--rule); }
   .md pre code { background: none; border: 0; padding: 0; font-size: 11px; line-height: 1.55; white-space: pre; }
-  .md a, .md .fl { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+  .msg a, .bubble a, .md .fl { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
   .md .fl { font: 11.5px var(--mono); }
   .md blockquote { margin: 4px 0 7px; padding-left: 10px; border-left: 2px solid var(--rule); color: var(--ink-2); }
   .md hr { border: 0; border-top: 1px solid var(--rule); margin: 10px 0; }
@@ -165,6 +165,41 @@
   .bubble.out { margin-left: 26px; border-color: var(--ink); }
   .bubble.in { margin-right: 26px; }
   .bubble .who { display: block; font: 10px var(--mono); text-transform: uppercase; color: var(--ink-3); margin-bottom: 3px; }
+
+  /* file links + viewer */
+  .fp { cursor: pointer; text-decoration: underline; text-decoration-color: var(--rule); text-underline-offset: 3px; transition: color .15s ease-out, text-decoration-color .15s ease-out; }
+  .fp:hover { color: var(--sig); text-decoration-color: var(--sig); }
+  .panel .cwd .fp { text-decoration: none; }
+  .viewer { position: fixed; top: 48px; right: 0; bottom: 0; width: min(660px, calc(100vw - 420px)); min-width: 320px; background: var(--paper); border-left: 1px solid var(--rule);
+    display: flex; flex-direction: column; overflow: hidden; transform: translateX(100%); visibility: hidden; transition: transform .2s ease-out, right .2s ease-out, visibility 0s .2s; z-index: 5; }
+  .viewer.open { transform: none; visibility: visible; transition: transform .2s ease-out, right .2s ease-out; }
+  .panel.open ~ .viewer { right: 380px; }
+  .viewer header { padding: 16px 18px 14px; border-bottom: 1px solid var(--rule); position: relative; }
+  .viewer h2 { margin: 0; padding-right: 64px; font: 400 15px/1.3 var(--mono); color: var(--ink); word-break: break-all; display: flex; align-items: center; gap: 8px; }
+  .viewer .crumbs { margin-top: 6px; font: 11px var(--mono); color: var(--ink-3); word-break: break-all; }
+  .viewer .crumbs .fp { text-decoration: none; }
+  .viewer .meta { margin-top: 10px; display: flex; gap: 4px; flex-wrap: wrap; }
+  .viewer .back { position: absolute; top: 14px; right: 46px; }
+  .vbody { flex: 1; overflow: auto; }
+  .vbody::-webkit-scrollbar { width: 8px; height: 8px; }
+  .vbody::-webkit-scrollbar-thumb { background: var(--rule); }
+  .src { font: 11.5px/1.6 var(--mono); color: var(--ink); padding: 8px 0 24px; min-width: max-content; }
+  .src .ln { display: flex; white-space: pre; }
+  .src .ln.hit { background: color-mix(in srgb, var(--sig) 14%, transparent); }
+  .src .ln.hit .n { color: var(--sig); }
+  .src .n { flex: none; width: 52px; padding-right: 14px; text-align: right; color: var(--ink-3); user-select: none; position: sticky; left: 0; background: var(--paper); }
+  .src .ln.hit .n { background: color-mix(in srgb, var(--sig) 14%, var(--paper)); }
+  .src .t { padding-right: 18px; }
+  .vbody > .md { padding: 16px 18px 28px; font-size: 13px; line-height: 1.6; color: var(--ink); }
+  .vbody .media { padding: 18px; display: flex; justify-content: center; }
+  .vbody .media img, .vbody .media video { max-width: 100%; height: auto; border: 1px solid var(--rule); background: repeating-conic-gradient(var(--wash) 0 25%, transparent 0 50%) 0 0/16px 16px; }
+  .vbody iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .vbody.web { background: #fff; }
+  .vbody .dir { padding: 8px 18px 24px; }
+  .vbody .dir .fp { display: flex; gap: 10px; padding: 5px 8px; margin: 0 -8px; font: 12.5px var(--mono); text-decoration: none; color: var(--ink); }
+  .vbody .dir .fp:hover { background: var(--wash); }
+  .vbody .dir .fp i { font-style: normal; color: var(--ink-3); width: 12px; }
+  .vbody .note { padding: 18px; font-size: 12.5px; color: var(--ink-3); }
 
   .toast { position: fixed; bottom: 58px; left: 50%; transform: translate(-50%, 8px); opacity: 0; pointer-events: none; z-index: 7;
     padding: 8px 12px; background: var(--paper); border: 1px solid var(--ink); font-size: 12px; transition: opacity .2s ease-out, transform .2s ease-out; max-width: 70vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -267,6 +302,7 @@
 </div>
 <div class="legend" id="legend"></div>
 <aside class="panel" id="panel"></aside>
+<aside class="viewer" id="viewer"></aside>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -680,7 +716,8 @@ addEventListener('pointermove', (ev) => {
   if (drag?.mode === 'move') {
     const n = agents.get(drag.id); if (!n) return;
     if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) > 3) drag.moved = true;
-    n.x = w.x - drag.ox; n.y = w.y - drag.oy; n.vx = n.vy = 0;
+    const r = treeRoot(n), at = n.slot || n; // a node in a fork tree drags the whole tree by its root
+    r.x += w.x - drag.ox - at.x; r.y += w.y - drag.oy - at.y; r.vx = r.vy = 0;
   } else if (drag?.mode === 'group') {
     if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) > 3) drag.moved = true;
     const g = groupRects().find((r) => r.key === drag.key);
@@ -701,7 +738,7 @@ addEventListener('pointermove', (ev) => {
 addEventListener('pointerup', () => {
   if (!drag) return;
   if (drag.mode === 'move') {
-    if (drag.moved) saveLayout(drag.id);
+    if (drag.moved) saveLayout(heldId());
     else { selected = { type: 'node', id: drag.id }; renderPanel(true); revealSelected(); }
   } else if (drag.mode === 'link') {
     const t = linkTarget();
@@ -765,7 +802,7 @@ addEventListener('keydown', (ev) => {
   if (ev.key === '/') { ev.preventDefault(); $('q').focus(); return; }
   if (ev.key === 'f' || ev.key === 'F') fit();
   if (ev.key === 'a' || ev.key === 'A') { arrange(); toast('Arranged by project'); }
-  if (ev.key === 'Escape') { selected = null; closePanel(); closeCmenu(); $('hints').classList.remove('show'); $('gear').classList.remove('on'); }
+  if (ev.key === 'Escape') { if (viewer.classList.contains('open')) return closeViewer(); selected = null; closePanel(); closeCmenu(); $('hints').classList.remove('show'); $('gear').classList.remove('on'); }
   if ((ev.key === 'Backspace' || ev.key === 'Delete') && selected?.type === 'edge') removeEdge(selected.id);
 });
 
@@ -877,7 +914,7 @@ function md(src) {
       .replace(/(^|[^\w*])\*(?!\s)(.+?)\*(?!\w)/g, '$1<em>$2</em>')
       .replace(/(^|[^\w_])_(?!\s)(.+?)_(?!\w)/g, '$1<em>$2</em>')
       .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, url) => /^https?:/.test(url)
-        ? `<a href="${url}" target="_blank" rel="noopener">${label}</a>` : `<span class="fl" title="${url}">${label}</span>`)
+        ? `<a href="${url}">${label}</a>` : `<span class="fl" title="${url}">${label}</span>`)
       .replace(/\u0001(\d+)\u0001/g, (_, i) => codes[i]);
   };
   const out = [];
@@ -959,7 +996,7 @@ async function renderPanel(fetchFeed) {
   panel.innerHTML = `
     <header>
       <h2><span class="orb" style="${shade}"></span><span class="nm" id="pName" title="Double-click to rename">${esc(a.name)}</span></h2>
-      <div class="cwd">${esc(a.cwd)}</div>
+      <div class="cwd"><span class="fp" data-path="${esc(a.cwd)}" title="Browse folder">${esc(a.cwd)}</span></div>
       <div class="meta">
         <span class="tag">${esc(a.kind)}</span>
         <span class="tag"><span class="sq ${a.status === 'busy' ? 'busy' : ''}"></span>${a.status === 'busy' ? 'working' : a.status === 'offline' ? 'offline' : 'idle'}</span>
@@ -989,8 +1026,160 @@ async function renderPanel(fetchFeed) {
       `<div class="msg ${m.role} ${m.tool ? 'tool' : ''}" style="animation-delay:${i * 30}ms"><span class="who">${m.role === 'user' ? 'you' : m.tool ? 'tool' : 'agent'}</span>${m.tool ? esc(m.text) : `<div class="md">${md(m.text)}</div>`}</div>`).join('');
     panel.querySelector('.feed').innerHTML = (chat ? `<h3>Agent messages</h3>${chat}` : '')
       + `<h3>Recent activity</h3>${acts || `<div class="none" style="padding-top:4px">${a.transcript ? 'No messages yet.' : a.remote ? `${esc(a.remote.owner)} has not shared this agent with you. Its activity shows here once they link it to one of yours.` : `No transcript readable for ${esc(a.kind)}. Linked agents can still message it.`}</div>`}`;
+    linkFiles(panel.querySelector('.feed'), a.cwd);
   }
 }
+panel.addEventListener('click', (ev) => {
+  const f = ev.target.closest('[data-path]');
+  if (f) openFile(f.dataset.path, f.dataset.cwd || agents.get(selected?.id)?.a.cwd);
+});
+
+// ---------- file links ----------
+// any path an agent mentions becomes clickable once the server confirms it exists,
+// so version numbers and domains that merely look like paths stay plain text
+const FILE_RE = /(?<![\w/.:@-])~?\/?[\w.@+-]+(?:\/[\w.@+-]+)*\/?(?::\d+(?:[-:]\d+)?|#L\d+(?:-L?\d+)?)?/g;
+const fileSeen = new Map(); // cwd + path -> exists
+const looksLikeFile = (t) => t.length > 2 && (t.includes('/') || /\.[A-Za-z]\w{0,7}(?::\d|#L|$)/.test(t)) && !/^\/+$/.test(t);
+const tidy = (t) => t.replace(/[.,;:)]+$/, '');
+const URL_RE = /\bhttps?:\/\/[^\s<>"'`\])]+/g;
+async function linkFiles(root, cwd) {
+  // bare urls first, so the path pass below never sees their slashes
+  const texts = [], urls = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (n) => n.parentElement.closest('a, .who') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+  while (urls.nextNode()) if (urls.currentNode.data.includes('http')) texts.push(urls.currentNode);
+  for (const n of texts) {
+    if (!n.data.match(URL_RE)) continue;
+    const frag = document.createDocumentFragment();
+    let at = 0;
+    for (const m of n.data.matchAll(URL_RE)) {
+      const u = tidy(m[0]), a = document.createElement('a');
+      a.href = u; a.textContent = u;
+      frag.append(n.data.slice(at, m.index), a); at = m.index + u.length;
+    }
+    frag.append(n.data.slice(at));
+    n.replaceWith(frag);
+  }
+  const nodes = [], fls = [...root.querySelectorAll('.md .fl[title]')];
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (n) => n.parentElement.closest('a, .fp, .fl, .who') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+  while (walk.nextNode()) nodes.push(walk.currentNode);
+  const hits = nodes.map((n) => [...n.data.matchAll(FILE_RE)].map((m) => ({ i: m.index, t: tidy(m[0]) })).filter((m) => looksLikeFile(m.t)));
+  const want = new Set([...hits.flat().map((m) => m.t), ...fls.map((f) => f.title)]);
+  const unknown = [...want].filter((t) => !fileSeen.has(cwd + '\0' + t));
+  if (unknown.length) {
+    const r = await fetch('/api/files/exists', { method: 'POST', body: JSON.stringify({ cwd, paths: unknown }) }).then((r) => r.json()).catch(() => ({}));
+    for (const t of unknown) fileSeen.set(cwd + '\0' + t, !!r[t]);
+  }
+  const ok = (t) => fileSeen.get(cwd + '\0' + t);
+  for (const f of fls) if (f.isConnected && ok(f.title)) { f.classList.add('fp'); f.dataset.path = f.title; f.dataset.cwd = cwd; }
+  nodes.forEach((n, k) => {
+    const ms = hits[k].filter((m) => ok(m.t));
+    if (!ms.length || !n.isConnected) return;
+    const frag = document.createDocumentFragment();
+    let at = 0;
+    for (const m of ms) {
+      frag.append(n.data.slice(at, m.i));
+      const s = document.createElement('span');
+      s.className = 'fp'; s.dataset.path = m.t; s.dataset.cwd = cwd; s.textContent = m.t; s.title = 'Open ' + m.t;
+      frag.append(s); at = m.i + m.t.length;
+    }
+    frag.append(n.data.slice(at));
+    n.replaceWith(frag);
+  });
+}
+
+// ---------- file viewer ----------
+const viewer = $('viewer');
+let vStack = [], vReq = 0;
+const vBack = () => { vStack.pop(); const prev = vStack.at(-1); prev.url ? openUrl(prev.url, { back: true }) : openFile(prev.path, '', { back: true, mode: prev.mode }); };
+function closeViewer() { viewer.classList.remove('open'); vStack = []; }
+const fmtSize = (b) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
+const rawUrl = (p) => `/api/file/raw?path=${encodeURIComponent(p)}`;
+async function openFile(target, cwd, { back = false, mode } = {}) {
+  const lm = String(target).match(/(?::(\d+)(?:-(\d+))?(?::\d+)?|#L(\d+)(?:-L?(\d+))?)$/);
+  const from = lm ? +(lm[1] || lm[3]) : 0, to = lm ? +(lm[2] || lm[4] || from) : 0;
+  const q = new URLSearchParams({ path: target, cwd: cwd || '' }), req = ++vReq;
+  const f = await fetch(`/api/file?${q}`).then((r) => r.json()).catch(() => ({ error: 'unreachable' }));
+  if (req !== vReq) return; // a later click won
+  if (f.error) return toast(`Can't open ${target}`);
+  if (!back) vStack.push({ path: f.path + (from ? `:${from}${to !== from ? `-${to}` : ''}` : ''), mode });
+  const isMd = f.type === 'text' && /^(md|markdown|mdx)$/.test(f.ext);
+  mode = mode || (isMd && !from ? 'rendered' : 'source');
+  const parts = f.path.split('/').filter(Boolean);
+  const crumbs = parts.slice(0, -1).map((p, i) => `<span class="fp" data-path="/${esc(parts.slice(0, i + 1).join('/'))}">${esc(p)}</span>`).join(' / ');
+  const lines = f.type === 'text' ? f.text.split('\n') : [], MAX_LINES = 20000;
+  const tags = [
+    f.type === 'dir' ? `${f.entries.length} items` : f.type === 'text' ? `${lines.length} lines` : f.ext || f.type,
+    f.type !== 'dir' && fmtSize(f.size), `edited ${ago(f.mtime)}`, (f.truncated || lines.length > MAX_LINES) && `showing ${lines.length > MAX_LINES ? `first ${MAX_LINES} lines` : 'first 1 MB'}`,
+  ].filter(Boolean).map((t) => `<span class="tag">${esc(t)}</span>`).join('');
+  const btn = (id, label) => `<button class="tag ren" id="${id}" type="button">${label}</button>`;
+  let content;
+  if (f.type === 'dir') content = `<div class="dir">${f.entries.map((e) => `<span class="fp" data-path="${esc(f.path + '/' + e.name)}"><i>${e.dir ? '▸' : ''}</i>${esc(e.name)}${e.dir ? '/' : ''}</span>`).join('') || '<div class="none">Empty folder.</div>'}</div>`;
+  else if (f.type === 'image') content = `<div class="media"><img src="${rawUrl(f.path)}" alt="${esc(f.name)}"></div>`;
+  else if (f.type === 'video') content = `<div class="media"><video src="${rawUrl(f.path)}" controls></video></div>`;
+  else if (f.type === 'audio') content = `<div class="media"><audio src="${rawUrl(f.path)}" controls></audio></div>`;
+  else if (f.type === 'pdf') content = `<iframe src="${rawUrl(f.path)}"></iframe>`;
+  else if (f.type === 'binary') content = `<div class="note">Binary file, ${fmtSize(f.size)}. Open it in its own app instead.</div>`;
+  else if (mode === 'rendered') content = `<div class="md">${md(f.text)}</div>`;
+  else content = `<div class="src">${lines.slice(0, MAX_LINES).map((l, i) => `<div class="ln${i + 1 >= from && i + 1 <= to ? ' hit' : ''}"><span class="n">${i + 1}</span><span class="t">${esc(l) || ' '}</span></div>`).join('')}</div>`;
+  viewer.innerHTML = `
+    <header>
+      <h2>${esc(f.name)}${f.type === 'dir' ? '/' : ''}</h2>
+      <div class="crumbs">/ ${crumbs}</div>
+      <div class="meta">${tags}${isMd ? btn('vMode', mode === 'rendered' ? 'source' : 'preview') : ''}${btn('vOpen', 'open')}${btn('vReveal', 'finder')}${btn('vCopy', 'copy path')}</div>
+      ${vStack.length > 1 ? '<button class="close back" id="vBack" aria-label="Back" title="Back">←</button>' : ''}
+      <button class="close" id="vClose" aria-label="Close">×</button>
+    </header>
+    <div class="vbody">${content}</div>`;
+  viewer.classList.add('open');
+  const dir = f.type === 'dir' ? f.path : f.path.replace(/\/[^/]*$/, '');
+  $('vClose').onclick = closeViewer;
+  if ($('vBack')) $('vBack').onclick = vBack;
+  if ($('vMode')) $('vMode').onclick = () => { const m = mode === 'rendered' ? 'source' : 'rendered'; vStack.at(-1).mode = m; openFile(f.path, '', { back: true, mode: m }); };
+  const act = (reveal) => fetch('/api/file/open', { method: 'POST', body: JSON.stringify({ path: f.path, reveal }) });
+  $('vOpen').onclick = () => act(false);
+  $('vReveal').onclick = () => act(true);
+  $('vCopy').onclick = () => navigator.clipboard.writeText(f.path).then(() => toast('Path copied'));
+  if (mode === 'rendered') linkFiles(viewer.querySelector('.vbody'), dir);
+  const hit = viewer.querySelector('.ln.hit');
+  if (hit) hit.scrollIntoView({ block: 'center' });
+}
+// web links open here too, never in the default browser. Sites that forbid framing get a note instead
+async function openUrl(url, { back = false } = {}) {
+  if (!back) vStack.push({ url });
+  vReq++;
+  const u = new URL(url);
+  viewer.innerHTML = `
+    <header>
+      <h2>${esc(u.host)}</h2>
+      <div class="crumbs">${esc(url)}</div>
+      <div class="meta"><span class="tag">web</span><span class="tag" id="vWeb">loading</span><button class="tag ren" id="vReload" type="button">reload</button><button class="tag ren" id="vCopy" type="button">copy link</button></div>
+      ${vStack.length > 1 ? '<button class="close back" id="vBack" aria-label="Back" title="Back">←</button>' : ''}
+      <button class="close" id="vClose" aria-label="Close">×</button>
+    </header>
+    <div class="vbody"></div>`;
+  viewer.classList.add('open');
+  $('vClose').onclick = closeViewer;
+  if ($('vBack')) $('vBack').onclick = vBack;
+  $('vReload').onclick = () => openUrl(url, { back: true });
+  $('vCopy').onclick = () => navigator.clipboard.writeText(url).then(() => toast('Link copied'));
+  const r = await fetch(`/api/link?url=${encodeURIComponent(url)}`).then((r) => r.json()).catch(() => ({ error: 'unreachable' }));
+  if (vStack.at(-1)?.url !== url || !$('vWeb')) return;
+  const body = viewer.querySelector('.vbody');
+  $('vWeb').textContent = r.error ? 'unreachable' : r.embeddable ? `${r.status}` : 'no embedding';
+  if (r.error) body.innerHTML = `<div class="note">Couldn't reach ${esc(u.host)}: ${esc(r.error)}.</div>`;
+  else if (!r.embeddable) body.innerHTML = `<div class="note">${esc(u.host)} doesn't allow being shown inside another page, so it can't preview here. Copy the link to open it yourself.</div>`;
+  else { body.classList.add('web'); body.innerHTML = `<iframe src="${esc(url)}" sandbox="allow-scripts allow-forms${u.origin === location.origin ? '' : ' allow-same-origin'}" referrerpolicy="no-referrer"></iframe>`; }
+}
+// catch every web link on the page, wherever it was rendered
+document.addEventListener('click', (ev) => {
+  const a = ev.target.closest('a[href]');
+  if (!a || !/^https?:/.test(a.href)) return;
+  ev.preventDefault();
+  openUrl(a.href);
+}, true);
+viewer.addEventListener('click', (ev) => {
+  const f = ev.target.closest('.vbody [data-path], .crumbs [data-path]');
+  if (f) openFile(f.dataset.path, f.dataset.cwd || '');
+});
 setInterval(() => { if (selected?.type === 'node' && panel.classList.contains('open') && !panel.matches(':hover')) renderPanel(true); }, 5000);
 
 // ---------- rename ----------
@@ -1068,21 +1257,31 @@ function drawGrid() {
   for (let x = ox; x < W; x += step) for (let y = oy; y < H; y += step) ctx.fillRect(x - s / 2, y - s / 2, s, s);
 }
 
-// fork lineage: a dashed hairline from the agent to the one forked from it, ⑂ at the child's end
+// fork lineage: a tree. From below the parent's labels a stem drops to a rail, the rail runs over the
+// children and each child hangs from it, with ⑂ where its line meets it
 function drawForks(t) {
+  const BELOW = R + 48, ABOVE = R + 10, CORNER = 6;
   for (const [id, n] of agents) {
-    const a = n.a; if (!a?.forkOf || n.dying) continue;
-    const g = edgeGeom({ from: a.forkOf, to: id }); if (!g) continue;
-    const fade = ease(clamp((t - Math.max(g.a.born, g.b.born)) / 900, 0, 1));
+    const p = n.a?.forkOf && agents.get(n.a.forkOf);
+    if (!p || p.hidden || n.hidden || n.dying) continue;
+    const fade = ease(clamp((t - Math.max(p.born, n.born)) / 900, 0, 1));
+    const x0 = p.x, y0 = p.y + BELOW, x1 = n.x, y1 = n.y - ABOVE, ym = (y0 + y1) / 2;
+    const c = Math.min(CORNER, Math.abs(x1 - x0) / 2, Math.max(0, (y1 - y0) / 2)), dir = Math.sign(x1 - x0);
     ctx.save();
-    ctx.globalAlpha = (matches && !(matches.has(a.forkOf) && matches.has(id)) ? 0.12 : 0.6) * fade;
-    ctx.strokeStyle = V.ink; ctx.lineWidth = 1; ctx.setLineDash([3, 5]);
-    const t0 = tAtDist(g, false, R + 8), t1 = tAtDist(g, true, R + 22);
-    const p0 = qpt(g, t0), p1 = qpt(g, t1);
-    ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.quadraticCurveTo(g.cx, g.cy, p1.x, p1.y); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = V.ink; ctx.font = '11px "Fragment Mono", ui-monospace, monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('⑂', p1.x, p1.y);
+    ctx.globalAlpha = (matches && !(matches.has(n.a.forkOf) && matches.has(id)) ? 0.12 : 0.7) * fade;
+    ctx.strokeStyle = V.ink; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x0, y0);
+    if (!dir || y1 <= y0) ctx.lineTo(x1, y1);
+    else {
+      ctx.lineTo(x0, ym - c); ctx.quadraticCurveTo(x0, ym, x0 + dir * c, ym);
+      ctx.lineTo(x1 - dir * c, ym); ctx.quadraticCurveTo(x1, ym, x1, ym + c);
+      ctx.lineTo(x1, y1);
+    }
+    ctx.stroke();
+    ctx.fillStyle = V.ink; ctx.fillRect(x1 - 3, y1 - 3, 6, 6);
+    ctx.font = '11px "Fragment Mono", ui-monospace, monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const gy = (ym + y1) / 2;
+    knockout('⑂', x1, gy); ctx.fillStyle = V.ink; ctx.fillText('⑂', x1, gy);
     ctx.restore();
   }
 }
@@ -1321,10 +1520,13 @@ function framesOverlap() {
   return false;
 }
 function arrange() {
+  layoutTrees();
+  // nodes below a fork root follow their root, so only free agents and roots take a cell;
   // biggest repo first, a repo's worktrees side by side
+  const free = [...projectGroups().values()].map((g) => ({ ...g, nodes: g.nodes.filter(([, n]) => !n.slot) }));
   const size = new Map();
-  for (const g of projectGroups().values()) size.set(g.project, (size.get(g.project) || 0) + g.nodes.length);
-  const groups = [...projectGroups().values()].sort((a, b) => size.get(b.project) - size.get(a.project)
+  for (const g of free) size.set(g.project, (size.get(g.project) || 0) + g.nodes.length);
+  const groups = free.sort((a, b) => size.get(b.project) - size.get(a.project)
     || String(a.project).localeCompare(String(b.project)) || b.nodes.length - a.nodes.length);
   if (!groups.length) return;
   const CW = 230, CH = 150, GAP = 110;
@@ -1370,7 +1572,7 @@ function separateFrames() {
 }
 function shiftGroup(g, dx, dy) {
   if (!dx && !dy) return;
-  for (const [id, n] of g.nodes) if (!(drag?.mode === 'move' && drag.id === id)) { n.x += dx; n.y += dy; }
+  for (const [id, n] of g.nodes) if (heldId() !== id && !n.slot) { n.x += dx; n.y += dy; }
 }
 let saveTimer = null;
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveAll, 900); }
@@ -1380,17 +1582,60 @@ function saveAll() {
   fetch('/api/layout', { method: 'POST', body: JSON.stringify(out) });
 }
 
+// ---------- fork trees ----------
+// a fork hangs under the agent it was forked from: every tree is laid out top-down from its root, which
+// moves like any agent (drag, physics, arrange) and the rest of the tree follows. n.tree is the id of the
+// root of n's tree, n.slot where a node below the root belongs.
+const TREE_DX = 280, TREE_DY = 170;
+// a tree stays inside its project's frame: a fork that moved to another project hangs free
+const forkParent = (n) => { const p = n.a?.forkOf && agents.get(n.a.forkOf); return p && !p.dying && !p.hidden && p.a.projectKey === n.a.projectKey ? p : null; };
+function layoutTrees() {
+  const kids = new Map();
+  for (const [id, n] of agents) {
+    n.tree = n.slot = null;
+    if (n.dying || n.hidden || !forkParent(n)) continue;
+    if (!kids.has(n.a.forkOf)) kids.set(n.a.forkOf, []);
+    kids.get(n.a.forkOf).push(id);
+  }
+  for (const list of kids.values()) list.sort((a, b) => (agents.get(a).a.startedAt || 0) - (agents.get(b).a.startedAt || 0) || a.localeCompare(b));
+  const width = new Map();
+  const span = (id) => { // in leaves; a cycle in the lineage counts once
+    if (width.has(id)) return width.get(id);
+    width.set(id, 1);
+    const w = Math.max(1, (kids.get(id) || []).reduce((v, k) => v + (width.has(k) ? 0 : span(k)), 0));
+    width.set(id, w);
+    return w;
+  };
+  const place = (id, root, left, depth, ox, oy) => {
+    const n = agents.get(id);
+    n.tree = root;
+    if (depth) n.slot = { x: ox + (left + width.get(id) / 2) * TREE_DX, y: oy + depth * TREE_DY };
+    for (const k of kids.get(id) || []) { if (agents.get(k).tree) continue; place(k, root, left, depth + 1, ox, oy); left += width.get(k); }
+  };
+  for (const id of kids.keys()) {
+    const r = agents.get(id);
+    if (r.dying || r.hidden || forkParent(r) || r.tree) continue;
+    span(id);
+    place(id, id, 0, 0, r.x - (width.get(id) / 2) * TREE_DX, r.y);
+  }
+}
+const treeRoot = (n) => (n?.slot && agents.get(n.tree)) || n;
+const heldId = () => drag?.mode === 'move' ? (treeRoot(agents.get(drag.id))?.a?.id ?? drag.id) : null;
+
 function physics() {
-  // soft separation so nodes never overlap
+  layoutTrees();
+  const held = heldId();
+  // soft separation so nodes never overlap; a node in a tree pushes its root, so the whole tree makes room
   const list = [...agents.entries()].filter(([, n]) => !n.dying && !n.hidden);
   for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
-    const [ia, a] = list[i], [ib, b] = list[j];
+    const [, a] = list[i], [, b] = list[j];
     const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 0.01, min = 215;
     if (a.a.frameKey !== b.a.frameKey) continue; // across projects the frames keep the distance
+    if (a.tree && a.tree === b.tree) continue; // a tree keeps its own spacing
     if (d < min) {
-      const f = (min - d) * 0.04, ux = dx / d, uy = dy / d;
-      if (drag?.id !== ia) { a.vx -= ux * f; a.vy -= uy * f; }
-      if (drag?.id !== ib) { b.vx += ux * f; b.vy += uy * f; }
+      const f = (min - d) * 0.04, ux = dx / d, uy = dy / d, ra = treeRoot(a), rb = treeRoot(b);
+      if (held !== ra.a.id) { ra.vx -= ux * f; ra.vy -= uy * f; }
+      if (held !== rb.a.id) { rb.vx += ux * f; rb.vy += uy * f; }
     }
   }
   // pull each agent gently toward the middle of its project, so projects form clusters
@@ -1398,7 +1643,7 @@ function physics() {
   for (const [, n] of list) { const m = mid.get(n.a.frameKey) || { x: 0, y: 0, c: 0 }; m.x += n.x; m.y += n.y; m.c++; mid.set(n.a.frameKey, m); }
   for (const [id, n] of list) {
     const m = mid.get(n.a.frameKey);
-    if (m.c > 1 && drag?.id !== id) { n.vx += (m.x / m.c - n.x) * 0.0016; n.vy += (m.y / m.c - n.y) * 0.0016; }
+    if (m.c > 1 && held !== id && !n.slot) { n.vx += (m.x / m.c - n.x) * 0.0016; n.vy += (m.y / m.c - n.y) * 0.0016; }
   }
   // and, more gently, toward the middle of their repo, so a repo's worktree frames stay together
   const repo = new Map();
@@ -1408,7 +1653,8 @@ function physics() {
     if (m.f.size > 1 && drag?.id !== id) { n.vx += (m.x / m.c - n.x) * 0.0008; n.vy += (m.y / m.c - n.y) * 0.0008; }
   }
   for (const [id, n] of list) {
-    if (drag?.id === id && drag.mode === 'move') continue;
+    if (n.slot) { n.x = lerp(n.x, n.slot.x, 0.18); n.y = lerp(n.y, n.slot.y, 0.18); n.vx = n.vy = 0; delete n.goal; continue; }
+    if (held === id) continue;
     if (n.goal) { n.x = lerp(n.x, n.goal.x, 0.12); n.y = lerp(n.y, n.goal.y, 0.12); n.vx = n.vy = 0; continue; }
     n.x += n.vx; n.y += n.vy; n.vx *= 0.82; n.vy *= 0.82;
   }

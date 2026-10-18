@@ -75,8 +75,11 @@ function statusOf(x) {
   if (x.kind === 'shell') return 'shell';
   const a = M.agents[x.pty];
   if (!a) return 'idle';
-  return a.status === 'busy' || a.status === 'working' || a.status === 'running' ? 'working' : a.status === 'waiting' || a.status === 'needs_input' ? 'waiting' : 'idle';
+  const st = agentWorking(a) ? 'working' : a.status === 'waiting' || a.status === 'needs_input' ? 'waiting' : 'idle';
+  // an agent that has worked and gone quiet is done: its square lights green until it starts again
+  return st === 'idle' && x.ran ? 'done' : st;
 }
+const agentWorking = (a) => a.status === 'busy' || a.status === 'working' || a.status === 'running';
 
 // ---------------------------------------------------------------- terminals
 
@@ -212,6 +215,14 @@ function toggleSidebar() {
   $('#toggle-sidebar').setAttribute('aria-expanded', String(!collapsed));
 }
 
+// a fork's tab is named after its question: its first line, cut at a word to fit an agent's name (48)
+function forkTitle(question) {
+  const line = question.split('\n').find((l) => l.trim())?.replace(/\s+/g, ' ').trim() || 'fork';
+  if (line.length <= 48) return line;
+  const cut = line.slice(0, 47).replace(/\s+\S*$/, '');
+  return `${cut.length > 20 ? cut : line.slice(0, 47)}…`;
+}
+
 async function fork(question, { requestId = null, parentPty = null } = {}) {
   const s = parentPty ? M.slots.find((x) => x.sessions.some((y) => y.pty === parentPty)) : focusedSlot();
   if (!s) return toast('no session to fork', true);
@@ -221,12 +232,13 @@ async function fork(question, { requestId = null, parentPty = null } = {}) {
   if (parentPty) M.focused = s.id;
   try {
     const child = await makeSession(s, {
-      kind: parent.kind, title: parent.kind, question, parent: parent.id,
+      kind: parent.kind, title: forkTitle(question), question, parent: parent.id,
       spawn: (cols, rows) => synapse.fork.spawn({ parentPty: parent.pty, question, requestId, cols, rows }),
     });
     child.injected = false;
+    child.named = false; // the agent takes the tab's name once it registers with synapse
     selectSession(s, child.id);
-    toast(`⑂ forked: ${question}`);
+    toast(M.autoSendFork ? `⑂ forked: ${child.title}` : `⑂ forked: ${child.title} · press ↵ in the child to send`);
   } catch (e) { toast(e.message, true); }
   render();
 }
@@ -395,33 +407,76 @@ function render() {
 
 // ---------------------------------------------------------------- drag to rearrange
 
-// Workspaces (project boxes) and agent rows reorder by dragging. An agent stays in its own folder, since
-// its process runs there. The tree redraws every second from state, which would pull the row out from
-// under the pointer, so it holds still while a drag is on.
-let drag = null; // { type: 'proj', key } | { type: 'slot', id, worktree }
+// Workspaces (project boxes), their worktrees and agent rows reorder by dragging. An agent stays in its own folder, since
+// its process runs there. The picked-up item follows the pointer and its neighbours slide out of its way;
+// nothing moves in the model until it is let go. The tree redraws every second from state, which would
+// pull the row out from under the pointer, so it holds still while a drag is on.
+let drag = null; // the lifted item while a drag is on ('pressed' until the pointer moves)
 // a workspace's tab sits above its box (and a collapsed box is only a rule), so the tab counts as its top
-function dropSide(e, node) {
+function extent(node) {
   const r = node.getBoundingClientRect(), head = node.querySelector(':scope > .proj-head')?.getBoundingClientRect();
-  const topY = head ? Math.min(head.top, r.top) : r.top;
-  return e.clientY < (topY + r.bottom) / 2 ? 'before' : 'after';
+  return { top: head ? Math.min(head.top, r.top) : r.top, bottom: r.bottom };
 }
-function clearDrop() { for (const n of document.querySelectorAll('.drop-before, .drop-after')) n.classList.remove('drop-before', 'drop-after'); }
-function draggable(handle, what, target, accepts, onDrop) {
-  handle.draggable = true;
-  handle.addEventListener('dragstart', (e) => { drag = what; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', ''); e.stopPropagation(); });
-  handle.addEventListener('dragend', () => { drag = null; clearDrop(); render(); });
-  target.addEventListener('dragover', (e) => {
-    if (!drag || !accepts(drag)) return;
-    e.preventDefault(); e.stopPropagation();
-    clearDrop(); target.classList.add('drop-' + dropSide(e, target));
-  });
-  target.addEventListener('drop', (e) => {
-    if (!drag || !accepts(drag)) return;
-    e.preventDefault(); e.stopPropagation();
-    const d = drag, side = dropSide(e, target);
-    drag = null; clearDrop();
-    onDrop(d, side);
-    render();
+function lift(item, sel) {
+  const items = [...item.parentElement.children].filter((n) => n.matches(sel));
+  const from = items.indexOf(item), rs = items.map(extent), me = rs[from];
+  const gap = from < items.length - 1 ? rs[from + 1].top - me.bottom : from > 0 ? me.top - rs[from - 1].bottom : 0;
+  const step = me.bottom - me.top + gap; // how far a neighbour slides to make room
+  item.classList.add('lifted'); document.body.classList.add('sorting');
+  for (const n of items) if (n !== item) n.classList.add('yielding');
+  let to = from;
+  return {
+    follow(dy) {
+      item.style.transform = `translateY(${dy}px)`;
+      // a neighbour yields once the lifted item's leading edge passes its middle, so a tall open
+      // workspace does not leap over small folded ones
+      to = from;
+      items.forEach((n, k) => {
+        const m = (rs[k].top + rs[k].bottom) / 2;
+        const shift = k > from && me.bottom + dy > m ? -step : k < from && me.top + dy < m ? step : 0;
+        if (shift < 0) to = Math.max(to, k);
+        if (shift > 0) to = Math.min(to, k);
+        if (n !== item) n.style.transform = shift ? `translateY(${shift}px)` : '';
+      });
+    },
+    // glide into the gap, then hand the move to the model and redraw from it
+    drop(onDrop) {
+      const off = to > from ? rs[to].bottom - me.bottom : to < from ? rs[to].top - me.top : 0;
+      item.classList.add('settling'); item.style.transform = `translateY(${off}px)`;
+      setTimeout(() => {
+        document.body.classList.remove('sorting');
+        drag = null;
+        if (to !== from) onDrop(items[to], to > from ? 'after' : 'before');
+        render();
+      }, 170);
+    },
+    cancel() { this.follow(0); this.drop(() => {}); },
+  };
+}
+function sortable(handle, item, sel, onDrop) {
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || drag || e.target.closest('button, input')) return;
+    const x0 = e.clientX, y0 = e.clientY;
+    let d = null;
+    drag = 'pressed'; // a redraw between press and move would take the row away before it is lifted
+    const move = (e) => {
+      if (!d && Math.hypot(e.clientX - x0, e.clientY - y0) < 4) return;
+      d ||= drag = lift(item, sel);
+      d.follow(e.clientY - y0);
+    };
+    const end = (e) => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', end);
+      removeEventListener('pointercancel', end); removeEventListener('keydown', esc, true);
+      if (!d) { drag = null; return; }
+      // the release would also land as a click (select, fold): swallow it
+      const swallow = (e) => { e.stopPropagation(); e.preventDefault(); };
+      addEventListener('click', swallow, { capture: true, once: true });
+      setTimeout(() => removeEventListener('click', swallow, true), 0);
+      if (e.type === 'pointerup') d.drop(onDrop); else d.cancel();
+    };
+    const esc = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); end(e); } };
+    addEventListener('pointermove', move); addEventListener('pointerup', end);
+    addEventListener('pointercancel', end); addEventListener('keydown', esc, true);
   });
 }
 function moveItem(list, item, target, side) {
@@ -429,6 +484,34 @@ function moveItem(list, item, target, side) {
   const out = list.filter((x) => x !== item);
   out.splice(out.indexOf(target) + (side === 'after' ? 1 : 0), 0, item);
   return out;
+}
+function moveWorktree(key, from, to, side) {
+  // state refreshes replace M.projects while a drag is on: move it in the current one
+  const p = M.projects.find((x) => x.key === key);
+  if (!p) return;
+  p.worktrees = moveItem(p.worktrees, p.worktrees.find((w) => w.path === from), p.worktrees.find((w) => w.path === to), side);
+  synapse.worktree.order(p.worktrees.map((w) => w.path)).catch((e) => toast(e.message, true));
+}
+// folding a workspace slides its worktrees shut (or open) instead of snapping; the tree holds still meanwhile
+let folding = false;
+const FOLD = { duration: 220, easing: 'cubic-bezier(.2, .7, .3, 1)' };
+function foldProject(key) {
+  if (folding) return;
+  const find = () => $('#tree').querySelector(`:scope > .proj[data-key="${CSS.escape(key)}"]`);
+  const box = find(), from = box?.getBoundingClientRect().height;
+  const slide = (node, a, b, done) => {
+    folding = true;
+    node.style.clipPath = 'inset(-40px -40px 0 -40px)'; // the tab above the box stays visible
+    node.animate([{ height: `${a}px` }, { height: `${b}px` }], FOLD).onfinish = () => { folding = false; done(); };
+  };
+  if (M.open.has(key)) {
+    if (!box) { M.open.delete(key); return render(); }
+    slide(box, from, 1, () => { M.open.delete(key); render(); });
+  } else {
+    M.open.add(key); render();
+    const next = find();
+    if (next && box) slide(next, from, next.getBoundingClientRect().height, render);
+  }
 }
 function moveProject(key, targetKey, side) {
   const by = (k) => M.projects.find((p) => p.key === k);
@@ -529,11 +612,18 @@ async function renameTab(x, name) {
   render();
 }
 
+// the canvas shows a fork under its question too; a name another agent has gets a number
+async function nameForkAgent(x) {
+  for (let i = 1; i < 10; i++) {
+    try { return await renameTab(x, i === 1 ? x.title : `${x.title} ${i}`); } catch {}
+  }
+}
+
 // a session named after its folder would repeat the checkout row above it: say what runs in it instead
 const slotTitle = (s, t, w) => (!t ? 'gone' : t.title === w.name && s.path.length < 2 ? (M.profiles[t.kind]?.label || t.kind) : t.title);
 function renderTree() {
   const tree = $('#tree');
-  if (drag) return;
+  if (drag || folding) return;
   tree.replaceChildren();
   const cur = focusedSlot();
   let n = 0;
@@ -543,14 +633,14 @@ function renderTree() {
     const sw = el('span', 'swatch'); sw.style.background = p.color;
     const live = M.slots.filter((s) => p.worktrees.some((w) => w.path === s.worktree)).length;
     const pn = el('span', 'proj-name', p.label);
-    const toggleProject = () => { if (M.open.has(p.key)) M.open.delete(p.key); else M.open.add(p.key); render(); };
+    const toggleProject = () => foldProject(p.key);
     editableName(pn, `project:${p.key}`, 'workspace', p.label, async (name) => { await synapse.project.rename(p.key, name); await refresh(); }, toggleProject, true);
     head.append(sw, pn, el('span', 'proj-count', String(live || p.worktrees.length)));
     const add = el('button', 'proj-add', '+'); add.title = 'open branch or worktree'; add.setAttribute('aria-label', add.title);
     add.onclick = (e) => { e.stopPropagation(); promptWorktree(p); };
     head.appendChild(add);
     head.onclick = toggleProject;
-    draggable(head, { type: 'proj', key: p.key }, box, (d) => d.type === 'proj' && d.key !== p.key, (d, side) => moveProject(d.key, p.key, side));
+    sortable(head, box, '.proj', (t, side) => moveProject(p.key, t.dataset.key, side));
     box.appendChild(head);
     if (M.open.has(p.key)) {
       for (const w of p.worktrees) {
@@ -570,6 +660,7 @@ function renderTree() {
         wa.onclick = (e) => { e.stopPropagation(); pickProfile(w.path); };
         wh.appendChild(wa);
         wh.onclick = selectWorktree;
+        sortable(wh, wt, '.wt', (t, side) => moveWorktree(p.key, w.path, t.dataset.path, side));
         wt.appendChild(wh);
         for (const s of M.slots.filter((s) => s.worktree === w.path)) {
           n++;
@@ -586,8 +677,7 @@ function renderTree() {
           if (t) row.appendChild(tabCloseButton(s, t));
           row.title = `⌘${n}`;
           row.onclick = () => selectSession(s);
-          draggable(row, { type: 'slot', id: s.id, worktree: w.path }, row, (d) => d.type === 'slot' && d.worktree === w.path && d.id !== s.id,
-            (d, side) => { M.slots = moveItem(M.slots, slot(d.id), s, side); });
+          sortable(row, row, '.slot', (t, side) => { M.slots = moveItem(M.slots, s, slot(Number(t.dataset.slot)), side); });
           wt.appendChild(row);
         }
         box.appendChild(wt);
@@ -645,6 +735,10 @@ function setChildrenCollapsed(s, targets, collapsed) {
     if (collapsed) M.collapsed.add(x.id);
     else for (const id of sessionBranch(s, x.id)) M.collapsed.delete(id);
   }
+  if (collapsed) for (const x of targets) {
+    const child = M.agents[x.pty]?.synapseId, parent = M.agents[sess(s, x.parent)?.pty]?.synapseId;
+    if (child && parent) linkToParent(child, parent, x.title);
+  }
   // If the current session was hidden, return to the nearest visible ancestor.
   const visible = new Set(visibleSessions(s).map((x) => x.id));
   const current = [...s.path].reverse().find((id) => visible.has(id));
@@ -652,6 +746,12 @@ function setChildrenCollapsed(s, targets, collapsed) {
   render();
   if (fanOpen) openFan(true);
   else if (!canvasOpen && $('#modal').hidden) top(focusedSlot())?.term.focus();
+}
+
+// collapsing a child links it to its parent on demand: the parent can read it, nothing is pushed into its prompt
+async function linkToParent(child, parent, name) {
+  try { if (await synapse.fork.link(child, parent)) toast(`⇠ the parent can read "${name}" when it needs to`); }
+  catch (e) { toast(e.message, true); }
 }
 
 function sessionActions(s, x) {
@@ -855,15 +955,20 @@ function modal(title, build) {
   body.onkeydown = null;
   build(body, () => { m.hidden = true; top(focusedSlot())?.term.focus(); });
   m.hidden = false;
-  const inp = body.querySelector('input'); if (inp) inp.focus();
+  const inp = body.querySelector('input, textarea'); if (inp) inp.focus();
 }
 $('#modal').addEventListener('click', (e) => { if (e.target === $('#modal')) { $('#modal').hidden = true; } });
 
-function promptText(title, hint, placeholder, onOk) {
+// multiline: a textarea that grows with its text; Enter submits, ⇧Enter is a newline
+function promptText(title, hint, placeholder, onOk, { multiline = false } = {}) {
   modal(title, (body, close) => {
-    const inp = el('input'); inp.placeholder = placeholder;
+    const inp = el(multiline ? 'textarea' : 'input'); inp.placeholder = placeholder;
+    if (multiline) { inp.rows = 1; inp.oninput = () => { inp.style.height = 'auto'; inp.style.height = `${inp.scrollHeight + 1}px`; }; }
     body.append(inp, el('div', 'hint', hint));
-    inp.onkeydown = (e) => { if (e.key === 'Enter' && inp.value.trim()) { close(); onOk(inp.value.trim()); } if (e.key === 'Escape') close(); };
+    inp.onkeydown = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (inp.value.trim()) { close(); onOk(inp.value.trim()); } }
+      if (e.key === 'Escape') close();
+    };
   });
 }
 function confirm(text, onOk, { danger = 'Close' } = {}) {
@@ -1015,7 +1120,8 @@ function promptWorktree(project) {
 }
 function promptFork(s = focusedSlot(), t = top(s)) {
   if (!t) return toast('no session to fork', true);
-  promptText('⑂ fork', `a child of "${t.title}" with its full context. Nothing flows back unless you send it.`, 'what do you want to dig into?', (q) => { if (fanOpen) closeFan(); fork(q, { parentPty: t.pty }); });
+  const send = M.autoSendFork ? 'it is sent right away' : 'it waits in the child\'s prompt for you to send';
+  promptText('⑂ fork', `a child of "${t.title}" with its full context · ${send} · ⇧↵ newline`, 'what do you want to dig into?', (q) => { if (fanOpen) closeFan(); fork(q, { parentPty: t.pty }); }, { multiline: true });
 }
 // Add a workspace by cloning, opening a folder, creating a repo, or choosing from the library.
 const WS_MODES = {
@@ -1267,10 +1373,11 @@ function canvasMenu({ hit, agent, group, x, y }) {
     if (mine) items.push(...sessionActions(mine, mine.sessions.find((q) => q.pty === ptyId)), '-', { label: 'Open session', run: () => { const z = mine.sessions.find((q) => q.pty === ptyId); M.focused = mine.id; focusPath(mine, z.id); if (canvasOpen) toggleCanvas(); render(); } });
     if (!mine) {
       const kids = agent.children || [];
-      if (kids.some((k) => !k.hidden)) items.push({ label: 'Collapse all children', run: () => tellCanvas({ action: 'collapse-children', id: agent.id }) });
+      const collapse = (k) => { tellCanvas({ action: 'collapse-branch', id: k.id }); linkToParent(k.id, agent.id, k.name); };
+      if (kids.some((k) => !k.hidden)) items.push({ label: 'Collapse all children', run: () => kids.filter((k) => !k.hidden).forEach(collapse) });
       if (kids.some((k) => k.hidden)) items.push({ label: 'Expand all children', run: () => tellCanvas({ action: 'expand-children', id: agent.id }) });
-      for (const child of kids) items.push({ label: `${child.hidden ? 'Expand' : 'Collapse'} child: ${child.name}`, run: () => tellCanvas({ action: child.hidden ? 'expand-branch' : 'collapse-branch', id: child.id }) });
-      if (agent.parentId) items.push({ label: 'Collapse this child', run: () => tellCanvas({ action: 'collapse-branch', id: agent.id }) });
+      for (const child of kids) items.push({ label: `${child.hidden ? 'Expand' : 'Collapse'} child: ${child.name}`, run: () => child.hidden ? tellCanvas({ action: 'expand-branch', id: child.id }) : collapse(child) });
+      if (agent.parentId) items.push({ label: 'Collapse this child', run: () => { tellCanvas({ action: 'collapse-branch', id: agent.id }); linkToParent(agent.id, agent.parentId, agent.name); } });
     }
     if (agent.cwd) items.push({ label: 'New agent in this folder', sub: agentMenuIn(agent.cwd) });
     items.push({ label: 'Rename', run: () => tellCanvas({ action: 'rename', id: agent.id }) }, { label: 'Unlink all', run: () => tellCanvas({ action: 'unlink', id: agent.id }) }, '-');
@@ -1306,7 +1413,14 @@ async function openSettings() {
       try { await synapse.settings.set({ autoSymlink: cb.checked }); toast(cb.checked ? 'new workspaces get linked into ~/.synapse/workspaces' : 'workspaces are no longer linked · existing links stay'); }
       catch (e) { cb.checked = !cb.checked; toast(e.message, true); }
     };
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow);
+    const forkRow = el('label', 'opt set'), fcb = el('input');
+    fcb.type = 'checkbox'; fcb.checked = !!s.autoSendFork;
+    forkRow.append(fcb, el('span', 'k', 'send forks'), el('span', 'c', 'send a fork\'s question right away, instead of leaving it in the child\'s prompt for you to send'));
+    fcb.onchange = async () => {
+      try { M.autoSendFork = (await synapse.settings.set({ autoSendFork: fcb.checked })).autoSendFork; toast(fcb.checked ? 'forks send their question right away' : 'a fork\'s question waits in its prompt for you'); }
+      catch (e) { fcb.checked = !fcb.checked; toast(e.message, true); }
+    };
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow);
     const people = el('div', 'people');
     body.append(el('div', 'sub', 'trusted people'), people);
     drawPeople(people);
@@ -1491,12 +1605,14 @@ async function refreshPullRequests() {
 }
 async function refresh() { apply(await synapse.state()); }
 function apply(st) {
-  M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo;
+  M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo; M.autoSendFork = !!st.autoSendFork;
   // remember which agent each session runs while it is alive: that id is what a restart resumes. A resumed
   // agent that has not written its transcript yet must not wipe the id it was resumed from.
   for (const sl of M.slots) for (const x of sl.sessions) {
     const a = M.agents[x.pty];
     if (a?.synapseId && (a.transcript || !x.resume)) x.resume = { synapseId: a.synapseId, transcript: a.transcript || null };
+    if (a && agentWorking(a)) x.ran = true; // noted here, not on draw, so a folded workspace's agents count too
+    if (a && x.named === false) { x.named = true; nameForkAgent(x); }
   }
   refreshPullRequests();
   render();

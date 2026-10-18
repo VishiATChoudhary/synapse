@@ -4,7 +4,9 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { exec } from 'node:child_process';
+import os from 'node:os';
+import { exec, execFile } from 'node:child_process';
+import { pipeline } from 'node:stream';
 import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, projectOfAgent, colorOf, renameAgent, renameProject } from './lib.mjs';
 import { createEdge, removeEdge } from './ops.mjs';
 import * as remote from './remote.mjs';
@@ -101,6 +103,24 @@ function body(req) {
   });
 }
 const json = (res, code, v) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(v)); };
+
+// ---------- files ----------
+// paths agents mention are resolved against that agent's cwd: "~/x", "/abs/x", "src/x.ts:12"
+const FILE_MAX = 1_000_000;
+const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon', bmp: 'image/bmp', avif: 'image/avif', pdf: 'application/pdf', mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', mp3: 'audio/mpeg', wav: 'audio/wav' };
+const extOf = (f) => path.extname(f).slice(1).toLowerCase();
+function resolveFile(cwd, raw) {
+  let p = String(raw || '').trim().replace(/^file:\/\//, '').replace(/(#L\d+(-L?\d+)?|:\d+(:\d+)?(-\d+)?)$/, '');
+  if (!p) return null;
+  if (p === '~' || p.startsWith('~/')) p = path.join(os.homedir(), p.slice(1));
+  return path.resolve(cwd || os.homedir(), p);
+}
+const stat = (f) => { try { return fs.statSync(f); } catch { return null; } };
+// the canvas only answers to its own host, so a rebinding DNS name can't read files through it
+// and only to its own page: other sites can't read, open or proxy through it (Origin / Sec-Fetch-Site)
+const localHost = (req) => /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(req.headers.host || '');
+const ownPage = (req) => localHost(req) && /^(same-origin|none|)$/.test(req.headers['sec-fetch-site'] || '')
+  && (!req.headers.origin || req.headers.origin.replace(/^https?:\/\//, '') === req.headers.host);
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
@@ -201,8 +221,64 @@ const server = http.createServer(async (req, res) => {
       chat: chat.map(({ fromName, toName, from, text, t }) => ({ fromName, toName, outgoing: from === a.id, text: text.slice(0, 4000), t })),
     });
   }
+  if (p.startsWith('/api/file') || p === '/api/link') {
+    if (!ownPage(req)) return json(res, 403, { error: 'forbidden' });
+    const q = req.method === 'POST' ? await body(req) : Object.fromEntries(url.searchParams);
+    try { return await files(req, res, p, q); } catch (e) { return json(res, 500, { error: e.code || e.message }); }
+  }
   json(res, 404, { error: 'not found' });
 });
+
+async function files(req, res, p, q) {
+  if (p === '/api/link') {
+    if (!/^https?:\/\//.test(q.url || '')) return json(res, 400, { error: 'http(s) only' });
+    // can the page sit in an iframe? check X-Frame-Options and CSP frame-ancestors before trying
+    try {
+      const r = await fetch(q.url, { redirect: 'follow', signal: AbortSignal.timeout(5000), headers: { 'user-agent': 'Mozilla/5.0 Synapse' } });
+      r.body?.cancel();
+      const xfo = (r.headers.get('x-frame-options') || '').toLowerCase();
+      const fa = (r.headers.get('content-security-policy') || '').match(/frame-ancestors([^;]*)/i)?.[1].trim();
+      const embeddable = !/deny|sameorigin/.test(xfo) && (!fa || /(^|\s)\*(\s|$)/.test(fa));
+      return json(res, 200, { status: r.status, url: r.url, embeddable });
+    } catch (e) { return json(res, 200, { error: e.cause?.code || e.cause?.message || e.message }); }
+  }
+  const cwd = agents().find((x) => x.id === q.agent)?.cwd || q.cwd;
+  if (p === '/api/files/exists') {
+    const paths = (Array.isArray(q.paths) ? q.paths : []).slice(0, 400);
+    return json(res, 200, Object.fromEntries(paths.map((x) => [x, !!stat(resolveFile(cwd, x))])));
+  }
+  const file = resolveFile(cwd, q.path), st = file && stat(file);
+  if (!st) return json(res, 404, { error: 'not found', path: file });
+  if (p === '/api/file/open' && req.method === 'POST') {
+    execFile('open', q.reveal ? ['-R', file] : [file], () => {});
+    return json(res, 200, { ok: true });
+  }
+  // fifos and sockets would block the event loop on open, so only regular files are read
+  if (p !== '/api/file/open' && !st.isFile() && !st.isDirectory()) return json(res, 415, { error: 'not a regular file' });
+  if (p === '/api/file/raw') {
+    if (!st.isFile()) return json(res, 415, { error: 'not a file' });
+    // sandboxed so an svg can never run script on the canvas origin (Chrome won't render a sandboxed pdf)
+    res.writeHead(200, { 'content-type': MIME[extOf(file)] || 'application/octet-stream', 'content-length': st.size, 'cache-control': 'no-store',
+      ...(extOf(file) === 'pdf' ? {} : { 'content-security-policy': 'sandbox' }), 'x-content-type-options': 'nosniff' });
+    return pipeline(fs.createReadStream(file), res, () => {});
+  }
+  if (p === '/api/file') {
+    const base = { path: file, name: path.basename(file), mtime: st.mtimeMs, size: st.size };
+    if (st.isDirectory()) {
+      const entries = fs.readdirSync(file, { withFileTypes: true }).filter((d) => d.name !== '.DS_Store')
+        .map((d) => ({ name: d.name, dir: d.isDirectory() || (d.isSymbolicLink() && !!stat(path.join(file, d.name))?.isDirectory()) }))
+        .sort((a, b) => b.dir - a.dir || a.name.localeCompare(b.name));
+      return json(res, 200, { ...base, type: 'dir', entries });
+    }
+    const mime = MIME[extOf(file)];
+    if (mime) return json(res, 200, { ...base, type: mime.split('/')[0] === 'application' ? 'pdf' : mime.split('/')[0], ext: extOf(file) });
+    const fd = fs.openSync(file, 'r'), buf = Buffer.alloc(Math.min(st.size, FILE_MAX));
+    try { fs.readSync(fd, buf, 0, buf.length, 0); } finally { fs.closeSync(fd); }
+    if (buf.subarray(0, 8000).includes(0)) return json(res, 200, { ...base, type: 'binary' });
+    return json(res, 200, { ...base, type: 'text', ext: extOf(file), text: buf.toString('utf8'), truncated: st.size > FILE_MAX });
+  }
+  return json(res, 404, { error: 'not found' });
+}
 
 server.listen(PORT, '127.0.0.1', () => {
   const url = `http://localhost:${PORT}`;

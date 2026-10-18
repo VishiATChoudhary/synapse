@@ -37,7 +37,7 @@ const FONTS: [string, string, FontFaceDescriptors][] = [
   ["Fragment Mono", "fonts/fragment-mono.woff2", { weight: "400" }],
   ["Newsreader", "fonts/newsreader-italic.woff2", { weight: "200 400", style: "italic" }],
 ];
-function useFonts() {
+export function useFonts() {
   useState(() => {
     const h = delayRender("fonts");
     Promise.all(FONTS.map(([fam, file, d]) => new FontFace(fam, `url(${staticFile(file)})`, d).load().then((f) => document.fonts.add(f))))
@@ -95,7 +95,7 @@ const NodeBox: React.FC<{ a: Agent; f: number; on: number; R?: number; label?: b
 };
 
 // ---------------------------------------------------------------- frame furniture
-const Hud: React.FC = () => {
+export const Hud: React.FC = () => {
   const f = useCurrentFrame();
   const t = f / 30, ss = Math.floor(t), cs = Math.floor((t - ss) * 100);
   return (
@@ -111,7 +111,7 @@ const Hud: React.FC = () => {
     </AbsoluteFill>
   );
 };
-const Grain: React.FC = () => {
+export const Grain: React.FC = () => {
   const seed = useCurrentFrame() % 6;
   return (
     <AbsoluteFill style={{ pointerEvents: "none", mixBlendMode: "overlay", opacity: 0.2 }}>
@@ -122,12 +122,12 @@ const Grain: React.FC = () => {
     </AbsoluteFill>
   );
 };
-const Flash: React.FC<{ strength?: number }> = ({ strength = 0.5 }) => {
+export const Flash: React.FC<{ strength?: number }> = ({ strength = 0.5 }) => {
   const f = useCurrentFrame();
   return <AbsoluteFill style={{ background: INK, opacity: interpolate(f, [0, 4], [strength, 0], clamp), pointerEvents: "none" }} />;
 };
 // bottom caption: big compressed type that slams in on the beat
-const Slam: React.FC<{ text: string; size?: number; y?: number; color?: string; sub?: string }> = ({ text, size = 150, y, color = INK, sub }) => {
+export const Slam: React.FC<{ text: string; size?: number; y?: number; color?: string; sub?: string }> = ({ text, size = 150, y, color = INK, sub }) => {
   const f = useCurrentFrame();
   const k = interpolate(f, [0, 5], [1.18, 1], { ...clamp, easing: out });
   const o = interpolate(f, [0, 2], [0, 1], clamp);
@@ -191,7 +191,7 @@ const Hook: React.FC = () => {
 };
 
 // II. drop (beats 4-10): panes snap into nodes, frames appear, four links draw on the beat
-const Canvas: React.FC<{ zoom?: number; focus?: { x: number; y: number }; offset?: number }> = ({ zoom = 1, focus, offset = 0 }) => {
+export const Canvas: React.FC<{ zoom?: number; focus?: { x: number; y: number }; offset?: number }> = ({ zoom = 1, focus, offset = 0 }) => {
   const f = useCurrentFrame() + offset; // offset: start part-way through, already settled
   const collapse = interpolate(f, [0, 10], [0, 1], { ...clamp, easing: inOut });
   const shake = f < 8 ? (random(`sx${f}`) - 0.5) * 16 * (1 - f / 8) : 0;
@@ -406,7 +406,7 @@ const Title: React.FC = () => {
     </AbsoluteFill>
   );
 };
-const End: React.FC = () => {
+export const End: React.FC = () => {
   const f = useCurrentFrame();
   const rows = [
     { t: 0, el: <div style={{ font: `200 210px/0.8 ${DISPLAY}`, color: INK }}>SYNAPSE</div> },

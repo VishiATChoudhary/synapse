@@ -108,7 +108,10 @@ async function launch(name) {
 
   for (const question of ['first sibling', 'second sibling']) {
     await menu(parent, 'Fork child');
-    await js(`document.querySelector('#modal-body input').value = ${JSON.stringify(question)}; document.querySelector('#modal-body input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
+    // the question box is multiline: ⇧Enter keeps it open, Enter forks
+    await js(`document.querySelector('#modal-body textarea').value = ${JSON.stringify(question)}; document.querySelector('#modal-body textarea').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }))`);
+    assert.equal(await js(`document.querySelector('#modal').hidden`), false, 'shift+enter does not submit the fork');
+    await js(`document.querySelector('#modal-body textarea').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
     await until(() => js(`document.querySelector('#deck .card.top')?.title === ${JSON.stringify(question)}`), 'new sibling');
   }
   assert.equal(await count(), 7);

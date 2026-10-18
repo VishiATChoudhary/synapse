@@ -59,8 +59,19 @@ async function main() {
   const seen = []; // for the line shown to the user
 
   // multiplayer: collect what friends shared (and send ours) first; never hold the prompt up for long
-  if (isConnected()) await sync({ timeout: 2500 }).catch(() => {});
-  const incoming = readJSON(FILES.edges, []).filter((e) => e.to === me);
+  let edgesNow = edgesAll;
+  if (isConnected()) { await sync({ timeout: 2500 }).catch(() => {}); edgesNow = readJSON(FILES.edges, []); }
+
+  // on-demand links (a collapsed fork child) are not pulled in: the agent hears once that it can read them
+  const onDemand = edgesNow.filter((e) => e.to === me && e.onDemand && !e.noticed);
+  if (onDemand.length) {
+    blocks.push(`<linked-agents-on-demand>\n${onDemand.map((e) => `"${e.fromName}" (a fork of this session) shares its context with you. ` +
+      `It is not included here: read it with synapse_read("${e.fromName}") when the user asks or it would help.`).join('\n')}\n</linked-agents-on-demand>`);
+    const ids = new Set(onDemand.map((e) => e.id));
+    writeJSON(FILES.edges, readJSON(FILES.edges, []).map((e) => ids.has(e.id) ? { ...e, noticed: true } : e));
+  }
+
+  const incoming = edgesNow.filter((e) => e.to === me && !e.onDemand);
   if (incoming.length) {
     const agents = new Map(listAgents().map((a) => [a.id, a]));
     const cursors = readJSON(FILES.cursors, {});
@@ -93,6 +104,7 @@ async function main() {
 
   const shown = [];
   if (seen.length) shown.push(`⇢ pulled context from ${seen.join(', ')}`);
+  if (onDemand.length) shown.push(`⇠ can read ${onDemand.map((e) => e.fromName).join(', ')} on demand`);
   if (inbox.length) {
     const from = [...new Set(inbox.map((m) => m.fromName))].join(', ');
     shown.push(`✉ ${inbox.length} message${inbox.length === 1 ? '' : 's'} from ${from}`);
