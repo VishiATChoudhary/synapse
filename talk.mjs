@@ -5,7 +5,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
-import { FILES, KINDS, CLAUDE, readJSON, writeJSON, localAgents, remoteId, readAgentMessages, formatMessages } from './lib.mjs';
+import { FILES, KINDS, CLAUDE, readJSON, writeJSON, localAgents, remoteId, readAgentMessages, formatMessages, postMessage } from './lib.mjs';
 import { config } from './remote.mjs';
 
 export const LIMITS = {
@@ -124,6 +124,12 @@ export function receiveAsk(peer, item, now = Date.now()) {
 // The asker side: what the friend's machine reports back about a question we sent. Only for a conversation we
 // started with that very peer; anything else is ignored.
 const END_REASONS = ['owner', 'asker', 'idle', 'refused', 'revoked', 'unavailable', 'unsupported', 'busy', 'error'];
+// An answer or end goes to the asker agent's inbox unless a synapse_ask is still waiting for it (waitUntil in the
+// future). The ask clears waitUntil under the same lock before it gives up, so each one is delivered exactly once.
+const unattended = (turn, now) => turn.waitUntil == null || now > turn.waitUntil;
+const fromRemote = (c) => ({ id: remoteId(c.peer, c.target), name: `${c.targetName}@${c.peerName}` });
+const toAsker = (c) => ({ id: c.asker, name: c.askerName });
+
 export function receiveReply(peer, item, now = Date.now()) {
   if (!item || !isStr(item.conv)) return;
   update((s) => {
@@ -137,10 +143,73 @@ export function receiveReply(peer, item, now = Date.now()) {
       if (!turn || turn.a != null || typeof item.answer !== 'string') return;
       turn.a = item.answer.slice(0, LIMITS.answer);
       turn.answeredAt = now;
+      if (unattended(turn, now)) {
+        postMessage(fromRemote(c), toAsker(c), `${c.targetName}@${c.peerName} answered (conversation ${c.id}):\n\n${turn.a}`);
+        turn.inboxed = true;
+      }
     } else if (item.type === 'talk-end') {
       end(c, END_REASONS.includes(item.reason) ? item.reason : 'error', typeof item.note === 'string' ? item.note.slice(0, 200) : null, now);
+      if (c.turns.some((t) => t.a == null && unattended(t, now))) {
+        postMessage(fromRemote(c), toAsker(c), `Your conversation with ${c.targetName}@${c.peerName} ended (${c.endReason}) before it answered (conversation ${c.id}).`);
+        c.endInboxed = true;
+      }
     } else return;
     c.lastAt = now;
+  });
+}
+
+// ---- asking (the asker's machine)
+
+// Start or continue a conversation with a friend's agent and add the question as its next turn.
+// `agent` is a remote entry from listAgents(). An ended conversation id is spent, so the default is always a fresh one.
+export function openAsk({ me, agent, conversation, question, now = Date.now(), waitMs = 0, offline = false }) {
+  const r = agent.remote;
+  return update((s) => {
+    let c;
+    if (conversation) {
+      c = convOf(s, conversation);
+      if (!c || c.role !== 'asker' || c.asker !== me.id) throw new Error(`No conversation "${conversation}". Leave it out to start a new one.`);
+      if (c.status !== 'open') throw new Error(`Conversation ${conversation} has ended. Leave it out to start a new one.`);
+      if (c.peer !== r.machine || c.target !== r.agentId) throw new Error(`Conversation ${conversation} is with ${c.targetName}@${c.peerName}, not ${agent.name}@${r.owner}.`);
+    } else {
+      c = s.conversations.find((x) => x.role === 'asker' && x.status === 'open' && x.asker === me.id && x.peer === r.machine && x.target === r.agentId);
+    }
+    if (!c) {
+      c = {
+        id: crypto.randomUUID(), role: 'asker', peer: r.machine, peerName: r.owner, target: r.agentId, targetName: agent.name,
+        asker: me.id, askerName: me.name, status: 'open', turns: [], createdAt: now, lastAt: now,
+      };
+      s.conversations.push(c);
+    }
+    const seq = c.turns.reduce((m, t) => Math.max(m, t.seq), 0) + 1;
+    c.turns.push({ seq, q: question, a: null, askedAt: now, ...(offline ? {} : { waitUntil: now + waitMs }) });
+    c.lastAt = now;
+    return { conv: c.id, seq };
+  });
+}
+
+// What a waiting synapse_ask finds. `final` is the deadline: waitUntil is cleared in the same locked step that reads
+// the turn, so an answer either is here for the ask to return or goes to the inbox, never both.
+export function takeAnswer(convId, seq, { final = false } = {}) {
+  return update((s) => {
+    const c = convOf(s, convId);
+    const turn = c?.turns.find((t) => t.seq === seq);
+    if (!turn) return { gone: true };
+    if (turn.a != null && !turn.inboxed) { turn.waitUntil = null; turn.taken = true; return { answer: turn.a }; }
+    if (c.status === 'ended' && turn.a == null) { turn.waitUntil = null; return { ended: true, reason: c.endReason, note: c.endNote || null, inboxed: !!c.endInboxed }; }
+    if (final) turn.waitUntil = null;
+    return { pending: true, position: turn.position ?? null, inboxed: !!turn.inboxed };
+  });
+}
+
+// The asker ends a conversation of hers; the caller tells the friend's machine.
+export function endAsked(convId, me, now = Date.now()) {
+  return update((s) => {
+    const c = convOf(s, convId);
+    if (!c || c.role !== 'asker' || c.asker !== me.id) throw new Error(`No conversation "${convId}".`);
+    if (c.status !== 'open') return null;
+    end(c, 'asker', null, now);
+    return { peer: c.peer, conv: c.id };
   });
 }
 

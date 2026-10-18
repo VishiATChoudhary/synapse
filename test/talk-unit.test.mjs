@@ -456,3 +456,163 @@ test('hook is silent for external forks', () => {
   });
   assert.equal(run({ SYNAPSE_EXTERNAL: '1' }).stdout, '');
 });
+
+// ---------------------------------------------------------------- asker side: ask, end, exactly-once delivery
+const me = () => localAgents()[0];
+const sharedWithMe = (mode = 'talk') => {
+  peer({ via: 'request', handle: 'bob' });
+  writeJSON(FILES.peerState, { m1: { name: 'Robert', seen: Date.now(), shares: [], agents: [{ id: 'x', name: 'api', kind: 'claude', status: 'idle', project: 'p', startedAt: 1 }] } });
+  writeJSON(FILES.edges, [{ id: 'mm', from: 'r-m1-x', to: me().id, mirrored: true, remote: 'm1', owner: 'Robert', ...(mode === 'talk' ? { mode } : {}) }]);
+  writeJSON(FILES.messages, []);
+  writeJSON(FILES.talks, {});
+  writeJSON(path.join(home, 'remote', 'outbox.json'), []);
+};
+const outbox = () => readJSON(path.join(home, 'remote', 'outbox.json'), []);
+const noSync = async () => {};
+// answers the open question the way a sync that pulled a talk-answer would
+const answerWith = (answer, at) => async () => {
+  const c = state().conversations[0];
+  talk.receiveReply('m1', { type: 'talk-answer', conv: c.id, seq: c.turns[c.turns.length - 1].seq, answer }, at());
+};
+
+test('ask resolves name@handle and queues talk-ask', async () => {
+  sharedWithMe();
+  const r = await ops.ask(me(), 'api@bob', 'why?', { waitMs: 0, sync: noSync });
+  assert.equal(r.status, 'queued');
+  const c = state().conversations[0];
+  assert.equal(c.role, 'asker');
+  assert.equal(c.peer, 'm1');
+  assert.equal(c.target, 'x');
+  assert.equal(c.asker, me().id);
+  assert.equal(r.conversation, c.id);
+  const [o] = outbox();
+  assert.equal(o.to, 'm1');
+  assert.deepEqual(o.item, { type: 'talk-ask', conv: c.id, seq: 1, target: 'x', asker: me().id, askerName: me().name, question: 'why?' });
+});
+
+test('ask on a sync share explains talk is off', async () => {
+  sharedWithMe('sync');
+  await assert.rejects(ops.ask(me(), 'api@bob', 'why?', { waitMs: 0, sync: noSync }), /not.*questions|talk/i);
+  assert.equal(outbox().length, 0);
+});
+
+test('ask on a local agent points to send', async () => {
+  sharedWithMe();
+  const other = localAgents()[1];
+  await assert.rejects(ops.ask(me(), other.name, 'why?', { sync: noSync }), /send/);
+});
+
+test('ask reuses the open conversation, an ended one is never reused', async () => {
+  sharedWithMe();
+  const a = await ops.ask(me(), 'api@bob', 'one', { waitMs: 0, sync: noSync });
+  const b = await ops.ask(me(), 'api@bob', 'two', { waitMs: 0, sync: noSync });
+  assert.equal(b.conversation, a.conversation);
+  assert.equal(state().conversations[0].turns[1].seq, 2);
+  assert.deepEqual(ops.endTalk(me(), a.conversation), { ended: true });
+  assert.deepEqual(outbox().pop().item, { type: 'talk-end', conv: a.conversation, reason: 'asker' });
+  assert.equal(state().conversations[0].endReason, 'asker');
+  const c = await ops.ask(me(), 'api@bob', 'three', { waitMs: 0, sync: noSync });
+  assert.notEqual(c.conversation, a.conversation);
+  await assert.rejects(ops.ask(me(), 'api@bob', 'four', { conversation: a.conversation, waitMs: 0, sync: noSync }), /ended/);
+});
+
+test('an answer inside the wait is returned and never reaches the inbox', async () => {
+  sharedWithMe();
+  const t0 = 1_000_000;
+  let t = t0;
+  const r = await ops.ask(me(), 'api@bob', 'why?', { waitMs: 90_000, now: () => t, interval: 0, sync: answerWith('because', () => t) });
+  assert.deepEqual({ answer: r.answer }, { answer: 'because' });
+  assert.equal(lib.takeInbox(me().id).length, 0);
+});
+
+test('answer at the deadline is delivered once', async () => {
+  // the answer lands just after the deadline, before ask has cleared waitUntil: inbox xor return
+  sharedWithMe();
+  let t = 1_000_000;
+  const r = await ops.ask(me(), 'api@bob', 'why?', {
+    waitMs: 90_000, interval: 0, now: () => t,
+    sync: async () => { t += 90_001; await answerWith('late', () => t)(); },
+  });
+  const inbox = lib.takeInbox(me().id);
+  assert.equal((r.answer === 'late' ? 1 : 0) + inbox.filter((m) => m.text.includes('late')).length, 1);
+  assert.equal(r.status, 'queued');
+  assert.equal(inbox.length, 1);
+});
+
+test('answer after the wait cleared waitUntil lands in the inbox', async () => {
+  sharedWithMe();
+  const r = await ops.ask(me(), 'api@bob', 'why?', { waitMs: 0, sync: noSync });
+  assert.equal(r.status, 'queued');
+  assert.equal(state().conversations[0].turns[0].waitUntil, null);
+  talk.receiveReply('m1', { type: 'talk-answer', conv: r.conversation, seq: 1, answer: 'finally' });
+  const inbox = lib.takeInbox(me().id);
+  assert.equal(inbox.length, 1);
+  assert.equal(inbox[0].fromName, 'api@Robert');
+  assert.equal(inbox[0].from, 'r-m1-x');
+  assert.match(inbox[0].text, /finally/);
+  assert.match(inbox[0].text, new RegExp(r.conversation));
+  // a repeated delivery of the same answer adds nothing
+  talk.receiveReply('m1', { type: 'talk-answer', conv: r.conversation, seq: 1, answer: 'finally' });
+  assert.equal(lib.takeInbox(me().id).length, 0);
+});
+
+test('late answer lands in the inbox', async () => {
+  sharedWithMe();
+  const r = await ops.ask(me(), 'api@bob', 'why?', { waitMs: 0, sync: noSync });
+  talk.receiveReply('m1', { type: 'talk-answer', conv: r.conversation, seq: 1, answer: 'sorry for the wait' });
+  assert.match(lib.takeInbox(me().id)[0].text, /sorry for the wait/);
+});
+
+test('an end during the wait is returned as ended', async () => {
+  sharedWithMe();
+  const r = await ops.ask(me(), 'api@bob', 'why?', {
+    waitMs: 90_000, interval: 0,
+    sync: async () => { talk.receiveReply('m1', { type: 'talk-end', conv: state().conversations[0].id, reason: 'refused' }); },
+  });
+  assert.equal(r.status, 'ended');
+  assert.equal(r.reason, 'refused');
+  assert.equal(lib.takeInbox(me().id).length, 0);
+});
+
+test('an end after the wait lands in the inbox', async () => {
+  sharedWithMe();
+  const r = await ops.ask(me(), 'api@bob', 'why?', { waitMs: 0, sync: noSync });
+  talk.receiveReply('m1', { type: 'talk-end', conv: r.conversation, reason: 'busy' });
+  const inbox = lib.takeInbox(me().id);
+  assert.equal(inbox.length, 1);
+  assert.match(inbox[0].text, /busy/);
+});
+
+test('ask keeps syncing until the wait is over', async () => {
+  sharedWithMe();
+  let t = 0, calls = 0;
+  const r = await ops.ask(me(), 'api@bob', 'why?', { waitMs: 5000, interval: 0, now: () => (t += 1000), sync: async () => { calls++; } });
+  assert.equal(r.status, 'queued');
+  assert.ok(calls >= 3, `synced ${calls} times`);
+});
+
+test('ask says offline when the friend was last seen long ago', async () => {
+  sharedWithMe();
+  const states = readJSON(FILES.peerState, {});
+  states.m1.seen = Date.now() - lib.REMOTE_OFFLINE - 5000;
+  writeJSON(FILES.peerState, states);
+  let synced = 0;
+  const r = await ops.ask(me(), 'api@bob', 'why?', { sync: async () => { synced++; } });
+  assert.equal(r.status, 'offline');
+  assert.equal(outbox().length, 1);
+  assert.equal(state().conversations[0].turns[0].waitUntil ?? null, null);
+});
+
+test('ask rejects an empty or oversized question', async () => {
+  sharedWithMe();
+  await assert.rejects(ops.ask(me(), 'api@bob', '   ', { sync: noSync }), /question/i);
+  await assert.rejects(ops.ask(me(), 'api@bob', 'a'.repeat(4001), { sync: noSync }), /4000/);
+  assert.equal(outbox().length, 0);
+});
+
+test('endTalk refuses a conversation that is not yours', () => {
+  sharedWithMe();
+  writeJSON(FILES.talks, { conversations: [asker({ id: 'o1', role: 'owner' })] });
+  assert.throws(() => ops.endTalk(me(), 'o1'), /conversation/i);
+  assert.throws(() => ops.endTalk(me(), 'nope'), /conversation/i);
+});

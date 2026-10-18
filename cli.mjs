@@ -8,6 +8,8 @@
 //   synapse read <agent> [--max N]     read an agent's recent conversation (it must share with you)
 //   synapse send <agent> <message...>  message a linked agent
 //   synapse inbox                      messages sent to you
+//   synapse ask <agent> <question...> [--conversation id]   ask a friend's agent (name@owner) and wait for the answer
+//   synapse end <conversation>         end a conversation with a friend's agent
 //   synapse agents                     every live agent
 //   synapse rename [agent] <new name>  rename an agent (yourself if no agent given); empty name resets
 //   synapse rename-project <project> <new name>  rename a project (frame on the canvas); empty name resets
@@ -134,6 +136,13 @@ try {
     case 'sync': out = await remote.sync(); break;
     case 'send': out = ops.send(whoami(), args[0], args.slice(1).join(' ')); break;
     case 'inbox': out = ops.inbox(whoami()); break;
+    case 'ask': {
+      const conversation = opt('--conversation');
+      const words = args.filter((a) => a !== conversation);
+      out = await ops.ask(whoami(), words[0], words.slice(1).join(' '), { conversation });
+      break;
+    }
+    case 'end': out = ops.endTalk(whoami(), args[0]); break;
     case 'ui': await import('./server.mjs'); break;
     case 'rename': {
       // `synapse rename <new name>` renames you; `synapse rename <agent> <new name>` renames that agent
@@ -153,7 +162,7 @@ try {
     }
     case 'agents': out = listAgents().map(({ name, id, kind, cwd, status }) => ({ name, id, kind, cwd, status })); break;
     default:
-      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | agents | rename [agent] <name> | rename-project <project> <name> | invite | join <code> | friends | unfriend <friend> | sync | login | signup | logout | whoami | trust <who> | untrust <who> | people | request <person> [--target t] [--note n] | requests | accept <id> [--agents a,b] | deny <id> | cancel <id>');
+      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | ask <agent> <question> [--conversation id] | end <conversation> | agents | rename [agent] <name> | rename-project <project> <name> | invite | join <code> | friends | unfriend <friend> | sync | login | signup | logout | whoami | trust <who> | untrust <who> | people | request <person> [--target t] [--note n] | requests | accept <id> [--agents a,b] | deny <id> | cancel <id>');
       process.exit(cmd ? 1 : 0);
   }
   if (cmd === 'ui') { /* server keeps running */ }

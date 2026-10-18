@@ -3,9 +3,11 @@
 import crypto from 'node:crypto';
 import {
   FILES, readJSON, writeJSON, listAgents, findAgent, readAgentMessages, formatMessages,
-  postMessage, takeInbox, linked, projectOfAgent, colorOf, remoteId, localAgents,
+  postMessage, takeInbox, linked, projectOfAgent, colorOf, remoteId, localAgents, REMOTE_OFFLINE,
 } from './lib.mjs';
+import * as remote from './remote.mjs';
 import { queueDrop, config } from './remote.mjs';
+import * as talk from './talk.mjs';
 
 const brief = (a) => ({ name: a.name, id: a.id, kind: a.kind, cwd: a.cwd, status: a.status, ...(a.remote ? { owner: a.remote.owner } : {}) });
 
@@ -135,4 +137,51 @@ export function send(me, query, text) {
 
 export function inbox(me) {
   return takeInbox(me.id).map((m) => ({ from: m.fromName, at: new Date(m.t).toISOString(), text: m.text }));
+}
+
+// ---------------------------------------------------------------- asking a friend's agent (talk)
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const WAIT_NOTE = 'Still waiting for the answer. It will arrive in synapse_inbox (or your next prompt).';
+
+// Ask an agent on a friend's machine a question. A tool-less copy of it answers; we wait up to waitMs for the answer,
+// syncing about once a second (the canvas server may not be running), and anything later goes to the inbox.
+// `now`, `sync` and `interval` can be replaced in tests.
+export async function ask(me, query, question, { conversation, waitMs = talk.LIMITS.askWaitMs, sync = remote.sync, now = Date.now, interval = 1000 } = {}) {
+  const other = resolve(listAgents(), query);
+  if (!other.remote) throw new Error(`${other.name} runs on this machine. Use "send" to message it; ask is for a friend's agent.`);
+  const edges = readJSON(FILES.edges, []);
+  if (!edges.some((e) => e.mirrored && e.from === other.id && e.to === me.id && e.mode === 'talk')) {
+    throw new Error(`${other.remote.owner} shares ${other.name} with you for reading only. Questions work once ${other.remote.owner} turns on talk for it (use "read" meanwhile).`);
+  }
+  const q = String(question ?? '').trim();
+  if (!q) throw new Error('Give a question to ask.');
+  if (q.length > talk.LIMITS.question) throw new Error(`Questions are at most ${talk.LIMITS.question} characters; this one is ${q.length}.`);
+
+  // a friend whose machine has been quiet will not answer now; the question waits for them
+  const seen = readJSON(FILES.peerState, {})[other.remote.machine]?.seen || 0;
+  const offline = Date.now() - seen > REMOTE_OFFLINE;
+  const { conv, seq } = talk.openAsk({ me, agent: other, conversation, question: q, now: now(), waitMs, offline });
+  remote.queueItem(other.remote.machine, { type: 'talk-ask', conv, seq, target: other.remote.agentId, asker: me.id, askerName: me.name, question: q });
+  const done = (r) => ({ ...r, conversation: conv });
+  if (offline) return done({ status: 'offline', note: `${other.remote.owner} looks offline. The question is queued; the answer will arrive in synapse_inbox.` });
+
+  const deadline = now() + waitMs;
+  for (;;) {
+    await Promise.resolve(sync()).catch(() => {});
+    const over = now() >= deadline;
+    const got = talk.takeAnswer(conv, seq, { final: over });
+    if (got.answer != null) return done({ answer: got.answer });
+    if (got.ended) return done({ status: 'ended', reason: got.reason, note: `The conversation ended (${got.reason}${got.note ? `: ${got.note}` : ''}). Ask again to start a new one.` });
+    if (got.gone) return done({ status: 'ended', reason: 'error', note: 'The conversation is gone.' });
+    if (over) return done({ status: 'queued', note: WAIT_NOTE });
+    await sleep(Math.max(0, Math.min(interval, deadline - now())));
+  }
+}
+
+// End a conversation with a friend's agent; their machine is told on the next sync.
+export function endTalk(me, conversation) {
+  const out = talk.endAsked(conversation, me);
+  if (out) remote.queueItem(out.peer, { type: 'talk-end', conv: out.conv, reason: 'asker' });
+  return { ended: true };
 }

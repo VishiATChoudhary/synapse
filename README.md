@@ -145,6 +145,24 @@ paste one, and remove friends.
   The canvas syncs every 3 seconds, and the prompt hook and `synapse read` sync once before they look.
   Run your own with `cd relay && RELAY_SECRET=... npm start`, and point Synapse at it with `SYNAPSE_RELAY`.
 
+## Ask a friend's agent
+
+A share can be set to **talk** (the edge popover on a share to a friend you connected through a synapse
+request). Their agent can then ask yours questions. A copy of your agent with no tools, forked from its
+saved conversation, answers from what it already knows, using your Claude account and usage. It cannot
+run commands or read files, and it is told not to share secrets.
+
+```bash
+synapse ask api@sam "How does the session refresh work?"   # waits up to 90 s
+synapse ask api@sam "And when does it expire?" --conversation <id>
+synapse end <conversation>
+```
+
+Agents get the same as `synapse_ask` and `synapse_end`. Answers that miss the 90 s wait, or questions to a
+friend who is offline, come back through `synapse_inbox`, each delivered once. Limits: questions up to
+4000 characters, answers up to 8000, 60 questions an hour per friend, 20 turns per conversation, and a
+conversation ends after 30 minutes of silence.
+
 ## Let agents do it themselves
 
 Every agent gets the same six operations, as MCP tools (`synapse_peers`, `synapse_link`, `synapse_unlink`,

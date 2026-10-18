@@ -15,7 +15,9 @@ The user links agents on the Synapse canvas, or you can link yourself with synap
   and synapse_send to ask or tell a linked agent something.
 - To get context from an agent on someone else's machine: synapse_people lists the user's trusted people,
   synapse_request asks one of them to share an agent with you (they accept or deny in their Synapse app),
-  synapse_requests shows the answer. Once accepted, read it with synapse_read name@owner.`;
+  synapse_requests shows the answer. Once accepted, read it with synapse_read name@owner.
+- If their agent is shared for talk, synapse_ask name@owner puts a question to it and waits for the answer;
+  later answers arrive in synapse_inbox. synapse_end closes the conversation.`;
 
 const agentArg = { type: 'string', description: 'Agent name or id (prefix is fine)' };
 const TOOLS = [
@@ -34,6 +36,15 @@ const TOOLS = [
     run: (me, a) => ops.send(me, a.agent, a.message) },
   { name: 'synapse_inbox', description: 'Fetch messages other agents sent you (each is returned once).',
     inputSchema: { type: 'object', properties: {} }, run: (me) => ops.inbox(me) },
+  { name: 'synapse_ask', description: 'Ask an agent on a friend\'s machine a question. It is answered by a copy of that agent with no tools, from what it already knows. Waits up to 90 s; later answers arrive in synapse_inbox.',
+    inputSchema: { type: 'object', properties: {
+      agent: { type: 'string', description: 'Their agent, as name@owner or name@handle' },
+      question: { type: 'string' },
+      conversation: { type: 'string', description: 'Continue this conversation (default: the open one with that agent)' } }, required: ['agent', 'question'] },
+    run: (me, a) => ops.ask(me, a.agent, a.question, { conversation: a.conversation }) },
+  { name: 'synapse_end', description: "End a conversation with a friend's agent.",
+    inputSchema: { type: 'object', properties: { conversation: { type: 'string' } }, required: ['conversation'] },
+    run: (me, a) => ops.endTalk(me, a.conversation) },
   { name: 'synapse_people', description: "List the user's trusted people (Synapse accounts you can send a synapse request to, once they trust the user back).",
     inputSchema: { type: 'object', properties: {} }, run: () => people() },
   { name: 'synapse_request', description: "Ask a trusted person to share one of their agents' context with you. They accept or deny in their Synapse app.",
