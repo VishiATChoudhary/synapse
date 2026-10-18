@@ -20,6 +20,7 @@
 //   synapse join <code> [--name me]    accept a friend's invite
 //   synapse friends                    who you are connected with, and whether they are online
 //   synapse unfriend <friend>          disconnect from a friend
+//   synapse talk <agent> on|off        let friends' agents ask this agent questions (a fork answers on this machine)
 //   synapse sync                       exchange with friends now (the canvas does this every few seconds)
 //
 // Synapse accounts (trusted people and synapse requests, through Synapse Cloud):
@@ -31,7 +32,7 @@
 //   synapse request <person> [--target "their api agent"] [--note why]   ask to read one of their agents
 //   synapse requests                   requests you sent and received
 //   synapse accept <id> [--agents a,b] | deny <id> | cancel <id>
-import { agentForProcess, listAgents, localAgents, findAgent, renameAgent, projectOf, renameProject } from './lib.mjs';
+import { FILES, readJSON, agentForProcess, listAgents, localAgents, findAgent, renameAgent, projectOf, renameProject } from './lib.mjs';
 import * as ops from './ops.mjs';
 import * as remote from './remote.mjs';
 import * as account from './account.mjs';
@@ -143,6 +144,18 @@ try {
       break;
     }
     case 'end': out = ops.endTalk(whoami(), args[0]); break;
+    case 'talk': {
+      // one of my agents, switched for everything it shares with a friend's agent
+      const mode = args[1] === 'on' ? 'talk' : args[1] === 'off' ? 'sync' : null;
+      if (!args[0] || !mode) throw new Error('usage: synapse talk <agent> on|off');
+      const a = findAgent(localAgents(), args[0]);
+      if (!a) throw new Error(`No agent on this machine matches "${args[0]}".`);
+      const edges = readJSON(FILES.edges, []).filter((e) => !e.mirrored && e.from === a.id && e.to.startsWith('r-'));
+      if (!edges.length) throw new Error(`${a.name} does not share with a friend's agent yet.`);
+      for (const e of edges) ops.setMode(e.id, mode);
+      out = { agent: a.name, mode, edges: edges.length };
+      break;
+    }
     case 'ui': await import('./server.mjs'); break;
     case 'rename': {
       // `synapse rename <new name>` renames you; `synapse rename <agent> <new name>` renames that agent
@@ -162,7 +175,7 @@ try {
     }
     case 'agents': out = listAgents().map(({ name, id, kind, cwd, status }) => ({ name, id, kind, cwd, status })); break;
     default:
-      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | ask <agent> <question> [--conversation id] | end <conversation> | agents | rename [agent] <name> | rename-project <project> <name> | invite | join <code> | friends | unfriend <friend> | sync | login | signup | logout | whoami | trust <who> | untrust <who> | people | request <person> [--target t] [--note n] | requests | accept <id> [--agents a,b] | deny <id> | cancel <id>');
+      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | ask <agent> <question> [--conversation id] | end <conversation> | talk <agent> on|off | agents | rename [agent] <name> | rename-project <project> <name> | invite | join <code> | friends | unfriend <friend> | sync | login | signup | logout | whoami | trust <who> | untrust <who> | people | request <person> [--target t] [--note n] | requests | accept <id> [--agents a,b] | deny <id> | cancel <id>');
       process.exit(cmd ? 1 : 0);
   }
   if (cmd === 'ui') { /* server keeps running */ }

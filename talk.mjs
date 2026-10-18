@@ -302,7 +302,7 @@ export function reconcile(now = Date.now()) {
       if (c.status !== 'open') continue;
       let reason = null;
       if (!peers[c.peer]) reason = 'revoked';
-      else if (!edges.some((e) => !e.mirrored && e.from === c.target && e.to === remoteId(c.peer, c.asker) && e.mode === 'talk')) reason = 'owner';
+      else if (c.role === 'owner' && !edges.some((e) => !e.mirrored && e.from === c.target && e.to === remoteId(c.peer, c.asker) && e.mode === 'talk')) reason = 'owner';
       else if (now - c.lastAt >= LIMITS.idleMs) reason = 'idle';
       if (!reason) continue;
       end(c, reason, null, now);
