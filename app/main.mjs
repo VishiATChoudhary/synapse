@@ -11,6 +11,7 @@ import pty from 'node-pty';
 import { git, listChoices, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
 import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork } from '../lib.mjs';
 import { createEdge } from '../ops.mjs';
+import { createUpdater, bundleOf, MANIFEST_URL } from './updater.mjs';
 
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
 const SHELL = process.env.SHELL || '/bin/zsh';
@@ -450,6 +451,7 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow();
   pollRequests(); setInterval(pollRequests, REQUEST_POLL);
+  if (UPDATES) { setTimeout(() => updater.check(), UPDATE_DELAY); setInterval(() => updater.check(), UPDATE_EVERY); }
   setInterval(() => { if (win) { win.webContents.send('state', state()); pumpForks(); } }, 1000);
   if (process.env.SYNAPSE_SHOT) {
     setTimeout(async () => {
@@ -470,12 +472,28 @@ app.on('window-all-closed', () => app.quit());
 let quitting = false;
 app.on('before-quit', (e) => {
   try { canvasProc?.kill(); } catch {}
+  if (updater.state.state === 'ready') updater.install({ relaunch: false, open: UPDATE_OPEN }); // swaps in once we are gone
   if (quitting || !ptys.size) return;
   e.preventDefault();
   quitting = true;
   for (const [, t] of ptys) { try { process.kill(-t.pid, 'SIGKILL'); } catch {} try { t.p.kill('SIGKILL'); } catch {} }
   const started = Date.now();
   const wait = setInterval(() => { if (!ptys.size || Date.now() - started > 2000) { clearInterval(wait); app.quit(); } }, 30);
+});
+
+// ---------------------------------------------------------------- updates (see updater.mjs)
+
+// Only the packaged app updates itself; SYNAPSE_UPDATE_URL / SYNAPSE_UPDATE_BUNDLE point a test at a fake release.
+const UPDATES = app.isPackaged || !!process.env.SYNAPSE_UPDATE_URL;
+const UPDATE_DELAY = Number(process.env.SYNAPSE_UPDATE_DELAY || 20_000);
+const UPDATE_EVERY = Number(process.env.SYNAPSE_UPDATE_EVERY || 4 * 3600_000);
+const UPDATE_OPEN = process.env.SYNAPSE_UPDATE_OPEN || '/usr/bin/open';
+const updater = createUpdater({
+  currentVersion: app.getVersion(),
+  bundle: process.env.SYNAPSE_UPDATE_BUNDLE || (app.isPackaged ? bundleOf(process.execPath) : null),
+  manifestUrl: process.env.SYNAPSE_UPDATE_URL || MANIFEST_URL,
+  onState: (s) => win?.webContents.send('update', s),
+  log: (line) => console.log(`[update] ${line}`),
 });
 
 // ---------------------------------------------------------------- account (Synapse Cloud)
@@ -668,6 +686,10 @@ async function decide(id, fn) {
 handle('requests:accept', async ({ id, agents }) => { const out = FAKE ? null : await (await acct()).accept(id, agents); await decide(id, 'accept'); return out; });
 handle('requests:deny', async ({ id }) => { const out = FAKE ? null : await (await acct()).deny(id); await decide(id, 'deny'); return out; });
 handle('requests:cancel', async ({ id }) => { const out = await (await acct()).cancel(id); await pollRequests(); return out; });
+handle('update:get', () => ({ ...updater.state, enabled: UPDATES }));
+handle('update:check', async () => ({ ...(await updater.check()), enabled: UPDATES }));
+handle('update:install', () => { if (updater.install({ relaunch: true, open: UPDATE_OPEN })) setTimeout(() => app.quit(), 50); });
+handle('update:download', () => { const u = updater.state.dmg; if (u) shell.openExternal(u); });
 handle('links', async () => (FAKE ? fake().links : (await acct()).externalLinks()));
 // a collapsed child shares with its parent on demand: the parent can read it, nothing is pushed into its prompt
 handle('fork:link', ({ child, parent }) => {

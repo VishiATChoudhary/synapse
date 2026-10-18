@@ -63,6 +63,7 @@ contextBridge.exposeInMainWorld('synapse', {
     onChange: (fn) => on('requests', fn),
     onOpen: (fn) => on('requests:open', fn),
   },
+  update: { get: () => call('update:get'), check: () => call('update:check'), install: () => call('update:install'), download: () => call('update:download'), onChange: (fn) => on('update', fn) },
   links: () => call('links'),
   cli: (args, as) => call('synapse', { args, as }),
   canvas: () => call('canvas'),

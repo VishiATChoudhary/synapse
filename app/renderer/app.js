@@ -1420,7 +1420,20 @@ async function openSettings() {
       try { M.autoSendFork = (await synapse.settings.set({ autoSendFork: fcb.checked })).autoSendFork; toast(fcb.checked ? 'forks send their question right away' : 'a fork\'s question waits in its prompt for you'); }
       catch (e) { fcb.checked = !fcb.checked; toast(e.message, true); }
     };
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow);
+    const updRow = el('div', 'opt set'), updVal = el('span', 'c'), updBtn = el('button', 'btn', 'check now');
+    const showUpd = (u) => {
+      const at = `version ${u.current || '?'}`;
+      updVal.textContent = !u.enabled ? `${at} · running from source, updates come with git pull`
+        : u.state === 'checking' ? `${at} · checking…`
+        : u.state === 'error' ? `${at} · last check failed: ${u.error}`
+        : ['downloading', 'ready', 'manual', 'installing'].includes(u.state) ? `${at} · ${u.version} available`
+        : `${at} · up to date`;
+      updBtn.hidden = !u.enabled;
+    };
+    updRow.append(el('span', 'k', 'updates'), updVal, updBtn);
+    synapse.update.get().then(showUpd, () => {});
+    updBtn.onclick = async () => { updBtn.disabled = true; updVal.textContent = 'checking…'; try { showUpd(await synapse.update.check()); } catch (e) { toast(e.message, true); } updBtn.disabled = false; };
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow, updRow);
     const people = el('div', 'people');
     body.append(el('div', 'sub', 'trusted people'), people);
     drawPeople(people);
@@ -1865,6 +1878,30 @@ synapse.account.onChange((u) => {
 });
 synapse.requests.onChange((f) => { ACC.feed = f || ACC.feed; renderDot(); });
 synapse.requests.onOpen(() => openPop(true));
+
+// ---- updates: the packaged app fetches new versions itself (updater.mjs); this only shows where it is
+let UPD = {};
+function renderUpdate(u) {
+  UPD = u || UPD;
+  const b = $('#btn-update');
+  const v = UPD.version ? ` ${UPD.version}` : '';
+  b.hidden = !['downloading', 'ready', 'manual', 'installing'].includes(UPD.state);
+  b.disabled = UPD.state === 'downloading' || UPD.state === 'installing';
+  b.textContent = UPD.state === 'ready' ? `↻ restart to update${v}`
+    : UPD.state === 'manual' ? `update${v} ›`
+    : UPD.state === 'installing' ? 'updating…'
+    : `downloading${v} ${Math.round((UPD.progress || 0) * 100)}%`;
+  b.title = UPD.state === 'manual' ? 'This copy of Synapse cannot replace itself here. Download the new version and drag it into Applications.'
+    : UPD.state === 'ready' ? `Synapse${v} is ready. It also installs the next time you quit.${UPD.notes ? '\n\n' + UPD.notes : ''}` : '';
+}
+$('#btn-update').onclick = async () => {
+  try {
+    if (UPD.state === 'ready') await synapse.update.install();
+    else if (UPD.state === 'manual') await synapse.update.download();
+  } catch (e) { toast(e.message, true); }
+};
+synapse.update.onChange(renderUpdate);
+synapse.update.get().then(renderUpdate, () => {});
 
 // ---- account (profile)
 
