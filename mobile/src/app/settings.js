@@ -1,7 +1,8 @@
 // Connection, privacy and contact. Kept reachable from the home screen (App Review 5.1.1(i), 1.2).
 import { Linking, ScrollView, Text, View } from 'react-native';
 import { DISCLOSURE, revokeConsent, useConsent } from '../consent';
-import { source } from '../store';
+import { router } from 'expo-router';
+import { source, unpair, useSynapse } from '../store';
 import { FONT, useTheme } from '../theme';
 import { Button, Label, Rule } from '../ui';
 
@@ -20,13 +21,17 @@ function Section({ title, children }) {
 export default function Settings() {
   const t = useTheme();
   const { given } = useConsent();
+  const { computer } = useSynapse();
   const body = { fontFamily: FONT.sans, fontSize: 15, lineHeight: 22, color: t.ink };
   return (
     <ScrollView style={{ backgroundColor: t.paper }} contentContainerStyle={{ padding: 20, gap: 22 }}>
       <Section title="connection">
         <Text style={body}>{source.name === 'demo'
           ? 'Demo mode: sample agents, nothing leaves this phone. Pair with Synapse on your computer to see your own agents.'
-          : 'Paired with your computer. Agents run there, this phone only shows them and sends your messages.'}</Text>
+          : `Paired with ${computer}. Agents run there, this phone only shows them and sends your messages, sealed with a key only the two of you have.`}</Text>
+        {source.name === 'demo'
+          ? <Button filled onPress={() => router.push('/pair')}>pair with your computer</Button>
+          : <Button onPress={unpair}>unpair this phone</Button>}
       </Section>
       <Rule />
       <Section title="your prompts">

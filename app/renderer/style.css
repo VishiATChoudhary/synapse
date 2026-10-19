@@ -414,6 +414,8 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .people-add input { flex: 1; border-bottom: 0 !important; }
 .people-add .btn { border-left: 1px solid var(--rule); }
 .opt.set .btn { margin-left: auto; padding: 6px 12px; border: 1px solid var(--rule); }
+.phone-qr { padding: 18px; border-top: 1px solid var(--rule); background: #fff; display: flex; justify-content: center; }
+.phone-qr svg { width: 220px; height: 220px; }
 
 /* ---------------------------------------------------------------- agent talk
    a friend's agent asking one of mine: an outlined row under the asked agent, same badge as the canvas */

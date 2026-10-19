@@ -42,6 +42,15 @@
             "image": "./assets/splash-icon-dark.png"
           }
         }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Synapse uses the camera to scan the pairing code shown by Synapse on your computer.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
+        }
       ]
     ],
     "scheme": "synapse",

@@ -177,7 +177,7 @@ function sforkFilter(get) {
   };
 }
 
-async function newSlot(worktreePath, kind, split = null) {
+async function newSlot(worktreePath, kind, split = null, phoneReq = null) {
   closeCanvas();
   const prof = M.profiles[kind] || { command: kind };
   const s = { id: nextId++, worktree: worktreePath, sessions: [], path: [] };
@@ -186,7 +186,7 @@ async function newSlot(worktreePath, kind, split = null) {
   M.focused = s.id;
   const home = worktreeOf(worktreePath); if (home) M.open.add(home.project.key); // a new session unfolds its project, once
   try {
-    await makeSession(s, { kind, title: kind, spawn: (cols, rows) => synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows }) });
+    await makeSession(s, { kind, title: kind, spawn: (cols, rows) => synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows, phoneReq }) });
     if (split && slot(split.target)) {
       const insert = (node) => typeof node === 'number'
         ? node === split.target ? { direction: split.direction, first: node, second: s.id } : node
@@ -1486,6 +1486,9 @@ async function openSettings() {
     synapse.update.get().then(showUpd, () => {});
     updBtn.onclick = async () => { updBtn.disabled = true; updVal.textContent = 'checking…'; try { showUpd(await synapse.update.check()); } catch (e) { toast(e.message, true); } updBtn.disabled = false; };
     body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow, updRow);
+    const phones = el('div', 'phones');
+    body.append(el('div', 'sub', 'phone'), phones);
+    drawPhones(phones);
     const people = el('div', 'people');
     body.append(el('div', 'sub', 'trusted people'), people);
     drawPeople(people);
@@ -2031,6 +2034,49 @@ async function openAccount() {
     body.tabIndex = 0; body.onkeydown = (e) => { if (e.key === 'Escape') close(); };
   });
 }
+
+// ---- phone (in settings): pair the Synapse phone app with a QR code, see and remove paired phones
+
+let phoneBox = null;
+async function drawPhones(box) {
+  phoneBox = box;
+  box.replaceChildren();
+  let list = [];
+  try { list = await synapse.phone.devices(); } catch (e) { box.append(el('div', 'hint err', e.message)); }
+  for (const d of list) {
+    const row = el('div', 'person');
+    const seen = d.seen ? `seen ${new Date(d.seen).toLocaleString()}` : 'not seen yet';
+    row.append(el('span', 'k', d.name), el('span', 'c', `paired ${new Date(d.pairedAt).toLocaleDateString()} · ${seen}`));
+    const x = el('button', 'tab-close', '×');
+    x.title = `unpair ${d.name}`;
+    x.onclick = async () => { try { await synapse.phone.remove(d.id); await drawPhones(box); toast(`${d.name} unpaired`); } catch (e) { toast(e.message, true); } };
+    row.append(x);
+    box.append(row);
+  }
+  const row = el('div', 'opt set'), b = el('button', 'btn', 'pair a phone');
+  row.append(el('span', 'k', list.length ? 'another phone' : 'not paired'), el('span', 'c', 'see your agents, start new ones and message them from the Synapse phone app'), b);
+  b.onclick = async () => {
+    b.disabled = true;
+    try {
+      const { svg, exp } = await synapse.phone.pair();
+      const qr = el('div', 'phone-qr');
+      qr.innerHTML = svg; // our own QR code, drawn by the main process
+      const hint = el('div', 'hint', `in the Synapse app on your phone: pair with computer, then scan this · works once, until ${new Date(exp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+      row.replaceWith(qr, hint);
+    } catch (e) { toast(e.message, true); b.disabled = false; }
+  };
+  box.append(row);
+}
+synapse.phone.onChanged(({ paired }) => {
+  if (paired) toast(`${paired} is paired: it can see and start agents here`);
+  if (phoneBox?.isConnected) drawPhones(phoneBox);
+});
+// the phone asked for a new agent: open it like ⌃1 would, in the workspace it picked
+synapse.phone.onSpawn(({ req, cwd, kind }) => {
+  const wt = worktreeOf(cwd);
+  if (wt) M.open.add(wt.project.key);
+  newSlot(cwd, kind, null, req);
+});
 
 // ---- trusted people (in settings)
 

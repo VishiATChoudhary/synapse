@@ -2,13 +2,20 @@
 import { router } from 'expo-router';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { byAttention, source, useSynapse } from '../store';
+import { byAttention, useSynapse } from '../store';
 import { FONT, useTheme } from '../theme';
 import { Display, Label, Mark, Rule, ago } from '../ui';
 
 function last(a) {
-  const m = [...a.messages].reverse().find((x) => !x.tool) || a.messages.at(-1);
+  const m = [...a.messages].reverse().find((x) => !x.tool) || a.messages.at(-1) || a.preview;
   return m ? `${m.role === 'user' ? 'you: ' : ''}${m.text.replace(/^>\s?|[#*`]/gm, '').replace(/\s+/g, ' ').trim()}` : 'no messages yet';
+}
+
+// agents grouped by their project: the computer's workspaces in its order, then folders it has no workspace for
+function groups(projects, agents) {
+  const out = projects.map((p) => ({ ...p }));
+  for (const a of agents) if (!out.some((p) => p.key === a.project.key)) out.push(a.project);
+  return out;
 }
 
 function AgentRow({ a }) {
@@ -32,7 +39,7 @@ function AgentRow({ a }) {
 export default function Home() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
-  const { agents, projects } = useSynapse();
+  const { agents, projects, mode, computer, online, error } = useSynapse();
   const working = agents.filter((a) => a.status === 'busy').length;
   const waiting = agents.filter((a) => a.needs).length;
   return (
@@ -40,7 +47,9 @@ export default function Home() {
       <ScrollView contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: insets.bottom + 96 }}>
         <View style={{ paddingHorizontal: 20, paddingBottom: 16 }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-            <Label>{source.name === 'demo' ? 'demo · not paired' : 'paired'}</Label>
+            {mode === 'demo'
+              ? <Pressable onPress={() => router.push('/pair')} hitSlop={12}><Label color={t.sig}>demo · pair with your computer</Label></Pressable>
+              : <Label color={online ? t.ink2 : t.ink3}>{computer} · {online ? 'connected' : 'waiting for synapse…'}</Label>}
             <Pressable onPress={() => router.push('/settings')} hitSlop={12}><Label color={t.ink}>settings</Label></Pressable>
           </View>
           <Display style={{ marginTop: 6 }}>Synapse</Display>
@@ -49,7 +58,13 @@ export default function Home() {
             {waiting ? <Text style={{ color: t.sig }}> · {waiting} need you</Text> : null}
           </Label>
         </View>
-        {projects.map((p) => {
+        {!!error && <Text style={{ fontFamily: FONT.sans, fontSize: 14, color: t.sig, paddingHorizontal: 20, paddingBottom: 12 }}>{error}</Text>}
+        {mode === 'paired' && !agents.length && (
+          <Text style={{ fontFamily: FONT.sans, fontSize: 15, lineHeight: 22, color: t.ink2, paddingHorizontal: 20 }}>
+            {online ? 'No agents running on your computer. Start one with + new agent.' : 'Open Synapse on your computer. Your agents show up here once it is running.'}
+          </Text>
+        )}
+        {groups(projects, agents).map((p) => {
           const list = byAttention(agents.filter((a) => a.project.key === p.key));
           if (!list.length) return null;
           return (

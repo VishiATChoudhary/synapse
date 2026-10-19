@@ -48,9 +48,12 @@ const REPLIES = [
 export function createDemo(emit) {
   let n = 0;
   const state = {
-    projects: PROJECTS.map((p) => ({ ...p, worktrees: [...new Set(AGENTS.filter((a) => PROJECTS[a[2]] === p && a[3]).map((a) => a[3]))] })),
+    // a workspace's folders: its own (home) and its worktrees, as the computer reports them
+    projects: PROJECTS.map((p) => ({ ...p, worktrees: [{ path: p.key, name: p.label, home: true },
+      ...[...new Set(AGENTS.filter((a) => PROJECTS[a[2]] === p && a[3]).map((a) => a[3]))].map((w) => ({ path: `${p.key}/.worktrees/${w}`, name: w, home: false }))] })),
+    kinds: ['claude', 'codex', 'gemini', 'opencode', 'cursor-agent'],
     agents: AGENTS.map(([name, kind, pi, worktree, messages, needs], i) => ({
-      id: `demo-${name}`, kind, name, worktree, project: PROJECTS[pi], status: i === 1 ? 'busy' : 'idle',
+      id: `demo-${name}`, kind, name, worktree, project: PROJECTS[pi], status: i === 1 ? 'busy' : 'idle', inApp: true,
       needs: needs || null, messages, updatedAt: now - i * 300_000,
     })),
   };
@@ -79,10 +82,12 @@ export function createDemo(emit) {
     stop(id) {
       patch(id, (a) => ({ ...push('assistant', 'Interrupted by user')(a), status: 'idle' }));
     },
-    spawn({ projectKey, worktree, kind, prompt }) {
-      const project = state.projects.find((p) => p.key === projectKey);
+    spawn({ cwd, kind, prompt }) {
+      const project = state.projects.find((p) => p.worktrees.some((w) => w.path === cwd));
+      const wt = project.worktrees.find((w) => w.path === cwd);
+      const worktree = wt.home ? null : wt.name;
       const id = `demo-new-${Date.now()}`;
-      state.agents = [{ id, kind, name: `${kind}-${worktree || project.label}`, worktree, project, status: 'idle', needs: null, messages: [], updatedAt: Date.now() }, ...state.agents];
+      state.agents = [{ id, kind, name: `${kind}-${worktree || project.label}`, worktree, project, status: 'idle', inApp: true, needs: null, messages: [], updatedAt: Date.now() }, ...state.agents];
       emit({ ...state });
       if (prompt) this.send(id, prompt);
       return id;

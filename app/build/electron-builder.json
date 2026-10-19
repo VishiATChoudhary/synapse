@@ -25,6 +25,7 @@
     "app/preload.cjs",
     "app/worktrees.mjs",
     "app/updater.mjs",
+    "app/phone.mjs",
     "app/renderer/**",
     "app/node_modules/**",
     "!app/node_modules/electron/**",

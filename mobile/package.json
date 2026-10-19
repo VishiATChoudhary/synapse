@@ -7,7 +7,10 @@
     "@expo-google-fonts/fragment-mono": "^0.4.2",
     "@expo-google-fonts/geist": "^0.4.2",
     "expo": "~58.0.16",
+    "expo-camera": "~58.0.11",
     "expo-constants": "~58.0.12",
+    "expo-crypto": "~58.0.7",
+    "expo-device": "~58.0.5",
     "expo-font": "~58.0.9",
     "expo-haptics": "~58.0.7",
     "expo-linking": "~58.0.13",
@@ -20,7 +23,9 @@
     "react-native": "0.88.0",
     "react-native-safe-area-context": "~5.10.1",
     "react-native-screens": "~4.30.0",
-    "react-native-web": "^0.21.4"
+    "react-native-web": "^0.21.4",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1"
   },
   "scripts": {
     "start": "expo start",

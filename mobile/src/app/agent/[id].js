@@ -66,6 +66,8 @@ export default function Agent() {
   const scroll = useRef(null);
   const count = a?.messages.length;
   useEffect(() => { setTimeout(() => scroll.current?.scrollToEnd({ animated: true }), 50); }, [count, a?.needs]);
+  // the computer sends the full conversation only for the agent that is open here
+  useEffect(() => { source.watch(id); return () => source.watch(null); }, [id]);
   if (!a) return <View style={{ flex: 1, backgroundColor: t.paper }} />;
   const busy = a.status === 'busy';
   const send = async () => {
@@ -96,6 +98,11 @@ export default function Agent() {
         {busy && <Label color={t.sig}>working…</Label>}
         {a.needs && <Needs a={a} />}
       </ScrollView>
+      {a.inApp === false ? (
+        <View style={{ borderTopWidth: 1, borderColor: t.rule, padding: 16, paddingBottom: insets.bottom + 16 }}>
+          <Label>runs outside the synapse app on your computer · read only</Label>
+        </View>
+      ) : (
       <View style={{ borderTopWidth: 1, borderColor: t.rule, padding: 12, paddingBottom: insets.bottom + 12, flexDirection: 'row', alignItems: 'flex-end', gap: 8 }}>
         <TextInput
           value={text} onChangeText={setText} multiline placeholder={busy ? 'queue a message…' : 'message'} placeholderTextColor={t.ink3}
@@ -105,6 +112,7 @@ export default function Agent() {
           ? <Button onPress={() => { tap(); source.stop(a.id); }}>stop</Button>
           : <Button filled disabled={!text.trim()} onPress={send}>send</Button>}
       </View>
+      )}
     </KeyboardAvoidingView>
   );
 }

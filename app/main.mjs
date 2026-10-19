@@ -13,6 +13,7 @@ import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linke
 import { createEdge } from '../ops.mjs';
 import { isConnected } from '../remote.mjs';
 import { createUpdater, bundleOf, MANIFEST_URL } from './updater.mjs';
+import * as phone from './phone.mjs';
 
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
 const SHELL = process.env.SHELL || '/bin/zsh';
@@ -437,14 +438,47 @@ function spawnFork({ parentPty, question, requestId, cols, rows }) {
 }
 
 // Type the question into a fresh agent's prompt without sending it: wait until its TUI has drawn and
-// gone quiet, then paste it (bracketed, so newlines stay newlines). Enter is the human's to press.
-function prefill(id, text) {
+// gone quiet, then paste it (bracketed, so newlines stay newlines). Enter is the human's to press,
+// unless the prompt came from the phone (send), where nobody is at the keyboard to press it.
+function prefill(id, text, send = false) {
   const t = ptys.get(id);
   if (!t || !text) return;
   let quiet = null, seen = false;
-  const done = () => { clearTimeout(quiet); clearTimeout(cap); sub.dispose(); if (ptys.get(id) === t) t.p.write(`\x1b[200~${text}\x1b[201~`); };
+  const done = () => { clearTimeout(quiet); clearTimeout(cap); sub.dispose(); if (ptys.get(id) === t) send ? submit(id, text) : t.p.write(`\x1b[200~${text}\x1b[201~`); };
   const sub = t.p.onData(() => { seen = true; clearTimeout(quiet); quiet = setTimeout(done, 900); });
-  const cap = setTimeout(() => { if (seen) done(); else sub.dispose(); }, 20000);
+  // an agent that never draws gets the question anyway when it came from the phone: nobody here would retype it
+  const cap = setTimeout(() => { if (seen || send) done(); else sub.dispose(); }, send ? 8000 : 20000);
+}
+
+// Paste a message into an agent's prompt and send it. Enter comes a moment later: sent together with the
+// paste, some TUIs take it as a newline inside the pasted text.
+function submit(id, text) {
+  const t = ptys.get(id);
+  if (!t) return;
+  t.p.write(`\x1b[200~${text}\x1b[201~`);
+  setTimeout(() => { if (ptys.get(id) === t) t.p.write('\r'); }, 400);
+}
+
+// ---------------------------------------------------------------- phone
+
+// The phone's first prompt for an agent it asked for, until the renderer has opened that agent's terminal.
+const phonePrompts = new Map();
+function startPhone() {
+  phone.start({
+    projects,
+    kinds: () => Object.keys(config().profiles).filter((k) => k !== 'shell'),
+    ptyOf: (pid) => [...ptys].find(([, t]) => t.pid === pid)?.[0] || null,
+    write: (id, data) => ptys.get(id)?.p.write(data),
+    submit,
+    spawn: ({ req, cwd, kind, prompt }) => {
+      if (prompt) phonePrompts.set(req, prompt);
+      win?.webContents.send('phone:spawn', { req, cwd, kind });
+    },
+    changed: (e) => {
+      win?.webContents.send('phone:changed', e);
+      if (e.paired && Notification.isSupported()) new Notification({ title: 'Phone paired', body: `${e.paired} can now see and start agents on this Mac.` }).show();
+    },
+  });
 }
 
 // ---------------------------------------------------------------- synapse canvas
@@ -509,6 +543,7 @@ app.whenReady().then(() => {
   createWindow();
   pollRequests(); setInterval(pollRequests, REQUEST_POLL);
   serveFriends(); setInterval(serveFriends, TALK_CHECK);
+  startPhone();
   if (UPDATES) { setTimeout(() => updater.check(), UPDATE_DELAY); setInterval(() => updater.check(), UPDATE_EVERY); }
   setInterval(() => { if (win) { const st = state(); win.webContents.send('state', st); notifyTalks(st.talks); pumpForks(); } }, 1000);
   if (process.env.SYNAPSE_SHOT) {
@@ -633,7 +668,19 @@ function localAgentList() {
 const handle = (ch, fn) => ipcMain.handle(ch, async (_e, a) => { try { return { ok: true, value: await fn(a || {}) }; } catch (e) { return { ok: false, error: e.message }; } });
 handle('state', () => state());
 handle('flags', () => ({ demo: DEMO, shot: process.env.SYNAPSE_SHOT_VIEW || '', steps: JSON.parse(process.env.SYNAPSE_SHOT_STEPS || '[]'), cwd: process.cwd(), home: os.homedir() }));
-handle('pty:spawn', (a) => spawnPty(a));
+handle('pty:spawn', (a) => {
+  const r = spawnPty(a);
+  if (a.phoneReq) { // a terminal the phone asked for: its first prompt goes in once the agent is ready
+    phone.spawned(a.phoneReq, r.id);
+    prefill(r.id, phonePrompts.get(a.phoneReq), true);
+    phonePrompts.delete(a.phoneReq);
+  }
+  return r;
+});
+handle('phone:pair', () => phone.pair());
+handle('phone:cancel', () => phone.cancelPair());
+handle('phone:devices', () => phone.devices());
+handle('phone:remove', ({ id }) => phone.remove(id));
 handle('pty:write', ({ id, data }) => { ptys.get(id)?.p.write(data); });
 handle('pty:resize', ({ id, cols, rows }) => { try { ptys.get(id)?.p.resize(cols, rows); } catch {} });
 handle('pty:kill', ({ id }) => { ptys.get(id)?.p.kill(); });

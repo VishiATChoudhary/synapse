@@ -30,6 +30,7 @@ Android ships through Google Play or a plain APK, with no Apple involvement.
 | User-generated content between people | 1.2 | No multiplayer, friends or sharing in the iOS build. If added, it needs report and block. |
 | Payments | 3.1.1, 3.1.3(f) | The app is free. No prices, plans, upgrade buttons or links to pay anywhere in it. |
 | Encryption export questions | export compliance | `ITSAppUsesNonExemptEncryption: false` in app.json (TLS only). |
+| Camera permission | 5.1.1(ii) | Asked only on the pair screen, after explaining why, with the purpose string "Synapse uses the camera to scan the pairing code…". No microphone permission. Pasting the link works without the camera. |
 | Push permission | 5.1.2 | Ask only when the user turns on notifications. The app must work fully without them. |
 | Name clash | 2.3.7 | "Synapse" is taken on the App Store. Use the store name "Synapse Agents" and keep "Synapse" as the home-screen name. |
 | Incomplete app | 2.1 | No placeholder screens or "coming soon" in a submitted build. |
