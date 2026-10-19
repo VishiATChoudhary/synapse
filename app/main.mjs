@@ -42,6 +42,38 @@ function config() {
   return c;
 }
 
+// ---------------------------------------------------------------- open at login
+// A friend's questions are only answered while the app runs, so offer to open it at login. Never turned on by
+// itself. SYNAPSE_FAKE_LOGIN_ITEMS=<file> keeps the setting in a file so tests never touch this Mac's login items.
+const FAKE_LOGIN = process.env.SYNAPSE_FAKE_LOGIN_ITEMS || '';
+function loginOpen() {
+  if (FAKE_LOGIN) return !!readJSON(FAKE_LOGIN, {}).openAtLogin;
+  return !!app.getLoginItemSettings().openAtLogin;
+}
+function setLoginOpen(on) {
+  on = !!on;
+  if (FAKE_LOGIN) { const f = readJSON(FAKE_LOGIN, {}); (f.calls ||= []).push({ openAtLogin: on, openAsHidden: true }); f.openAtLogin = on; writeJSON(FAKE_LOGIN, f); }
+  else app.setLoginItemSettings({ openAtLogin: on, openAsHidden: true });
+  return loginOpen();
+}
+// Started by the login item: no window in the way, the canvas server still runs for friends.
+const startedHidden = () => (FAKE_LOGIN ? !!readJSON(FAKE_LOGIN, {}).startHidden : !!(app.getLoginItemSettings().wasOpenedAsHidden || process.argv.includes('--hidden')));
+
+// The first time a link goes to talk (a talk edge we had not seen), suggest it once. Edges present at launch are
+// the baseline, and the remembered flag is only set once the window is visible to show it.
+let talkEdgesSeen = null;
+function suggestLogin(edges) {
+  const talk = edges.filter((e) => e.mode === 'talk').map((e) => e.id);
+  if (!talkEdgesSeen) { talkEdgesSeen = new Set(talk); return; }
+  const fresh = talk.filter((id) => !talkEdgesSeen.has(id));
+  if (!fresh.length || !win || !win.isVisible()) return;
+  for (const id of fresh) talkEdgesSeen.add(id);
+  const c = config();
+  if (c.loginSuggested || loginOpen()) return;
+  c.loginSuggested = true; writeJSON(FILES.app, c);
+  win.webContents.send('login:suggest');
+}
+
 // ---------------------------------------------------------------- git
 
 // A workspace is a checkout you added (a repo or one of its worktrees). The sidebar groups them by repo.
@@ -508,6 +540,7 @@ function serveFriends() {
 
 function createWindow() {
   win = new BrowserWindow({
+    show: !startedHidden(),
     width: 1440, height: 900, minWidth: 900, minHeight: 560,
     titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 },
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0B0B0B' : '#F1EFE9',
@@ -538,7 +571,7 @@ app.whenReady().then(() => {
   pollRequests(); setInterval(pollRequests, REQUEST_POLL);
   serveFriends(); setInterval(serveFriends, TALK_CHECK);
   if (UPDATES) { setTimeout(() => updater.check(), UPDATE_DELAY); setInterval(() => updater.check(), UPDATE_EVERY); }
-  setInterval(() => { if (win) { const st = state(); win.webContents.send('state', st); notifyTalks(st.talks); notifyTalkRequests(st.talkRequests); pumpForks(); } }, 1000);
+  setInterval(() => { if (win) { const st = state(); win.webContents.send('state', st); notifyTalks(st.talks); notifyTalkRequests(st.talkRequests); suggestLogin(st.edges); pumpForks(); } }, 1000);
   if (process.env.SYNAPSE_SHOT) {
     setTimeout(async () => {
       win.show(); win.focus();
@@ -550,6 +583,7 @@ app.whenReady().then(() => {
     }, Number(process.env.SYNAPSE_SHOT_DELAY || 3500));
   }
 });
+app.on('activate', () => { if (win && !win.isVisible()) { win.show(); win.focus(); } });
 app.on('window-all-closed', () => app.quit());
 // Kill every session's whole process group (agent wrappers spawn helpers that outlive a plain SIGHUP), then exit
 // without Node's handle cleanup: node-pty's exit-watcher threads otherwise block shutdown forever.
@@ -703,13 +737,14 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-const settingsOut = (c) => ({ autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, talkPerHour: talkPerHour(), talkModel: talkModel() });
+const settingsOut = (c) => ({ openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, talkPerHour: talkPerHour(), talkModel: talkModel() });
 handle('settings:get', () => settingsOut(config()));
 handle('talk:usage', () => talkHistory('api/talks/usage'));
 handle('settings:set', (patch) => {
   const c = config();
   if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink;
   if ('autoSendFork' in patch) c.autoSendFork = !!patch.autoSendFork;
+  if ('openAtLogin' in patch) setLoginOpen(patch.openAtLogin);
   if ('talkPerHour' in patch) c.talkPerHour = clampPerHour(patch.talkPerHour);
   if ('talkModel' in patch) c.talkModel = ['opus', 'sonnet', 'haiku'].includes(patch.talkModel) ? patch.talkModel : 'agent';
   writeJSON(FILES.app, c);

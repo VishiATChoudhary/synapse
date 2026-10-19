@@ -1472,6 +1472,13 @@ async function openSettings() {
       try { M.autoSendFork = (await synapse.settings.set({ autoSendFork: fcb.checked })).autoSendFork; toast(fcb.checked ? 'forks send their question right away' : 'a fork\'s question waits in its prompt for you'); }
       catch (e) { fcb.checked = !fcb.checked; toast(e.message, true); }
     };
+    const loginRow = el('label', 'opt set'), lcb = el('input');
+    lcb.type = 'checkbox'; lcb.checked = !!s.openAtLogin;
+    loginRow.append(lcb, el('span', 'k', 'open at login'), el('span', 'c', 'friends\' questions are only answered while Synapse runs; it starts hidden in the background'));
+    lcb.onchange = async () => {
+      try { lcb.checked = (await synapse.settings.set({ openAtLogin: lcb.checked })).openAtLogin; toast(lcb.checked ? 'Synapse opens at login' : 'Synapse no longer opens at login'); }
+      catch (e) { lcb.checked = !lcb.checked; toast(e.message, true); }
+    };
     const updRow = el('div', 'opt set'), updVal = el('span', 'c'), updBtn = el('button', 'btn', 'check now');
     const showUpd = (u) => {
       const at = `version ${u.current || '?'}`;
@@ -1485,7 +1492,7 @@ async function openSettings() {
     updRow.append(el('span', 'k', 'updates'), updVal, updBtn);
     synapse.update.get().then(showUpd, () => {});
     updBtn.onclick = async () => { updBtn.disabled = true; updVal.textContent = 'checking…'; try { showUpd(await synapse.update.check()); } catch (e) { toast(e.message, true); } updBtn.disabled = false; };
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow, updRow);
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow, loginRow, updRow);
     const people = el('div', 'people');
     body.append(el('div', 'sub', 'trusted people'), people);
     drawPeople(people);
@@ -1521,6 +1528,18 @@ async function openSettings() {
     body.tabIndex = 0; body.onkeydown = (e) => { if (e.key === 'Escape') close(); };
   });
 }
+
+// One suggestion, the first time a link goes to talk: only the user's Turn on changes the login item.
+synapse.onLoginSuggest(() => {
+  if ($('#login-suggest')) return;
+  const box = el('div', 'toast login-suggest'), yes = el('button', 'btn sig', 'Turn on'), no = el('button', 'btn', 'Not now');
+  box.id = 'login-suggest';
+  const done = () => box.remove();
+  yes.onclick = async () => { try { await synapse.settings.set({ openAtLogin: true }); toast('Synapse opens at login'); } catch (e) { toast(e.message, true); } done(); };
+  no.onclick = done;
+  box.append(el('span', '', 'Answer questions even when Synapse is closed? Open at login'), yes, no);
+  document.body.appendChild(box);
+});
 
 let toastTimer = null;
 function toast(text, sig = false) {

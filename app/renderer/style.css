@@ -270,6 +270,8 @@ body.sidebar-collapsed .main > .top { padding-left: 86px; }
 .btn.danger:hover { background: var(--sig); color: #fff; }
 
 .toast { position: fixed; left: 50%; bottom: 46px; transform: translateX(-50%); z-index: 40; padding: 8px 12px; max-width: 70vw; background: var(--paper); border: 1px solid var(--ink); font: 12px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: rise .2s ease-out; }
+.toast.login-suggest { display: flex; align-items: center; gap: 10px; max-width: 90vw; white-space: normal; z-index: 41; }
+.toast.login-suggest .btn { padding: 6px 12px; }
 .toast.sig { border-color: var(--sig); color: var(--sig); }
 @keyframes rise { from { opacity: 0; transform: translate(-50%, 6px); } }
 
