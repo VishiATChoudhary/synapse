@@ -1113,3 +1113,59 @@ test('a talks.json write failing when an answer finishes does not crash the proc
   await talk.tick();
   assert.equal(conv0().endReason, 'error');
 });
+
+// ---------------------------------------------------------------- OpenCode and Cursor transcripts
+
+const { buildOpenCode, buildCursor, OC_SESSION } = await import('./fixtures/make-sessions.mjs');
+const sessHome = fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-sess-'));
+const SESS_CWD = '/work/fixture-app';
+
+test('OpenCode: its sqlite session reads as user and assistant messages', () => {
+  const db = buildOpenCode(sessHome, SESS_CWD);
+  const { messages } = lib.readAgentMessages({ transcript: `${db}#${OC_SESSION}`, format: 'opencode' });
+  assert.deepEqual(messages.map((m) => m.role), ['user', 'assistant', 'user', 'assistant']);
+  assert.equal(messages[0].text, 'Please add a retry to the fetch helper');
+  assert.match(messages[1].text, /backoff loop\.\n\[bash: grep -rn fetchHelper src\]/);
+  assert.doesNotMatch(messages[1].text, /thinking about retries/);
+  assert.equal(messages[2].text, 'Use three attempts');
+  assert.equal(messages[3].tool, true);
+  assert.equal(lib.readAgentMessages({ transcript: `${db}#${OC_SESSION}`, format: 'opencode' }, 3).messages.length, 1);
+});
+
+test('OpenCode: discovery picks the top-level session of the cwd, not a subagent or another dir', () => {
+  const now = Date.now();
+  const t = lib.opencodeTranscript(SESS_CWD, now - 1000, sessHome);
+  assert.match(t, /opencode\.db#ses_fixture1$/);
+  assert.equal(lib.opencodeTranscript('/work/elsewhere', now - 1000, sessHome), null);
+  assert.equal(lib.opencodeTranscript(SESS_CWD, now + 3_600_000, sessHome), null);
+});
+
+test('Cursor: its blob store reads as user and assistant messages', () => {
+  const db = buildCursor(sessHome, SESS_CWD);
+  const { messages } = lib.readAgentMessages({ transcript: db, format: 'cursor-agent' });
+  assert.deepEqual(messages.map((m) => m.role), ['user', 'assistant', 'assistant']);
+  assert.equal(messages[0].text, 'Why is the build slow?');
+  assert.equal(messages[1].text, 'Checking the bundler config.\n[Grep: webpack]');
+  assert.equal(messages[2].text, 'Source maps are the cause.');
+  assert.ok(!messages.some((m) => /coding agent|user_info/.test(m.text)));
+});
+
+test('Cursor: discovery finds the chat under the md5 of the cwd', () => {
+  const t = lib.cursorTranscript(SESS_CWD, Date.now() - 1000, sessHome);
+  assert.match(t, /chat-fixture1\/store\.db$/);
+  assert.equal(lib.cursorTranscript('/work/elsewhere', Date.now() - 1000, sessHome), null);
+  assert.equal(lib.cursorTranscript(SESS_CWD, Date.now() + 3_600_000, sessHome), null);
+});
+
+test('replay answerCommand carries the OpenCode and Cursor conversation', () => {
+  const cases = [
+    ['opencode', `${path.join(sessHome, 'opencode', 'opencode.db')}#${OC_SESSION}`, /backoff loop/],
+    ['cursor-agent', lib.cursorTranscript(SESS_CWD, Date.now() - 1000, sessHome), /Source maps are the cause/],
+  ];
+  for (const [kind, transcript, line] of cases) {
+    const conv = { id: 'c', mode: 'replay', forkSession: null, targetName: 'app', peerHandle: 'bob', turns: [] };
+    const cmd = talk.answerCommand(conv, { seq: 1, q: 'hi' }, { kind, id: `${kind}-1`, name: 'app', cwd: '/nope', transcript, format: kind });
+    assert.match(cmd.input, line, kind);
+    toolless(cmd.args);
+  }
+});

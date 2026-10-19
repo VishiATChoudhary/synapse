@@ -172,10 +172,87 @@ function readGemini(file, from) {
   return { messages, end: msgs.length };
 }
 
+// OpenCode and Cursor keep sessions in SQLite; node:sqlite (Node >= 22.5) reads them without a dependency.
+// A store that cannot be opened reads as an empty conversation.
+function openDb(file) {
+  try {
+    const sqlite = process.getBuiltinModule?.('node:sqlite');
+    return sqlite ? new sqlite.DatabaseSync(file, { readOnly: true }) : null;
+  } catch { return null; }
+}
+
+function windowFrom(all, from) {
+  const start = from == null ? Math.max(0, all.length - 60) : Math.min(from, all.length);
+  return { messages: all.slice(start), end: all.length };
+}
+
+// OpenCode: one opencode.db for every session. The transcript is "<db>#<session id>"; messages are rows
+// (data.role) and their text and tool calls are rows of `part`.
+function readOpenCode(transcript, from) {
+  const [file, id] = transcript.split('#');
+  const db = openDb(file);
+  if (!db || !id) return { messages: [], end: from };
+  const all = [];
+  try {
+    const parts = new Map();
+    for (const r of db.prepare('SELECT message_id, data FROM part WHERE session_id = ? ORDER BY time_created, id').all(id)) {
+      if (!parts.has(r.message_id)) parts.set(r.message_id, []);
+      try { parts.get(r.message_id).push(JSON.parse(r.data)); } catch {}
+    }
+    for (const r of db.prepare('SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created, id').all(id)) {
+      let role; try { role = JSON.parse(r.data).role; } catch { continue; }
+      const ps = parts.get(r.id) || [];
+      const text = ps.filter((p) => p.type === 'text' && !p.synthetic && !p.ignored).map((p) => p.text || '').join('\n').trim();
+      if (role === 'user') { if (text && !NOISE.test(text)) all.push({ role, text, ts: r.time_created }); continue; }
+      if (role !== 'assistant') continue;
+      const tools = ps.filter((p) => p.type === 'tool').map((p) => toolLine(p.tool, p.state?.input));
+      if (text || tools.length) all.push({ role, text: [text, ...tools].filter(Boolean).join('\n'), ts: r.time_created, tool: !text });
+    }
+  } catch {} finally { try { db.close(); } catch {} }
+  return windowFrom(all, from);
+}
+
+// Cursor: each chat is a store.db of content-addressed blobs. meta holds (as hex JSON) the id of a root blob
+// whose protobuf starts with the 32-byte ids of the message blobs, in order; each message is JSON.
+function cursorRefs(root) {
+  const refs = [];
+  for (let i = 0; i + 34 <= root.length && root[i] === 0x0a && root[i + 1] === 32; i += 34) refs.push(Buffer.from(root.subarray(i + 2, i + 34)).toString('hex'));
+  return refs;
+}
+
+function readCursor(file, from) {
+  const db = openDb(file);
+  if (!db) return { messages: [], end: from };
+  const all = [];
+  try {
+    const meta = JSON.parse(Buffer.from(db.prepare('SELECT value FROM meta LIMIT 1').get().value, 'hex').toString());
+    const get = db.prepare('SELECT data FROM blobs WHERE id = ?');
+    const root = get.get(meta.latestRootBlobId)?.data;
+    const ts = meta.createdAt;
+    for (const ref of root ? cursorRefs(root) : []) {
+      let m; try { m = JSON.parse(Buffer.from(get.get(ref).data).toString()); } catch { continue; }
+      const parts = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : Array.isArray(m.content) ? m.content : [];
+      const text = parts.filter((p) => p.type === 'text').map((p) => p.text || '').join('\n').trim();
+      if (m.role === 'user') {
+        // the first user message is Cursor's own context; the person's words sit in <user_query>
+        const q = /<user_query>([\s\S]*?)<\/user_query>/.exec(text)?.[1].trim();
+        const t = q ?? (text.startsWith('<') ? '' : text);
+        if (t) all.push({ role: 'user', text: t, ts });
+      } else if (m.role === 'assistant') {
+        const tools = parts.filter((p) => p.type === 'tool-call').map((p) => toolLine(p.toolName, p.args));
+        if (text || tools.length) all.push({ role: 'assistant', text: [text, ...tools].filter(Boolean).join('\n'), ts, tool: !text });
+      }
+    }
+  } catch {} finally { try { db.close(); } catch {} }
+  return windowFrom(all, from);
+}
+
 // Unified reader. `src` is { transcript, format }.
 export function readAgentMessages(src, cursor = null, opts = {}) {
   if (src?.format === 'demo') return { messages: cursor == null ? src.demo : src.demo.slice(cursor), end: src.demo.length };
-  if (!src?.transcript || !fs.existsSync(src.transcript)) return { messages: [], end: cursor };
+  if (!src?.transcript || !fs.existsSync(src.transcript.split('#')[0])) return { messages: [], end: cursor };
+  if (src.format === 'opencode') return readOpenCode(src.transcript, cursor);
+  if (src.format === 'cursor-agent') return readCursor(src.transcript, cursor);
   if (src.format === 'gemini') return readGemini(src.transcript, cursor);
   return readJsonl(src.transcript, cursor, PARSERS[src.format] || claudeMessage, opts.tailBytes, opts.minMessages);
 }
@@ -320,6 +397,33 @@ function geminiTranscript(cwd, start) {
   return best?.p || null;
 }
 
+// OpenCode: the newest top-level session of this directory touched since the process started.
+export function opencodeTranscript(cwd, start, home = process.env.XDG_DATA_HOME || path.join(HOME, '.local', 'share')) {
+  const file = path.join(home, 'opencode', 'opencode.db');
+  if (!fs.existsSync(file)) return null;
+  const db = openDb(file);
+  if (!db) return null;
+  try {
+    const row = db.prepare('SELECT id FROM session WHERE directory = ? AND parent_id IS NULL AND time_updated >= ? ORDER BY time_updated DESC LIMIT 1').get(cwd, start - 60_000);
+    return row ? `${file}#${row.id}` : null;
+  } catch { return null; } finally { try { db.close(); } catch {} }
+}
+
+// Cursor: chats/<md5 of the workspace path>/<chat id>/store.db; take the one written to since the process started.
+export function cursorTranscript(cwd, start, home = path.join(HOME, '.cursor')) {
+  const dir = path.join(home, 'chats', crypto.createHash('md5').update(cwd).digest('hex'));
+  let best = null;
+  try {
+    for (const id of fs.readdirSync(dir)) {
+      const db = path.join(dir, id, 'store.db');
+      let m = 0;
+      for (const f of [db, `${db}-wal`]) { try { m = Math.max(m, fs.statSync(f).mtimeMs); } catch {} }
+      if (m && m >= start - 60_000 && (!best || m > best.m)) best = { p: db, m };
+    }
+  } catch {}
+  return best?.p || null;
+}
+
 function processAgents() {
   const rows = processTable();
   const byPid = new Map(rows.map((r) => [r.pid, r]));
@@ -338,11 +442,13 @@ function processAgents() {
   return roots.filter((r) => dirs.get(r.pid)).map((r) => {
     const cwd = dirs.get(r.pid), id = `${r.kind}-${r.pid}`;
     const transcript = r.kind === 'codex' ? codexTranscript(id, cwd, r.start)
-      : r.kind === 'gemini' ? geminiTranscript(cwd, r.start) : null;
+      : r.kind === 'gemini' ? geminiTranscript(cwd, r.start)
+      : r.kind === 'opencode' ? opencodeTranscript(cwd, r.start)
+      : r.kind === 'cursor-agent' ? cursorTranscript(cwd, r.start) : null;
     return {
       id, pid: r.pid, kind: r.kind, name: `${r.kind}-${path.basename(cwd)}`.toLowerCase(), cwd,
       status: (busyCpu.get(r.pid) || 0) > 4 ? 'busy' : 'idle', startedAt: r.start, updatedAt: r.start,
-      transcript, format: r.kind === 'codex' || r.kind === 'gemini' ? r.kind : null,
+      transcript, format: ['codex', 'gemini', 'opencode', 'cursor-agent'].includes(r.kind) ? r.kind : null,
     };
   });
 }
