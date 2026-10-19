@@ -44,6 +44,21 @@ export function writeJSON(file, value) {
   fs.renameSync(tmp, file);
 }
 
+// A read-modify-write that other processes (server, MCP, CLI, hooks) may run at the same time: hold a lock file
+// while fn runs. A holder that died leaves the lock behind; after 5 s it counts as stale.
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+export function withLock(lock, fn) {
+  for (let i = 0; ; i++) {
+    try { fs.closeSync(fs.openSync(lock, 'wx')); break; } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      try { if (Date.now() - fs.statSync(lock).mtimeMs > 5000) { fs.rmSync(lock, { force: true }); continue; } } catch { continue; }
+      if (i > 600) throw new Error(`${path.basename(lock)} stayed locked`);
+      pause(10);
+    }
+  }
+  try { return fn(); } finally { fs.rmSync(lock, { force: true }); }
+}
+
 export const logEvent = (ev) => fs.appendFileSync(FILES.events, `${JSON.stringify({ t: Date.now(), ...ev })}\n`);
 
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s);

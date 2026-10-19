@@ -16,7 +16,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
-  FILES, REMOTE_DIR, KINDS, readJSON, writeJSON, localAgents, readAgentMessages, logEvent, projectOf, remoteId, remoteLog,
+  FILES, REMOTE_DIR, KINDS, readJSON, writeJSON, withLock, localAgents, readAgentMessages, logEvent, projectOf, remoteId, remoteLog,
 } from './lib.mjs';
 import * as talk from './talk.mjs';
 
@@ -205,23 +205,29 @@ function forget(m, { block }) {
   for (const k of Object.keys(sent)) if (k.startsWith(`${m}:`)) delete sent[k];
   writeJSON(SENT, sent);
   fs.rmSync(path.join(REMOTE_DIR, m), { recursive: true, force: true });
-  const out = readJSON(OUTBOX, []);
-  writeJSON(OUTBOX, out.filter((o) => o.to !== m));
+  outbox((out) => out.filter((o) => o.to !== m));
 }
+
+// The server, MCP, CLI and hooks all queue for friends while a push may be sending: every change to the outbox
+// is a read-modify-write under its lock, and each entry has an id so a push removes exactly what it sent.
+function outbox(fn) {
+  return withLock(`${OUTBOX}.lock`, () => {
+    const next = fn(readJSON(OUTBOX, [])).slice(-200);
+    writeJSON(OUTBOX, next);
+    return next;
+  });
+}
+const entry = (to, item) => ({ id: crypto.randomUUID(), to, item });
 
 // The friend's side of a link was removed on our canvas: ask its owner to stop sharing.
 export function queueDrop(edge) {
   const prefix = remoteId(edge.remote, '');
-  const out = readJSON(OUTBOX, []);
-  out.push({ to: edge.remote, item: { type: 'drop', agent: edge.from.slice(prefix.length), target: edge.to } });
-  writeJSON(OUTBOX, out.slice(-200));
+  outbox((out) => [...out, entry(edge.remote, { type: 'drop', agent: edge.from.slice(prefix.length), target: edge.to })]);
 }
 
 // Queue any item for a friend's machine; the next push sends it.
 export function queueItem(machine, item) {
-  const out = readJSON(OUTBOX, []);
-  out.push({ to: machine, item });
-  writeJSON(OUTBOX, out.slice(-200));
+  outbox((out) => [...out, entry(machine, item)]);
 }
 
 // ---------------------------------------------------------------- sync
@@ -322,6 +328,8 @@ function appendLog(m, agentId, messages) {
 function routeTalk(m, it) {
   try {
     if (it.type === 'talk-ask') for (const reply of talk.receiveAsk(m, it)) queueItem(m, reply);
+    // a talk-end is either the asker ending a conversation with my agent, or my friend's agent ending mine
+    else if (it.type === 'talk-end' && talk.receiveEnd(m, it)) return;
     else talk.receiveReply(m, it);
   } catch {}
 }
@@ -441,8 +449,14 @@ async function push(c, timeout) {
   const edges = readJSON(FILES.edges, []);
   refreshSnapshots(edges, byId);
   const sent = readJSON(SENT, {});
-  let outbox = readJSON(OUTBOX, []);
-  outbox.push(...talk.takeOutgoing()); // answers and status lines waiting from the talk runner
+  // answers and status lines from the talk runner move into the outbox, which keeps them until a send gets through;
+  // items for a friend who is gone are dropped
+  const pending = outbox((out) => {
+    talk.takeOutgoing((items) => { out = [...out, ...items.map((o) => entry(o.to, o.item))]; });
+    const peers = config().peers;
+    return out.filter((o) => peers[o.to]).map((o) => (o.id ? o : { id: crypto.randomUUID(), ...o }));
+  });
+  const done = new Set(); // ids sent, or that can never be sent
   const now = Date.now();
   const brief = locals.map((a) => ({ id: a.id, name: a.name, kind: a.kind, status: a.status, project: projectOf(a.cwd).label, startedAt: a.startedAt }));
   let count = 0;
@@ -487,19 +501,20 @@ async function push(c, timeout) {
     // stop tracking agents we no longer share, so sharing again starts from their recent context
     for (const k of Object.keys(sent)) if (k.startsWith(`${m}:`) && !sharedFrom.includes(k.slice(m.length + 1))) delete sent[k];
 
-    const queued = outbox.filter((o) => o.to === m);
+    const queued = pending.filter((o) => o.to === m);
     items.push(...queued.map((o) => o.item));
     if (!items.length) { Object.assign(sent, marks); continue; }
     try {
       await call(c.relay, '/v1/send', { to: m, pair: peer.pair, items }, c.token, timeout);
       Object.assign(sent, marks);
-      outbox = outbox.filter((o) => !queued.includes(o));
+      for (const o of queued) done.add(o.id);
       count += items.length;
     } catch (e) {
-      if (e.status === 403) outbox = outbox.filter((o) => !queued.includes(o)); // pairing no longer valid: nothing will get through
+      if (e.status === 403) for (const o of queued) done.add(o.id); // pairing no longer valid: nothing will get through
     }
   }
   writeJSON(SENT, sent);
-  writeJSON(OUTBOX, outbox);
+  // re-read: whatever was queued while we sent stays for the next push
+  if (done.size) outbox((out) => out.filter((o) => !done.has(o.id)));
   return count;
 }

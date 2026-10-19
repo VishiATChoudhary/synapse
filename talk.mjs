@@ -5,7 +5,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
-import { FILES, KINDS, CLAUDE, readJSON, writeJSON, localAgents, remoteId, readAgentMessages, formatMessages, postMessage } from './lib.mjs';
+import { FILES, KINDS, CLAUDE, readJSON, writeJSON, withLock, localAgents, remoteId, readAgentMessages, formatMessages, postMessage } from './lib.mjs';
 import { config } from './remote.mjs';
 
 export const LIMITS = {
@@ -19,6 +19,7 @@ export const ADAPTERS = Object.fromEntries(KINDS.map((k) => [k, k === 'claude' ?
 
 const KEEP_ENDED_MS = 30 * 24 * 3600_000;
 const HOUR = 3600_000;
+const MAILBOX_MS = 24 * HOUR; // how long the relay keeps an undelivered item
 const NO_CLAUDE = 'Claude Code is needed to answer for this agent';
 
 function load() {
@@ -34,24 +35,14 @@ function save(s) {
 
 // The server, the MCP server and the CLI all write talks.json: every change is a read-modify-write under a lock file.
 const LOCK = () => `${FILES.talks}.lock`;
-const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 function update(fn) {
-  for (let i = 0; ; i++) {
-    try { fs.closeSync(fs.openSync(LOCK(), 'wx')); break; } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      // a writer that died holding the lock leaves it behind
-      try { if (Date.now() - fs.statSync(LOCK()).mtimeMs > 5000) { fs.rmSync(LOCK(), { force: true }); continue; } } catch { continue; }
-      if (i > 600) throw new Error('talks.json stayed locked');
-      pause(10);
-    }
-  }
-  try {
+  return withLock(LOCK(), () => {
     const s = load();
     const before = JSON.stringify(s);
     const out = fn(s);
     if (JSON.stringify(s) !== before) save(s);
     return out;
-  } finally { fs.rmSync(LOCK(), { force: true }); }
+  });
 }
 
 const isStr = (v) => typeof v === 'string' && v.length > 0;
@@ -80,7 +71,10 @@ export function receiveAsk(peer, item, now = Date.now()) {
   const question = item.question.trim();
   if (!question || question.length > LIMITS.question) return [endItem(conv, 'refused')];
 
-  return update((s) => {
+  // ps, lsof and a transcript scan: far too slow to run while holding the talks lock
+  const live = localAgents().find((a) => a.id === item.target);
+  let limited = null; // a conversation the turn limit just ended, cleaned up once the lock is free
+  const out = update((s) => {
     // sixty questions an hour per peer, counting the ones we turn away
     const recent = (s.rate[peer] || []).filter((t) => now - t < HOUR);
     recent.push(now);
@@ -101,11 +95,11 @@ export function receiveAsk(peer, item, now = Date.now()) {
     if (c && c.turns.length >= LIMITS.turns) {
       end(c, 'idle', 'turn limit', now);
       s.queue = s.queue.filter((j) => j.conv !== c.id);
+      limited = { ...c };
       return [endItem(conv, 'idle', 'turn limit')];
     }
 
     if (!c) {
-      const live = localAgents().find((a) => a.id === item.target);
       const kind = live?.kind || ok.edge.snapshot?.kind;
       const p = config().peers[peer];
       c = {
@@ -124,6 +118,8 @@ export function receiveAsk(peer, item, now = Date.now()) {
     const position = ahead(s.queue) + ahead(s.running);
     return [{ type: 'talk-status', conv: c.id, seq: item.seq, state: 'queued', position }];
   });
+  if (limited) { kill(limited.id); cleanup(limited); }
+  return out;
 }
 
 // The asker side: what the friend's machine reports back about a question we sent. Only for a conversation we
@@ -275,23 +271,35 @@ export function nextJob(now = Date.now()) {
   });
 }
 
-export function endConversation(convId, reason, note) {
+// `match` narrows which conversation may end; `notify: false` when the other side ended it and needs no echo.
+export function endConversation(convId, reason, note, { notify = true, match = () => true } = {}) {
   const c = update((s) => {
-    const c = convOf(s, convId);
+    const c = s.conversations.find((x) => x.id === convId && match(x));
     if (!c || c.status === 'ended') return null;
     end(c, reason, note);
     s.queue = s.queue.filter((j) => j.conv !== convId);
-    s.outgoing.push({ to: c.peer, item: endItem(convId, reason, note) });
+    if (notify) s.outgoing.push({ to: c.peer, item: endItem(convId, reason, note) });
     return c;
   });
-  if (!c) return;
+  if (!c) return false;
   kill(convId);
   cleanup(c);
+  return true;
 }
 
-export function takeOutgoing() {
+// The asker ended a conversation with one of my agents (her synapse_end, her idle or revoke): drop what waits,
+// stop the answer running and delete the fork. Only for a conversation this very peer asks in.
+export function receiveEnd(peer, item) {
+  if (!item || !isConv(item.conv)) return false;
+  return endConversation(item.conv, 'asker', null, { notify: false, match: (c) => c.role === 'owner' && c.peer === peer });
+}
+
+// What the runner left for friends' machines. `store` gets the items before they leave talks.json and runs inside
+// the lock: if it throws, they stay here. If we die after it ran, they go out twice, never not at all.
+export function takeOutgoing(store) {
   return update((s) => {
     const out = s.outgoing;
+    if (store && out.length) store(out);
     s.outgoing = [];
     return out;
   });
@@ -308,7 +316,8 @@ export function reconcile(now = Date.now()) {
       let reason = null;
       if (!peers[c.peer]) reason = 'revoked';
       else if (c.role === 'owner' && !edges.some((e) => !e.mirrored && e.from === c.target && e.to === remoteId(c.peer, c.asker) && e.mode === 'talk')) reason = 'owner';
-      else if (now - c.lastAt >= LIMITS.idleMs) reason = 'idle';
+      // my question still unanswered: the mailbox holds it a day, so a late answer may still come
+      else if (now - c.lastAt >= (c.role === 'asker' && c.turns.some((t) => t.a == null) ? MAILBOX_MS : LIMITS.idleMs)) reason = 'idle';
       if (!reason) continue;
       end(c, reason, null, now);
       s.queue = s.queue.filter((j) => j.conv !== c.id);
@@ -448,7 +457,16 @@ export function cleanup(conv) {
 
 function finish(convId, seq, outcome, opts) {
   children.delete(convId);
-  const c = update((s) => {
+  // runs from a child's close handler: a throw here would take the server and every running answer down
+  let c;
+  try { c = record(convId, seq, outcome); } catch {
+    try { c = record(convId, seq, { reason: 'error' }); } catch { c = null; }
+  }
+  if (c?.status === 'ended') cleanup(c);
+  tick(opts).catch(() => {}); // the next question in line
+}
+function record(convId, seq, outcome) {
+  return update((s) => {
     s.running = s.running.filter((r) => r.conv !== convId);
     const c = convOf(s, convId);
     if (!c || c.status !== 'open') return c ? { ...c } : null;
@@ -467,8 +485,6 @@ function finish(convId, seq, outcome, opts) {
     }
     return { ...c };
   });
-  if (c?.status === 'ended') cleanup(c);
-  tick(opts).catch(() => {}); // the next question in line
 }
 
 function parseResult(out) {

@@ -489,7 +489,10 @@ test('malformed talk items never break pull', async () => {
 test('queueItem appends to the outbox', () => {
   writeJSON(path.join(home, 'remote', 'outbox.json'), []);
   remote.queueItem('m1', { type: 'talk-end', conv: 'z', reason: 'owner' });
-  assert.deepEqual(readJSON(path.join(home, 'remote', 'outbox.json'), []), [{ to: 'm1', item: { type: 'talk-end', conv: 'z', reason: 'owner' } }]);
+  const [o, ...rest] = readJSON(path.join(home, 'remote', 'outbox.json'), []);
+  assert.equal(rest.length, 0);
+  assert.match(o.id, /^[0-9a-f-]{36}$/); // a push removes exactly the entries it sent, by id
+  assert.deepEqual({ to: o.to, item: o.item }, { to: 'm1', item: { type: 'talk-end', conv: 'z', reason: 'owner' } });
 });
 
 test('receiveReply records status, answer and end for the asker only', () => {
@@ -766,4 +769,129 @@ test('server start ends a conversation whose answerer died and deletes its sessi
   assert.deepEqual(s.queue, []);
   assert.ok(s.outgoing.some((o) => o.item.type === 'talk-end' && o.item.conv === U('d1') && o.item.note === 'restarted'));
   assert.equal(fs.existsSync(path.join(dir, `${fork}.jsonl`)), false);
+});
+
+// ---------------------------------------------------------------- final review fixes
+const forkFile = (fork, project = '-dev-fix') => {
+  const dir = path.join(home, 'claude', 'projects', project);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${fork}.jsonl`), '{}\n');
+  fs.mkdirSync(path.join(home, 'claude', 'session-env', fork), { recursive: true });
+  return () => fs.existsSync(path.join(dir, `${fork}.jsonl`)) || fs.existsSync(path.join(home, 'claude', 'session-env', fork));
+};
+
+test('the asker\'s synapse_end ends my conversation, kills its answer and deletes its fork', async () => {
+  reset(); const { target } = talkEdge('demo-api-auth');
+  writeJSON(path.join(home, 'remote', 'outbox.json'), []);
+  process.env.FAKE_CLAUDE_SLEEP_MS = '10000';
+  try {
+    talk.receiveAsk('m1', ask(target, 1));
+    await talk.tick();
+    talk.receiveAsk('m1', ask(target, 2)); // waits behind the running one
+    const pid = state().running[0].pid;
+    const exists = forkFile(conv0().forkSession);
+    assert.ok(exists());
+    // another friend can not end it
+    assert.equal(talk.receiveEnd('m2', { type: 'talk-end', conv: U('c1'), reason: 'asker' }), false);
+    assert.equal(conv0().status, 'open');
+    // her end arrives through the mailbox, as ops.endTalk on her machine sends it
+    await viaRelay([{ type: 'talk-end', from: 'm1', conv: U('c1'), reason: 'asker' }]);
+    assert.equal(conv0().status, 'ended');
+    assert.equal(conv0().endReason, 'asker');
+    assert.deepEqual(state().queue, []);
+    await waitFor(idle);
+    assert.throws(() => process.kill(pid, 0), /ESRCH/);
+    assert.equal(exists(), false);
+    // no end is echoed back to her
+    assert.ok(![...outbox(), ...(state().outgoing || [])].some((o) => o.item.type === 'talk-end'));
+  } finally { delete process.env.FAKE_CLAUDE_SLEEP_MS; }
+});
+
+test('an unanswered question survives the idle limit and its late answer still reaches the inbox', async () => {
+  sharedWithMe();
+  const r = await ops.ask(me(), 'api@bob', 'why?', { waitMs: 0, sync: noSync });
+  const t0 = state().conversations[0].lastAt;
+  assert.deepEqual(talk.reconcile(t0 + 31 * 60_000), []);
+  assert.equal(state().conversations[0].status, 'open');
+  talk.receiveReply('m1', { type: 'talk-answer', conv: r.conversation, seq: 1, answer: 'back from lunch' }, t0 + 32 * 60_000);
+  const inbox = lib.takeInbox(me().id);
+  assert.equal(inbox.length, 1);
+  assert.match(inbox[0].text, /back from lunch/);
+  // answered, the usual 30 minutes apply again
+  assert.deepEqual(talk.reconcile(t0 + 63 * 60_000), [r.conversation]);
+  assert.equal(state().conversations[0].endReason, 'idle');
+  // still unanswered once the mailbox has dropped the question: it ends
+  const r2 = await ops.ask(me(), 'api@bob', 'anyone?', { waitMs: 0, sync: noSync });
+  const t1 = state().conversations.find((c) => c.id === r2.conversation).lastAt;
+  assert.deepEqual(talk.reconcile(t1 + 23 * 3600_000), []);
+  assert.deepEqual(talk.reconcile(t1 + 24 * 3600_000), [r2.conversation]);
+});
+
+test('an item queued while a push is sending is not lost', async () => {
+  sharedWithMe();
+  const box = path.join(home, 'remote', 'outbox.json');
+  writeJSON(box, [{ id: 'old-1', to: 'm1', item: { type: 'talk-end', conv: 'a', reason: 'owner' } }, { to: 'gone', item: { type: 'drop', agent: 'x', target: 'y' } }]);
+  let sending = null, sentItems = null;
+  const srv = http.createServer((req, res) => {
+    let d = '';
+    req.on('data', (c) => { d += c; });
+    req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url === '/v1/poll') return res.end('{"items":[]}');
+      sentItems = JSON.parse(d).items;
+      sending?.();
+      setTimeout(() => res.end('{}'), 300); // a slow relay
+    });
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  writeJSON(FILES.remote, { ...readJSON(FILES.remote, {}), relay: `http://127.0.0.1:${srv.address().port}` });
+  try {
+    const inFlight = new Promise((r) => { sending = r; });
+    const done = remote.sync();
+    await inFlight;
+    remote.queueItem('m1', { type: 'talk-ask', conv: 'b', seq: 1, target: 'x', asker: 'y', question: 'q' }); // ops.ask from the MCP server
+    await done;
+  } finally { srv.close(); }
+  assert.ok(sentItems.some((i) => i.conv === 'a'));
+  // the sent entry is gone, the one queued meanwhile stays, the one for a friend no longer here is dropped
+  assert.deepEqual(readJSON(box, []).map((o) => o.item.conv || o.item.type), ['b']);
+});
+
+test('a failed send keeps the runner\'s answers for the next push', async () => {
+  sharedWithMe();
+  writeJSON(FILES.talks, { outgoing: [{ to: 'm1', item: { type: 'talk-answer', conv: U('k1'), seq: 1, answer: 'kept' } }] });
+  await viaRelay([]); // the stub relay refuses every send
+  assert.deepEqual(state().outgoing, []);
+  assert.deepEqual(outbox().map((o) => o.item.answer), ['kept']);
+});
+
+test('a conversation ended by the turn limit deletes its fork', () => {
+  reset(); const { target } = talkEdge();
+  const fork = '33333333-3333-4333-8333-333333333333';
+  const exists = forkFile(fork);
+  const turns = Array.from({ length: 20 }, (_, i) => ({ seq: i + 1, q: 'q', a: 'a', askedAt: 1 }));
+  writeJSON(FILES.talks, { conversations: [{ id: U('c1'), role: 'owner', peer: 'm1', asker: 'x', target, mode: 'native', forkSession: fork, status: 'open', turns, createdAt: Date.now(), lastAt: Date.now() }] });
+  const out = talk.receiveAsk('m1', ask(target, 21));
+  assert.deepEqual([out[0].reason, out[0].note], ['idle', 'turn limit']);
+  assert.equal(exists(), false);
+});
+
+test('a talks.json write failing when an answer finishes does not crash the process', async () => {
+  reset(); const { target } = talkEdge('demo-api-auth');
+  process.env.FAKE_CLAUDE_SLEEP_MS = '300';
+  try {
+    talk.receiveAsk('m1', ask(target));
+    await talk.tick();
+    const pid = state().running[0].pid;
+    // the data dir turns read-only: not even the talks lock can be taken when the child closes
+    fs.chmodSync(home, 0o555);
+    await waitFor(() => { try { process.kill(pid, 0); return false; } catch { return true; } });
+    await new Promise((r) => setTimeout(r, 200));
+  } finally {
+    fs.chmodSync(home, 0o755);
+    delete process.env.FAKE_CLAUDE_SLEEP_MS;
+  }
+  // still alive to tell: the running entry is left for the reaper, which ends it as an error
+  await talk.tick();
+  assert.equal(conv0().endReason, 'error');
 });
