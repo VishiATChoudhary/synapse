@@ -221,9 +221,22 @@ Settings: `PORT`, `SYNAPSE_HOME` (state folder, default `~/.synapse`), `SYNAPSE_
 ## Desktop app
 
 `npm install && npm run app:install` packages the checkout into `Synapse.app` (Apple Silicon), copies it to
-`/Applications` and opens it. `npm run app:build` only builds, into `dist/`, together with a `.dmg`. The app is
-ad-hoc signed: it runs on the machine that built it, and on another Mac only after right-click → Open (or
-`xattr -dr com.apple.quarantine Synapse.app`), since there is no Developer ID or notarization.
+`/Applications` and opens it. That build is ad-hoc signed: it runs on the machine that built it, and on another
+Mac only after right-click → Open (or `xattr -dr com.apple.quarantine Synapse.app`).
+
+`npm run app:build` (and `npm run release`) build into `dist/` together with a `.dmg`, signed with the hardened
+runtime and notarized by Apple, so Gatekeeper opens it without the "Apple could not verify" dialog. One-time setup
+on the release machine, with an Apple Developer Program membership:
+
+1. Create a "Developer ID Application" certificate at developer.apple.com → Certificates and install it in the
+   login keychain (double-click the `.cer`). `security find-identity -v -p codesigning` must list it.
+2. Store notary credentials under the profile name `synapse`: `xcrun notarytool store-credentials synapse
+   --apple-id you@example.com --team-id TEAMID` with an app-specific password from appleid.apple.com, or
+   `--key AuthKey.p8 --key-id KEYID --issuer ISSUER` with an App Store Connect API key.
+
+Without the certificate `scripts/build-app.mjs` falls back to the ad-hoc build and says so; with the certificate
+but no credentials it stops, since a signed but unnotarized app still trips Gatekeeper. `--ad-hoc` forces the
+quick local build.
 
 ## Good to know
 

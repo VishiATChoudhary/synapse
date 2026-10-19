@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { signManifest, verifyManifest } from '../app/updater.mjs';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -45,5 +45,7 @@ fs.writeFileSync(path.join(out, 'latest.json'), JSON.stringify(manifest, null, 2
 console.log(`signed ${tag}: ${(bytes.length / 1e6).toFixed(1)} MB zip, sha256 ${manifest.sha256.slice(0, 12)}…`);
 
 if (flag('--dry-run')) { console.log(`dry run: assets in ${out}`); process.exit(0); }
-const body = `${notes ? `${notes}\n\n` : ''}Apple Silicon. Installed copies from 0.3.1 on update themselves. The app is not notarized yet: the first time, right-click Synapse in Applications and choose Open.\n\nGet started: https://app.heysynapse.dev/signup`;
+const notarized = spawnSync('/usr/sbin/spctl', ['-a', '-t', 'exec', app]).status === 0; // scripts/build-app.mjs already refused anything else when a Developer ID exists
+const gatekeeper = notarized ? 'Signed and notarized with Apple.' : 'The app is not notarized yet: the first time, right-click Synapse in Applications and choose Open.';
+const body = `${notes ? `${notes}\n\n` : ''}Apple Silicon. Installed copies from 0.3.1 on update themselves. ${gatekeeper}\n\nGet started: https://app.heysynapse.dev/signup`;
 run('gh', ['release', 'create', tag, '-R', REPO, '--title', `Synapse ${version}`, '--notes', body, dmg, zip, path.join(out, 'latest.json')]);
