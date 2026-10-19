@@ -47,6 +47,17 @@
     "scheme": "synapse",
     "experiments": {
       "typedRoutes": false
-    }
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "4ebd962d-9e66-4984-848f-9e90aca8eeb6"
+      }
+    },
+    "owner": "vishi2"
   }
 }
