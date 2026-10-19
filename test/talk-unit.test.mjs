@@ -294,6 +294,56 @@ test('profile flags are stripped to the allowlist', () => {
   } finally { fs.rmSync(FILES.app, { force: true }); }
 });
 
+test('talkModel picks the answering model from a fixed allowlist', () => {
+  const conv = { id: 'c', mode: 'native', forkSession: null, targetName: 'api', peerHandle: 'bob', turns: [] };
+  const src = { kind: 'claude', id: 'sess', cwd: '/nope', name: 'api' };
+  const argv = (app) => { writeJSON(FILES.app, app); return talk.answerCommand(conv, { seq: 1, q: 'hi' }, src).args; };
+  try {
+    const prof = { claude: { command: 'claude --model opus' } };
+    assert.equal(after(argv({ profiles: prof }), '--model'), 'opus');
+    assert.equal(after(argv({ profiles: prof, talkModel: 'agent' }), '--model'), 'opus');
+    assert.equal(after(argv({ profiles: prof, talkModel: 'haiku' }), '--model'), 'haiku');
+    assert.equal(argv({ profiles: prof, talkModel: 'haiku' }).filter((a) => a === '--model').length, 1);
+    assert.equal(after(argv({ talkModel: 'sonnet' }), '--model'), 'sonnet');
+    for (const bad of ['--dangerously-skip-permissions', 'Opus', 'opus --x', '', 5, null, ['opus']]) {
+      const a = argv({ profiles: prof, talkModel: bad });
+      assert.ok(!a.includes('--dangerously-skip-permissions') && (bad === '' || !a.includes(bad)), String(bad));
+      assert.equal(after(a, '--model'), 'opus');
+      assert.ok(!argv({ talkModel: bad }).includes('--model'));
+      toolless(a);
+    }
+  } finally { fs.rmSync(FILES.app, { force: true }); }
+});
+
+test('talkPerHour limits asks per peer and clamps to 1..600', () => {
+  reset(); const { target } = talkEdge('demo-api-auth');
+  try {
+    assert.equal(talk.talkPerHour(), 60);
+    for (const [v, want] of [[5, 5], [0, 1], [-3, 1], [9999, 600], ['12', 12], ['x', 60], [null, 60], [2.6, 3]]) {
+      writeJSON(FILES.app, { talkPerHour: v });
+      assert.equal(talk.talkPerHour(), want, String(v));
+    }
+    writeJSON(FILES.app, { talkPerHour: 2 });
+    const t0 = Date.now();
+    const reasons = [1, 2, 3].map((n) => talk.receiveAsk('m1', ask(target, 1, { conv: U('ph' + n) }), t0 + n)[0]?.reason);
+    assert.deepEqual(reasons, [undefined, undefined, 'busy']);
+  } finally { fs.rmSync(FILES.app, { force: true }); }
+});
+
+test('usage counts answered owner turns today, this week and per friend', () => {
+  const now = new Date(2026, 9, 19, 15).getTime(), h = 3600_000;
+  const turn = (at) => ({ seq: 1, q: 'q', a: at ? 'a' : null, ...(at ? { answeredAt: at } : {}) });
+  writeJSON(FILES.talks, { conversations: [
+    { id: 'u1', role: 'owner', peer: 'm1', peerName: 'Bob', status: 'open', turns: [turn(now - h), turn(now - 2 * h), turn(null), turn(now - 30 * h)] },
+    { id: 'u2', role: 'owner', peer: 'm2', peerName: 'Eve', status: 'ended', turns: [turn(now - 3 * h), turn(now - 9 * 24 * h)] },
+    { id: 'u3', role: 'asker', peer: 'm1', peerName: 'Bob', status: 'open', turns: [turn(now - h)] },
+  ] });
+  const u = talk.usage(now);
+  assert.equal(u.today, 3);
+  assert.equal(u.week, 4);
+  assert.deepEqual(u.byPeer, [{ name: 'Bob', today: 2 }, { name: 'Eve', today: 1 }]);
+});
+
 test('times out after 120 s', async () => {
   reset(); const { target } = talkEdge('demo-api-auth');
   assert.equal(talk.LIMITS.answerMs, 120_000);

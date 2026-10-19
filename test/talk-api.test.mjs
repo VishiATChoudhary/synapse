@@ -178,3 +178,10 @@ test('a cross-site write to any API route gets 403', async () => {
   // the canvas page itself may: a layout write with its own Origin
   assert.equal(await raw('/api/layout', 'POST', { 'sec-fetch-site': 'same-origin', origin: `http://127.0.0.1:${PORT}` }), 200);
 });
+
+test('GET /api/talks/usage gives the answer counts', async () => {
+  write('talks.json', { conversations: [{ id: 'u1', role: 'owner', peer: 'm1', peerName: 'Bob', status: 'open', turns: [{ seq: 1, q: 'q', a: 'a', answeredAt: Date.now() }] }] });
+  const r = await call('/api/talks/usage');
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { today: 1, week: 1, byPeer: [{ name: 'Bob', today: 1 }] });
+});

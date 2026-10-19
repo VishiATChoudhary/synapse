@@ -86,7 +86,7 @@ export function receiveAsk(peer, item, now = Date.now()) {
     const recent = (s.rate[peer] || []).filter((t) => now - t < HOUR);
     recent.push(now);
     s.rate[peer] = recent;
-    if (recent.length > LIMITS.perHour) return [endItem(conv, 'busy')];
+    if (recent.length > talkPerHour()) return [endItem(conv, 'busy')];
 
     const ok = allowed(peer, item.target, item.asker);
     if (!ok.edge) return [endItem(conv, 'refused')];
@@ -436,6 +436,40 @@ export function externalPrompt({ agentName, kind, ownerName, askerHandle, replay
   return replay ? `${text} You are answering as ${oneLine(agentName)}, a ${oneLine(kind, 40)} agent; its conversation follows.` : text;
 }
 
+// The owner's two knobs in app.json: questions per hour per friend (1..600) and the answering model.
+// A model is only ever one of these names, so the setting can never put another flag into the argv.
+const TALK_MODELS = ['opus', 'sonnet', 'haiku'];
+export function clampPerHour(v) {
+  const n = typeof v === 'number' || (typeof v === 'string' && v.trim()) ? Math.round(Number(v)) : NaN;
+  return Number.isFinite(n) ? Math.min(600, Math.max(1, n)) : 60;
+}
+export const talkPerHour = () => clampPerHour(readJSON(FILES.app, {}).talkPerHour);
+export function talkModel() {
+  const m = readJSON(FILES.app, {}).talkModel;
+  return TALK_MODELS.includes(m) ? m : 'agent';
+}
+
+// Answers my agents gave: today (since local midnight), the last 7 days, and today per friend.
+export function usage(now = Date.now()) {
+  const d = new Date(now); d.setHours(0, 0, 0, 0);
+  const midnight = d.getTime(), weekAgo = now - 7 * 24 * 3600_000;
+  let today = 0, week = 0;
+  const by = new Map();
+  for (const c of load().conversations) {
+    if (c.role !== 'owner') continue;
+    for (const t of c.turns || []) {
+      if (t.a == null || !t.answeredAt) continue;
+      if (t.answeredAt >= weekAgo) week++;
+      if (t.answeredAt >= midnight) {
+        today++;
+        const name = c.peerName || c.peer;
+        by.set(name, (by.get(name) || 0) + 1);
+      }
+    }
+  }
+  return { today, week, byPeer: [...by].map(([name, n]) => ({ name, today: n })).sort((a, b) => b.today - a.today) };
+}
+
 // From the owner's claude profile only leading VAR=value assignments and --model survive; anything else
 // (permission skips, MCP configs, extra tools) could give the answerer a capability.
 function profileParts() {
@@ -463,6 +497,8 @@ const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { retu
 export function answerCommand(conv, turn, source) {
   const replay = conv.mode !== 'native';
   const profile = profileParts();
+  const model = talkModel();
+  if (model !== 'agent') profile.args = ['--model', model];
   const nonce = crypto.randomBytes(8).toString('hex');
   const prompt = externalPrompt({
     agentName: conv.targetName || source?.name, kind: source?.kind, ownerName: config().name,

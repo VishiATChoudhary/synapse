@@ -231,6 +231,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, out.edge);
   }
   if (p === '/api/talks' && req.method === 'GET') return json(res, 200, talks());
+  if (p === '/api/talks/usage' && req.method === 'GET') return json(res, 200, talk.usage());
   const endT = p.match(/^\/api\/talks\/([\w-]+)\/end$/);
   if (endT && req.method === 'POST') {
     const c = talks().find((x) => x.id === endT[1]);

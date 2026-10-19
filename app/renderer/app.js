@@ -1489,6 +1489,27 @@ async function openSettings() {
     const people = el('div', 'people');
     body.append(el('div', 'sub', 'trusted people'), people);
     drawPeople(people);
+    const perHour = el('input'), model = el('select'), used = el('span', 'c');
+    perHour.type = 'number'; perHour.min = 1; perHour.max = 600; perHour.value = s.talkPerHour ?? 60;
+    perHour.onchange = async () => {
+      try { perHour.value = (await synapse.settings.set({ talkPerHour: perHour.value })).talkPerHour; toast(`friends' agents may ask ${perHour.value} an hour each`); }
+      catch (e) { toast(e.message, true); }
+    };
+    for (const [v, label] of [['agent', 'the agent\'s own'], ['opus', 'opus'], ['sonnet', 'sonnet'], ['haiku', 'haiku']]) { const o = el('option', '', label); o.value = v; model.appendChild(o); }
+    model.value = s.talkModel || 'agent';
+    model.onchange = async () => {
+      try { model.value = (await synapse.settings.set({ talkModel: model.value })).talkModel; toast(`answers use ${model.value === 'agent' ? 'the agent\'s own model' : model.value}`); }
+      catch (e) { toast(e.message, true); }
+    };
+    const limitRow = el('label', 'opt set'), modelRow = el('label', 'opt set'), usedRow = el('div', 'opt set');
+    limitRow.append(el('span', 'k', 'questions an hour'), perHour, el('span', 'c', 'most a friend\'s agents may ask yours each hour'));
+    modelRow.append(el('span', 'k', 'answer model'), model, el('span', 'c', 'answers spend your Claude usage'));
+    usedRow.append(el('span', 'k', 'answers given'), used);
+    used.textContent = '…';
+    synapse.settings.usage().then((u) => {
+      used.textContent = `${u.today} today · ${u.week} this week` + (u.byPeer.length ? ` · ${u.byPeer.map((p) => `${p.name} ${p.today}`).join(', ')}` : '');
+    }, () => { used.textContent = 'unavailable'; });
+    body.append(el('div', 'sub', 'agent talk'), limitRow, modelRow, usedRow);
     const hist = el('div', 'talk-hist');
     body.append(el('div', 'sub', 'conversations'), hist);
     drawTalkHistory(hist);

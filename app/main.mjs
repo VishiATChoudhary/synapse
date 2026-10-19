@@ -11,7 +11,7 @@ import pty from 'node-pty';
 import { git, listChoices, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
 import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork } from '../lib.mjs';
 import { createEdge, allowTalkRequest, dismissTalkRequest } from '../ops.mjs';
-import { openRequests } from '../talk.mjs';
+import { openRequests, talkPerHour, talkModel, clampPerHour } from '../talk.mjs';
 import { isConnected } from '../remote.mjs';
 import { createUpdater, bundleOf, MANIFEST_URL } from './updater.mjs';
 
@@ -377,10 +377,10 @@ function notifyTalks(list) {
 
 // Past and open conversations for settings, from the canvas server (it filters to the last 30 days). A request
 // from this process sends no Origin, which the server's own-page guard lets through.
-async function talkHistory() {
+async function talkHistory(route = 'api/talks') {
   const base = await ensureCanvas();
   return new Promise((resolve, reject) => {
-    const req = http.get(`${base}api/talks`, { timeout: 5000 }, (r) => {
+    const req = http.get(`${base}${route}`, { timeout: 5000 }, (r) => {
       let body = '';
       r.setEncoding('utf8');
       r.on('data', (d) => { body += d; });
@@ -703,14 +703,18 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-handle('settings:get', () => ({ autoSymlink: !!config().autoSymlink, autoSendFork: !!config().autoSendFork }));
+const settingsOut = (c) => ({ autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, talkPerHour: talkPerHour(), talkModel: talkModel() });
+handle('settings:get', () => settingsOut(config()));
+handle('talk:usage', () => talkHistory('api/talks/usage'));
 handle('settings:set', (patch) => {
   const c = config();
   if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink;
   if ('autoSendFork' in patch) c.autoSendFork = !!patch.autoSendFork;
+  if ('talkPerHour' in patch) c.talkPerHour = clampPerHour(patch.talkPerHour);
+  if ('talkModel' in patch) c.talkModel = ['opus', 'sonnet', 'haiku'].includes(patch.talkModel) ? patch.talkModel : 'agent';
   writeJSON(FILES.app, c);
   if ('autoSymlink' in patch && c.autoSymlink) scanLibrary(true);
-  return { autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork };
+  return settingsOut(c);
 });
 handle('worktree:add', ({ repo, name, base }) => addWorktree(repo, name, base));
 handle('worktree:remove', ({ repo, dir, force }) => removeWorktree(repo, dir, force));
