@@ -69,7 +69,10 @@ async function opened(branch) {
   await picker(); await search('origin/remote-feature'); await enter();
   const remote = await opened('remote-feature');
   assert.equal(execFileSync('git', ['-C', remote.path, 'rev-parse', '--abbrev-ref', '@{upstream}']).toString().trim(), 'origin/remote-feature');
-  await picker(); await click('[data-mode="new"]'); await search('new/from-ui'); await enter();
+  await picker(); await click('[data-mode="new"]'); await search('new//from ui?');
+  // the name field drops what git would reject as it is typed: a space becomes -, the rest goes
+  assert.equal(await js(`document.querySelector('#modal-body input').value`), 'new/from-ui');
+  await enter();
   const fresh = await opened('new/from-ui');
   assert.ok(fs.existsSync(fresh.path));
   console.log('PASS picker search, keyboard selection, PR symbols, existing session reuse, local/remote/new branches');

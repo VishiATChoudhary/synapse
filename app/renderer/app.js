@@ -1062,6 +1062,8 @@ function deleteWorktreeButton(project, w, after) {
   return button;
 }
 
+// letters, digits and . _ - /, never two dots or slashes in a row, no leading - . or /
+const branchName = (v) => v.replace(/\s+/g, '-').replace(/[^\w./-]/g, '').replace(/\.{2,}/g, '.').replace(/\/{2,}/g, '/').replace(/^[-./]+/, '');
 function promptWorktree(project) {
   modal('open branch or worktree', (body, close) => {
     const seg = el('div', 'seg'), inp = el('input'), list = el('div', 'lib branch-list');
@@ -1136,7 +1138,14 @@ function promptWorktree(project) {
       finally { busy = false; fetch.disabled = false; }
     };
     go.onclick = () => { if (inp.value.trim()) pick(); };
-    inp.oninput = () => { sel = 0; draw(); };
+    inp.oninput = () => {
+      // a new branch name takes only what git accepts: a space becomes -, anything else is dropped as it is typed
+      if (mode === 'new') {
+        const at = inp.selectionStart, clean = branchName(inp.value);
+        if (clean !== inp.value) { const cut = inp.value.length - clean.length; inp.value = clean; inp.selectionStart = inp.selectionEnd = Math.max(0, at - cut); }
+      }
+      sel = 0; draw();
+    };
     inp.onkeydown = (e) => {
       if (busy) return;
       if (mode === 'existing' && ['ArrowDown', 'ArrowUp'].includes(e.key) && matches.length) {
