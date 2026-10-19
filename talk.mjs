@@ -21,15 +21,22 @@ const KEEP_ENDED_MS = 30 * 24 * 3600_000;
 const HOUR = 3600_000;
 const MAILBOX_MS = 24 * HOUR; // how long the relay keeps an undelivered item
 const NO_CLAUDE = 'Claude Code is needed to answer for this agent';
+const REQUEST_KEEP_MS = 7 * 24 * HOUR;
+const REQUEST_REPEAT_MS = HOUR;       // a request for the same asker and agent within this is ignored
+const REQUEST_DISMISSED_MS = 24 * HOUR; // "not now" stays quiet this long
 
 function load() {
   const s = readJSON(FILES.talks, {});
-  return { conversations: [], queue: [], rate: {}, running: [], outgoing: [], ...s };
+  return { conversations: [], queue: [], rate: {}, running: [], outgoing: [], talkRequests: [], asked: [], ...s };
 }
 function save(s) {
   // ended conversations only stay a month
   const cutoff = Date.now() - KEEP_ENDED_MS;
   s.conversations = s.conversations.filter((c) => c.status !== 'ended' || (c.lastAt || 0) > cutoff);
+  // talk requests are remembered a week, which covers every window below
+  const reqCutoff = Date.now() - REQUEST_KEEP_MS;
+  s.talkRequests = s.talkRequests.filter((r) => (r.at || 0) > reqCutoff);
+  s.asked = s.asked.filter((r) => (r.at || 0) > reqCutoff);
   writeJSON(FILES.talks, s);
 }
 
@@ -165,6 +172,7 @@ export function release(convId, seq, now = Date.now()) {
 }
 
 export function receiveReply(peer, item, now = Date.now()) {
+  if (item?.type === 'talk-status' && item.conv == null && isConv(item.requestId)) return receiveRequestStatus(peer, item);
   if (!item || !isConv(item.conv)) return;
   update((s) => {
     const c = convOf(s, item.conv);
@@ -189,6 +197,83 @@ export function receiveReply(peer, item, now = Date.now()) {
       }
     } else return;
     c.lastAt = now;
+  });
+}
+
+// ---- talk requests: a friend's agent wants to ask one of mine over a share that is sync only
+
+const shareOf = (peer, target, asker) => readJSON(FILES.edges, []).find((e) => !e.mirrored && e.from === target && e.to === remoteId(peer, asker));
+
+// The owner side. A request is kept only for a share that exists, from a friend paired through a request. At most
+// one pending prompt per (peer, asker, target): a repeat within the hour, or within a day of "not now", is ignored,
+// so an agent asking in a loop shows its owner one row. A share that already talks is answered allowed at once.
+export function receiveTalkRequest(peer, item, now = Date.now()) {
+  if (!item || !isConv(item.id) || !isStr(item.target) || !isStr(item.asker)) return [];
+  const p = config().peers?.[peer];
+  if (p?.via !== 'request') return [];
+  const edge = shareOf(peer, item.target, item.asker);
+  if (!edge) return [];
+  if (edge.mode === 'talk') return [{ type: 'talk-status', requestId: item.id, state: 'allowed' }];
+  const live = localAgents().find((a) => a.id === item.target); // slow: outside the lock
+  return update((s) => {
+    const same = s.talkRequests.filter((r) => r.peer === peer && r.asker === item.asker && r.target === item.target);
+    if (same.some((r) => r.status === 'pending' || now - (r.at || 0) < REQUEST_REPEAT_MS)) return [];
+    if (same.some((r) => r.status === 'dismissed' && now - (r.decidedAt || r.at || 0) < REQUEST_DISMISSED_MS)) return [];
+    if (s.talkRequests.some((r) => r.id === item.id && !same.includes(r))) return [];
+    s.talkRequests = s.talkRequests.filter((r) => !same.includes(r));
+    s.talkRequests.push({
+      id: item.id, peer, peerName: p.name, peerHandle: p.handle || null,
+      target: item.target, targetName: live?.name || edge.fromName || item.target,
+      asker: item.asker, askerName: oneLine(item.askerName, 80) || 'agent', at: now, status: 'pending',
+    });
+    return [];
+  });
+}
+
+// What the owner still has to answer: pending, and the share is still there and still sync.
+export function openRequests(s = load(), edges = readJSON(FILES.edges, [])) {
+  return (s.talkRequests || []).filter((r) => r.status === 'pending'
+    && edges.some((e) => !e.mirrored && e.from === r.target && e.to === remoteId(r.peer, r.asker) && e.mode !== 'talk'));
+}
+
+// Allowed or dismissed ("not now"). Allowed tells the asker's machine. The share's mode is the caller's (ops.mjs).
+export function decideRequest(id, status, now = Date.now()) {
+  return update((s) => {
+    const r = s.talkRequests.find((x) => x.id === id && x.status === 'pending');
+    if (!r) return null;
+    r.status = status;
+    r.decidedAt = now;
+    if (status === 'allowed') s.outgoing.push({ to: r.peer, item: { type: 'talk-status', requestId: r.id, state: 'allowed' } });
+    return { ...r };
+  });
+}
+
+// The asker side: one request per (friend, their agent, my agent) an hour. A retry after that resends the same id.
+export function openTalkRequest({ me, agent, now = Date.now() }) {
+  const r = agent.remote;
+  return update((s) => {
+    let q = s.asked.find((x) => x.peer === r.machine && x.target === r.agentId && x.asker === me.id && x.status === 'pending');
+    if (q && now - q.at < REQUEST_REPEAT_MS) return { id: q.id, send: false };
+    if (!q) {
+      q = { id: crypto.randomUUID(), peer: r.machine, peerName: r.owner, peerHandle: r.handle || null, target: r.agentId, targetName: agent.name,
+        asker: me.id, askerName: me.name, status: 'pending' };
+      s.asked.push(q);
+    }
+    q.at = now;
+    return { id: q.id, send: true };
+  });
+}
+
+// The owner said yes: my agent hears it in its inbox, once.
+function receiveRequestStatus(peer, item) {
+  if (item.state !== 'allowed') return;
+  update((s) => {
+    const q = s.asked.find((x) => x.id === item.requestId && x.peer === peer);
+    if (!q || q.status !== 'pending') return;
+    q.status = 'allowed';
+    const as = `${q.targetName}@${q.peerHandle || q.peerName}`;
+    postMessage({ id: remoteId(q.peer, q.target), name: `${q.targetName}@${q.peerName}` }, { id: q.asker, name: q.askerName },
+      `${q.peerName} let you ask ${q.targetName}. Ask again: synapse_ask ${as} (or: synapse ask ${as} <question>).`);
   });
 }
 

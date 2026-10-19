@@ -31,7 +31,8 @@
 //   synapse untrust <who> | people     remove one | list them
 //   synapse request <person> [--target "their api agent"] [--note why]   ask to read one of their agents
 //   synapse requests                   requests you sent and received
-//   synapse accept <id> [--agents a,b] | deny <id> | cancel <id>
+//   synapse accept <id> [--agents a,b] [--no-talk] | deny <id> | cancel <id>
+//                                      (accept lets their agent ask yours questions too, unless --no-talk)
 import { FILES, readJSON, agentForProcess, listAgents, localAgents, findAgent, renameAgent, projectOf, renameProject } from './lib.mjs';
 import * as ops from './ops.mjs';
 import * as remote from './remote.mjs';
@@ -118,7 +119,7 @@ try {
       out = { incoming: incoming.map(shortRequest), outgoing: outgoing.map(shortRequest) };
       break;
     }
-    case 'accept': out = shortRequest(await account.accept(args[0], (opt('--agents') || '').split(',').map((x) => x.trim()).filter(Boolean))); break;
+    case 'accept': out = shortRequest(await account.accept(args[0], (opt('--agents') || '').split(',').map((x) => x.trim()).filter(Boolean), { talk: !flags.has('--no-talk') })); break;
     case 'deny': out = shortRequest(await account.deny(args[0])); break;
     case 'cancel': out = shortRequest(await account.cancel(args[0])); break;
     case 'peers': out = ops.peers(whoami(), { all: flags.has('--all') }); break;
@@ -175,7 +176,7 @@ try {
     }
     case 'agents': out = listAgents().map(({ name, id, kind, cwd, status }) => ({ name, id, kind, cwd, status })); break;
     default:
-      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | ask <agent> <question> [--conversation id] | end <conversation> | talk <agent> on|off | agents | rename [agent] <name> | rename-project <project> <name> | invite | join <code> | friends | unfriend <friend> | sync | login | signup | logout | whoami | trust <who> | untrust <who> | people | request <person> [--target t] [--note n] | requests | accept <id> [--agents a,b] | deny <id> | cancel <id>');
+      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | ask <agent> <question> [--conversation id] | end <conversation> | talk <agent> on|off | agents | rename [agent] <name> | rename-project <project> <name> | invite | join <code> | friends | unfriend <friend> | sync | login | signup | logout | whoami | trust <who> | untrust <who> | people | request <person> [--target t] [--note n] | requests | accept <id> [--agents a,b] [--no-talk] | deny <id> | cancel <id>');
       process.exit(cmd ? 1 : 0);
   }
   if (cmd === 'ui') { /* server keeps running */ }

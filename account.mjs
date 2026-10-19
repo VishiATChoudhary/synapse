@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import { FILES, readJSON, writeJSON, localAgents, findAgent, projectOf, remoteId, logEvent } from './lib.mjs';
-import { createEdge } from './ops.mjs';
+import { createEdge, setMode } from './ops.mjs';
 import * as remote from './remote.mjs';
 
 export const DEFAULT_CLOUD = 'https://app.heysynapse.dev';
@@ -145,7 +145,9 @@ function pickAgents(req, ids) {
   throw new Error(`say which agents to share: ${mine.map((a) => a.name).join(', ') || '(no agents running)'}`);
 }
 
-export async function accept(id, agentIds = []) {
+// talk: their agent may also ask the shared agents questions (a tool-less fork answers). Only the shares this
+// accept makes are switched, never another share with the same friend.
+export async function accept(id, agentIds = [], { talk = true } = {}) {
   const req = await incoming(id);
   if (req.status !== 'pending') throw new Error(`this request is already ${req.status}`);
   const chosen = pickAgents(req, agentIds);
@@ -156,8 +158,9 @@ export async function accept(id, agentIds = []) {
   remote.addPeer(m, { name: owner, pair: out.pair, handle: req.from?.handle });
   // share each chosen agent with the agent that asked; the next sync ships their context
   const asker = { id: remoteId(m, req.agent.id), name: req.agent.name, kind: req.agent.kind, remote: { machine: m, owner, agentId: req.agent.id, project: req.agent.project } };
-  for (const a of chosen) createEdge(a, asker);
-  logEvent({ type: 'request-accepted', id: req.id, from: owner, shared: chosen.map((a) => a.name) });
+  const made = chosen.map((a) => createEdge(a, asker).edge);
+  if (talk) for (const e of made) { try { setMode(e.id, 'talk'); } catch {} }
+  logEvent({ type: 'request-accepted', id: req.id, from: owner, shared: chosen.map((a) => a.name), talk: !!talk });
   await remote.sync().catch(() => {});
   await requests().catch(() => {});
   return out.request || req;

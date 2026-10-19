@@ -553,10 +553,178 @@ test('ask resolves name@handle and queues talk-ask', async () => {
   assert.deepEqual(o.item, { type: 'talk-ask', conv: c.id, seq: 1, target: 'x', asker: me().id, askerName: me().name, question: 'why?' });
 });
 
-test('ask on a sync share explains talk is off', async () => {
+test('ask on a sync share asks the owner instead, once an hour', async () => {
   sharedWithMe('sync');
-  await assert.rejects(ops.ask(me(), 'api@bob', 'why?', { waitMs: 0, sync: noSync }), /not.*questions|talk/i);
+  let syncs = 0;
+  const r = await ops.ask(me(), 'api@bob', 'why?', { waitMs: 0, sync: async () => { syncs++; } });
+  assert.equal(r.status, 'requested');
+  assert.match(r.note, /^Asked Robert to let you ask api\. Try again once they allow it\.$/);
+  assert.match(r.request, /^[0-9a-f-]{36}$/);
+  assert.equal(syncs, 1, 'the request goes out now');
+  const [o, ...more] = outbox();
+  assert.equal(more.length, 0);
+  assert.equal(o.to, 'm1');
+  assert.deepEqual(o.item, { type: 'talk-request', id: r.request, target: 'x', asker: me().id, askerName: me().name });
+  assert.equal(state().asked.length, 1);
+  assert.deepEqual(state().conversations || [], [], 'no conversation is opened');
+  // asked again within the hour: the same request, nothing new goes out
+  const again = await ops.ask(me(), 'api@bob', 'why now?', { waitMs: 0, sync: noSync });
+  assert.equal(again.status, 'requested');
+  assert.equal(again.request, r.request);
+  assert.equal(outbox().length, 1);
+});
+
+test('ask on a sync share of an invite-code friend still says talk is off', async () => {
+  sharedWithMe('sync');
+  peer({ handle: 'bob' }); // no via: 'request'
+  await assert.rejects(ops.ask(me(), 'api@bob', 'why?', { waitMs: 0, sync: noSync }), /talk is off/);
   assert.equal(outbox().length, 0);
+});
+
+// ---------------------------------------------------------------- talk requests, owner side
+const treq = (id = U('r1'), extra = {}) => ({ type: 'talk-request', id, target: localAgents()[0].id, asker: 'x', askerName: 'bobs <b>agent</b>', ...extra });
+const syncShare = () => {
+  peer({ via: 'request', handle: 'bob' });
+  const e = { id: 'se1', from: localAgents()[0].id, fromName: localAgents()[0].name, to: 'r-m1-x', toName: 'x' };
+  writeJSON(FILES.edges, [e]);
+  writeJSON(FILES.talks, {});
+  writeJSON(path.join(home, 'remote', 'outbox.json'), []);
+  return e;
+};
+
+test('a talk request over a sync share makes one pending prompt', () => {
+  syncShare();
+  const now = Date.now();
+  assert.deepEqual(talk.receiveTalkRequest('m1', treq(U('r1')), now), []);
+  const [r, ...rest] = state().talkRequests;
+  assert.equal(rest.length, 0);
+  assert.equal(r.id, U('r1'));
+  assert.equal(r.status, 'pending');
+  assert.equal(r.peer, 'm1');
+  assert.equal(r.peerName, 'Bob');
+  assert.equal(r.peerHandle, 'bob');
+  assert.equal(r.target, localAgents()[0].id);
+  assert.equal(r.targetName, localAgents()[0].name);
+  assert.equal(r.asker, 'x');
+  assert.equal(r.askerName, 'bobs <b>agent</b>', 'kept as text; every view escapes it');
+  // a flood: other ids for the same asker and agent add nothing while one is pending, or within the hour
+  for (let i = 2; i < 30; i++) talk.receiveTalkRequest('m1', treq(U(`r${i}`)), now + i * 1000);
+  assert.equal(state().talkRequests.length, 1);
+  assert.equal(talk.openRequests().length, 1);
+});
+
+test('talk requests that do not fit are dropped', () => {
+  syncShare();
+  talk.receiveTalkRequest('m1', treq('not-a-uuid'));
+  talk.receiveTalkRequest('m1', treq(U('r2'), { asker: 'nobody' })); // no share to that agent of theirs
+  talk.receiveTalkRequest('m1', treq(U('r3'), { target: 'demo-docs' })); // an agent I do not share
+  talk.receiveTalkRequest('m2', treq(U('r4'))); // not a friend
+  talk.receiveTalkRequest('m1', null);
+  assert.deepEqual(state().talkRequests || [], []);
+  peer({ handle: 'bob' }); // an invite-code friend can not talk
+  talk.receiveTalkRequest('m1', treq(U('r5')));
+  assert.deepEqual(state().talkRequests || [], []);
+});
+
+test('a talk request for a share that already talks is answered allowed', () => {
+  const e = syncShare();
+  writeJSON(FILES.edges, [{ ...e, mode: 'talk' }]);
+  assert.deepEqual(talk.receiveTalkRequest('m1', treq(U('r1'))), [{ type: 'talk-status', requestId: U('r1'), state: 'allowed' }]);
+  assert.deepEqual(state().talkRequests || [], []);
+});
+
+test('not now keeps the same request quiet for a day', () => {
+  syncShare();
+  const now = Date.now();
+  talk.receiveTalkRequest('m1', treq(U('r1')), now);
+  assert.ok(ops.dismissTalkRequest(U('r1')));
+  assert.equal(talk.openRequests().length, 0);
+  talk.receiveTalkRequest('m1', treq(U('r2')), now + 2 * 3600_000);
+  assert.equal(talk.openRequests().length, 0, 'dismissed: not shown again within 24 h');
+  talk.receiveTalkRequest('m1', treq(U('r3')), now + 25 * 3600_000);
+  assert.deepEqual(talk.openRequests().map((r) => r.id), [U('r3')], 'after a day it may ask again');
+  assert.equal(state().talkRequests.length, 1);
+});
+
+test('allow switches exactly that share to talk and tells the asker', () => {
+  const e = syncShare();
+  const other = { id: 'se2', from: localAgents()[1].id, to: 'r-m1-x', fromName: localAgents()[1].name };
+  writeJSON(FILES.edges, [e, other]);
+  talk.receiveTalkRequest('m1', treq(U('r1')));
+  const out = ops.allowTalkRequest(U('r1'));
+  assert.equal(out.edge, 'se1');
+  const edges = readJSON(FILES.edges, []);
+  assert.equal(edges.find((x) => x.id === 'se1').mode, 'talk');
+  assert.ok(edges.find((x) => x.id === 'se1').snapshot);
+  assert.equal(edges.find((x) => x.id === 'se2').mode, undefined, 'another share stays sync');
+  assert.equal(state().talkRequests[0].status, 'allowed');
+  assert.deepEqual(state().outgoing, [{ to: 'm1', item: { type: 'talk-status', requestId: U('r1'), state: 'allowed' } }]);
+  assert.equal(talk.openRequests().length, 0);
+  assert.throws(() => ops.allowTalkRequest(U('r1')), /No such request/);
+});
+
+test('the asker gets an inbox note once the owner allows', async () => {
+  sharedWithMe('sync');
+  const r = await ops.ask(me(), 'api@bob', 'why?', { waitMs: 0, sync: noSync });
+  talk.receiveReply('m2', { type: 'talk-status', requestId: r.request, state: 'allowed' }); // wrong friend
+  assert.equal(state().asked[0].status, 'pending');
+  talk.receiveReply('m1', { type: 'talk-status', requestId: r.request, state: 'allowed' });
+  talk.receiveReply('m1', { type: 'talk-status', requestId: r.request, state: 'allowed' }); // repeated delivery
+  assert.equal(state().asked[0].status, 'allowed');
+  const inbox = ops.inbox(me());
+  assert.equal(inbox.length, 1);
+  assert.match(inbox[0].text, /Robert let you ask api\..*synapse_ask api@bob/s);
+});
+
+test('a talk-request reaches the owner through the mailbox', async () => {
+  syncShare();
+  await viaRelay([{ ...treq(U('r1')), from: 'm1' }]);
+  assert.equal(talk.openRequests().length, 1);
+});
+
+// ---------------------------------------------------------------- accept: let their agent ask too
+test('accept with talk sets talk only on the shares that accept made', async () => {
+  const [a, b] = localAgents();
+  const reqs = { q1: 'pending', q2: 'pending' };
+  const cloud = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => { body += d; });
+    req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      const u = req.url;
+      const incoming = Object.entries(reqs).map(([id, status]) => ({ id, status, from: { handle: 'cara', name: 'Cara' }, fromMachine: 'm7', agent: { id: `ag-${id}`, name: `cara-${id}`, kind: 'claude', project: 'p' } }));
+      if (u === '/v1/requests') return res.end(JSON.stringify({ incoming, outgoing: [] }));
+      if (u === '/v1/trusted/incoming') return res.end(JSON.stringify({ incoming: [] }));
+      if (u === '/v1/register') return res.end(JSON.stringify({ machineId: 'me', token: 'tok', user: 'u1' }));
+      const acc = u.match(/^\/v1\/requests\/(\w+)\/accept$/);
+      if (acc) { reqs[acc[1]] = 'accepted'; return res.end(JSON.stringify({ request: { id: acc[1], status: 'accepted' }, peer: { machineId: 'm7', name: 'Cara' }, pair: 'pp' })); }
+      if (u === '/v1/poll') return res.end(JSON.stringify({ items: [] }));
+      res.end('{}');
+    });
+  });
+  await new Promise((r) => cloud.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${cloud.address().port}`;
+  writeJSON(FILES.account, { cloud: url, token: 'st', user: { id: 'u1' } });
+  writeJSON(FILES.remote, { relay: url, token: 'tok', machineId: 'me', user: 'u1', name: 'Me', peers: {}, blocked: [] });
+  // a share made before, to the same friend's other agent: no accept of this test may touch it
+  writeJSON(FILES.edges, [{ id: 'old', from: b.id, to: 'r-m7-elsewhere', fromName: b.name, toName: 'elsewhere' }]);
+  const account = await import('../account.mjs');
+  try {
+    await account.accept('q1', [a.id]);
+    let edges = readJSON(FILES.edges, []);
+    const made = edges.find((e) => e.from === a.id && e.to === 'r-m7-ag-q1');
+    assert.equal(made.mode, 'talk', 'ticked by default: their agent may ask');
+    assert.equal(edges.find((e) => e.id === 'old').mode, undefined, 'the older share stays sync');
+
+    await account.accept('q2', [b.id], { talk: false });
+    edges = readJSON(FILES.edges, []);
+    assert.equal(edges.find((e) => e.from === b.id && e.to === 'r-m7-ag-q2').mode, undefined, 'unticked: read only');
+    assert.equal(edges.find((e) => e.id === 'old').mode, undefined);
+    assert.equal(edges.filter((e) => e.mode === 'talk').length, 1);
+  } finally {
+    cloud.close();
+    fs.rmSync(FILES.account, { force: true });
+  }
 });
 
 test('ask on a local agent points to send', async () => {

@@ -342,6 +342,7 @@ let agents = new Map();   // id -> node {a, x, y, vx, vy, born, color, ...}
 let edges = [];
 let layout = {};
 let talks = [];           // open agent talk conversations, both sides (state.talks)
+let talkRequests = [];    // friends' agents asking to ask one of mine that is shared read only (state.talkRequests)
 let thread = null;        // {conv, edge}: the conversation the side panel shows
 const talkFriends = new Map(); // friend's machine id -> paired through a request (may talk)
 let hover = null;         // {type:'node'|'ring'|'edge'|'x', id}
@@ -526,6 +527,7 @@ function externalNodes(list, byId) {
 function applyState(s) {
   layout = s.layout || {};
   talks = s.talks || [];
+  talkRequests = s.talkRequests || [];
   const seen = new Set();
   s.agents = [...s.agents, ...externalNodes(talks, new Map(s.agents.map((a) => [a.id, a])))];
   s.agents.forEach((a, i) => {
@@ -1033,6 +1035,20 @@ function forkSection(a) {
   const line = (o, arrow, q) => `<div class="link"><span class="arrow">${arrow}</span><span class="name" data-go="${esc(o.a.id)}">${esc(o.a.name)}</span><span class="fq" title="${esc(q || '')}">${esc(q || '')}</span></div>`;
   return `<section><h3>Fork tree</h3>${par ? line(par, '⑂ from', a.forkQ) : ''}${kids.map((o) => line(o, '↳', o.a.external ? `asked by ${peerLabel(o.a.external)}` : o.a.forkQ)).join('')}</section>`;
 }
+// a friend's agent asked this one over a read-only share: allow it to ask, or not now (quiet for a day)
+function askSection(a) {
+  const asks = talkRequests.filter((r) => r.target === a.id);
+  if (!asks.length) return '';
+  return `<section><h3>Wants to ask</h3>${asks.map((r) => `<div class="link"><span class="arrow">?</span><span class="name" title="${esc(r.askerName || '')}">${esc(peerLabel(r))}'s ${esc(r.askerName || 'agent')}</span>
+    <button data-treq="${esc(r.id)}" data-act="dismiss" type="button">not now</button><button data-treq="${esc(r.id)}" data-act="allow" type="button">allow</button></div>`).join('')}</section>`;
+}
+async function decideTalkRequest(id, act) {
+  const r = talkRequests.find((x) => x.id === id);
+  try {
+    await api(`/api/talk-requests/${encodeURIComponent(id)}/${act === 'allow' ? 'allow' : 'dismiss'}`, {});
+    toast(act === 'allow' ? `${r ? peerLabel(r) : 'Their'}'s agent can ask ${r?.targetName || 'it'} now` : 'Not now');
+  } catch (err) { toast(err.message); }
+}
 async function renderPanel(fetchFeed) {
   if (panel.querySelector('input.rename')) return; // don't wipe a rename in progress
   const n = agents.get(selected?.id); if (!n) return closePanel();
@@ -1061,6 +1077,7 @@ async function renderPanel(fetchFeed) {
       <button class="close" id="closeP" aria-label="Close">×</button>
     </header>
     ${forkSection(a)}
+    ${askSection(a)}
     <section><h3>Reads context from</h3>${inc.map((e) => row(e, e.from, '←')).join('') || '<div class="none">Nothing yet. Drag from another agent\'s ring onto this one.</div>'}</section>
     <section><h3>Shares context with</h3>${out.map((e) => row(e, e.to, '→')).join('') || '<div class="none">Not shared. Drag from this ring to another agent.</div>'}</section>
     ${keepFeed}`;
@@ -1068,6 +1085,7 @@ async function renderPanel(fetchFeed) {
   $('closeP').onclick = () => { selected = null; closePanel(); };
   if (!a.remote) { $('renP').onclick = startRename; $('pName').ondblclick = startRename; }
   panel.querySelectorAll('[data-rm]').forEach((b) => (b.onclick = () => removeEdge(b.dataset.rm)));
+  panel.querySelectorAll('[data-treq]').forEach((b) => (b.onclick = () => decideTalkRequest(b.dataset.treq, b.dataset.act)));
   panel.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => {
     const ext = agents.get(b.dataset.go)?.a.external;
     if (ext) return openThread({ conv: ext.id });
@@ -1595,7 +1613,9 @@ function drawNode(id, n, t) {
   ctx.fillStyle = V.ink; ctx.fillText(name, 0, R + 22);
   ctx.font = '10px "Fragment Mono", ui-monospace, monospace';
   const hiddenKids = forkChildren(id).filter((child) => child.hidden).length;
+  const asking = !a.external && talkRequests.find((r) => r.target === id);
   const ext = a.external, sub = hiddenKids ? `+${hiddenKids} children collapsed · right-click`
+    : asking ? `? ${short(peerLabel(asking), 16)} wants to ask · click`.toUpperCase()
     : ext ? `${busy ? '■' : '□'} ${ext.mode === 'replay' ? 'answered by replay' : 'fork'} · ${ext.live === 'answering' ? 'answering' : ext.live === 'queued' ? 'queued' : `${ext.asked} asked`}`.toUpperCase()
     : `${busy ? '■' : '□'} ${a.kind} · ${a.forkQ ? `⑂ ${short(a.forkQ, 22)}` : short(a.frame, 22)}`.toUpperCase();
   knockout(sub, 0, R + 38);

@@ -109,6 +109,30 @@ test('POST /api/talks/:id/end ends my side as owner and hers as asker', async ()
   assert.equal((await call('/api/talks/nope/end', 'POST')).status, 404);
 });
 
+// a friend's agent asked over the sync share e-req: Allow flips it to talk, Not now leaves it sync
+const pendingReq = (id, extra = {}) => ({ id, peer: 'm1', peerName: 'Bob', peerHandle: 'bob', target: 'demo-api-auth', targetName: 'api-auth',
+  asker: 'x', askerName: 'bobs-agent', at: Date.now(), status: 'pending', ...extra });
+test('talk requests: state lists the open ones, allow and not now decide them', async () => {
+  await call('/api/edges/e-req/mode', 'POST', { mode: 'sync' });
+  const R1 = '11111111-1111-4111-8111-111111111111', R2 = '22222222-2222-4222-8222-222222222222';
+  write('talks.json', { conversations: [], talkRequests: [pendingReq(R1), pendingReq(R2, { asker: 'gone' })], outgoing: [] });
+  assert.deepEqual((await call('/api/state')).body.talkRequests.map((r) => r.id), [R1], 'only requests whose share is still there');
+  assert.equal((await call(`/api/talk-requests/${R2}/allow`, 'POST')).status, 409);
+  const r = await call(`/api/talk-requests/${R1}/allow`, 'POST');
+  assert.equal(r.status, 200);
+  assert.equal(read('edges.json').find((e) => e.id === 'e-req').mode, 'talk');
+  assert.equal(read('talks.json').talkRequests.find((x) => x.id === R1).status, 'allowed');
+  assert.deepEqual((await call('/api/state')).body.talkRequests, []);
+
+  await call('/api/edges/e-req/mode', 'POST', { mode: 'sync' });
+  write('talks.json', { conversations: [], talkRequests: [pendingReq(R2)], outgoing: [] });
+  assert.equal((await call(`/api/talk-requests/${R2}/dismiss`, 'POST')).status, 200);
+  assert.equal(read('talks.json').talkRequests[0].status, 'dismissed');
+  assert.equal('mode' in read('edges.json').find((e) => e.id === 'e-req'), false);
+  assert.equal((await call(`/api/talk-requests/${R2}/dismiss`, 'POST')).status, 409);
+  write('talks.json', { conversations: [], talkRequests: [pendingReq(R1)], outgoing: [] });
+});
+
 // a page on another site (or a rebinding host name) must not flip a share to talk, end a conversation, or read one
 const raw = (p, method, headers) => new Promise((resolve, reject) => {
   const r = http.request({ host: '127.0.0.1', port: PORT, path: p, method, headers }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
@@ -125,7 +149,10 @@ test('talk routes refuse cross-site callers', async () => {
     assert.equal(await raw('/api/edges/e-req/mode', 'POST', h), 403);
     assert.equal(await raw('/api/talks/c-own/end', 'POST', h), 403);
     assert.equal(await raw('/api/talks', 'GET', h), 403);
+    assert.equal(await raw('/api/talk-requests/11111111-1111-4111-8111-111111111111/allow', 'POST', h), 403);
+    assert.equal(await raw('/api/talk-requests/11111111-1111-4111-8111-111111111111/dismiss', 'POST', h), 403);
   }
+  assert.equal(read('talks.json').talkRequests[0].status, 'pending', 'nothing was decided from outside');
   // the canvas itself still gets through
   assert.equal(await raw('/api/talks', 'GET', { 'sec-fetch-site': 'same-origin', origin: `http://127.0.0.1:${PORT}` }), 200);
 });

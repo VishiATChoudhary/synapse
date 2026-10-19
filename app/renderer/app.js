@@ -1674,8 +1674,8 @@ async function refreshPullRequests() {
 async function refresh() { apply(await synapse.state()); }
 function apply(st) {
   M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo; M.autoSendFork = !!st.autoSendFork;
-  const talks = JSON.stringify(st.talks || []);
-  if (talks !== M.talksSig) { M.talksSig = talks; M.talks = st.talks || []; renderDot(); }
+  const talks = JSON.stringify([st.talks || [], st.talkRequests || []]);
+  if (talks !== M.talksSig) { M.talksSig = talks; M.talks = st.talks || []; M.talkRequests = st.talkRequests || []; renderDot(); }
   // remember which agent each session runs while it is alive: that id is what a restart resumes. A resumed
   // agent that has not written its transcript yet must not wipe the id it was resumed from.
   for (const sl of M.slots) for (const x of sl.sessions) {
@@ -1695,9 +1695,10 @@ synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { 
 // Signed in through Synapse Cloud, agents can ask trusted people for context. Their requests arrive as a
 // blinking circle on "synapse" at the top right; accepted links turn it green, hovering lists them.
 // People who added you as trusted, and you have not trusted back, blink it too.
-const ACC = { user: null, feed: { incoming: [], outgoing: [], links: [], incomingTrust: [] }, sticky: false, agents: [], choice: {} };
+const ACC = { user: null, feed: { incoming: [], outgoing: [], links: [], incomingTrust: [] }, sticky: false, agents: [], choice: {}, talk: {} };
 const pendingRequests = () => (ACC.feed.incoming || []).filter((r) => r.status === 'pending');
 const pendingTrust = () => ACC.feed.incomingTrust || [];
+const pendingTalk = () => M.talkRequests || []; // a friend's agent wants to ask one of mine that is shared read only
 const personName = (p) => p?.name || (p?.handle ? `@${p.handle}` : p?.email) || 'someone';
 const initials = (u) => (u?.name || u?.handle || u?.email || '?').split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 function avatar(u, cls = 'av') {
@@ -1716,11 +1717,11 @@ function renderMe() {
 }
 
 function renderDot() {
-  const dot = $('#syn-dot'), p = pendingRequests().length, t = pendingTrust().length, links = (ACC.feed.links || []).length, talks = (M.talks || []).length;
-  dot.hidden = !p && !t && !links && !talks;
-  dot.className = p || t ? 'blink' : links || talks ? 'live' : '';
+  const dot = $('#syn-dot'), p = pendingRequests().length, t = pendingTrust().length, q = pendingTalk().length, links = (ACC.feed.links || []).length, talks = (M.talks || []).length;
+  dot.hidden = !p && !t && !q && !links && !talks;
+  dot.className = p || t || q ? 'blink' : links || talks ? 'live' : '';
   $('#btn-canvas .glyph').hidden = !dot.hidden;
-  dot.setAttribute('aria-label', p ? `${p} synapse request${p > 1 ? 's' : ''}` : t ? `${t} ${t > 1 ? 'people' : 'person'} added you` : links ? `${links} synapsed external agent${links > 1 ? 's' : ''}` : `${talks} open conversation${talks > 1 ? 's' : ''}`);
+  dot.setAttribute('aria-label', p ? `${p} synapse request${p > 1 ? 's' : ''}` : t ? `${t} ${t > 1 ? 'people' : 'person'} added you` : q ? `${q} agent${q > 1 ? 's' : ''} asking to ask questions` : links ? `${links} synapsed external agent${links > 1 ? 's' : ''}` : `${talks} open conversation${talks > 1 ? 's' : ''}`);
   if (dot.hidden) closePop(); else if (!$('#syn-pop').hidden) renderPop();
 }
 
@@ -1772,13 +1773,35 @@ function trustRow(p, done) {
   return box;
 }
 
+// "@x's agent wants to ask <my agent>": Allow switches that share to talk, Not now keeps it read only for a day.
+function talkRequestRow(r) {
+  const box = el('div', 'req talk-req');
+  const who = el('div', 'req-who'), handle = r.peerHandle ? `@${r.peerHandle}` : r.peerName || 'a friend';
+  who.append(avatar({ name: r.peerName, handle: r.peerHandle }), el('b', '', `${handle}'s agent`), el('span', '', ' wants to ask'), el('span', 'ag', r.targetName || 'your agent'));
+  box.append(who, el('div', 'req-what', `${r.askerName || 'Their agent'} reads ${r.targetName || 'it'} already. Allow it to ask questions too; a copy without tools answers.`));
+  const row = el('div', 'req-row'), no = el('button', 'btn', 'Not now'), yes = el('button', 'btn sig', 'Allow');
+  const act = async (fn, msg) => {
+    no.disabled = yes.disabled = true;
+    try { await fn(); toast(msg); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
+  };
+  no.onclick = () => act(() => synapse.talkRequests.dismiss(r.id), 'not now');
+  yes.onclick = () => act(() => synapse.talkRequests.allow(r.id), `${handle}'s agent can ask ${r.targetName || 'it'}`);
+  row.append(el('span', 'req-gap'), no, yes);
+  box.append(row);
+  return box;
+}
+
 function renderPop() {
   const pop = $('#syn-pop'), dot = $('#syn-dot');
   pop.replaceChildren();
-  const reqs = pendingRequests(), links = ACC.feed.links || [], trusts = pendingTrust();
+  const reqs = pendingRequests(), links = ACC.feed.links || [], trusts = pendingTrust(), asks = pendingTalk();
   if (trusts.length) {
     pop.append(el('div', 'pop-sec', `added you · ${trusts.length}`));
     for (const p of trusts) pop.append(trustRow(p));
+  }
+  if (asks.length) {
+    pop.append(el('div', 'pop-sec', `wants to ask · ${asks.length}`));
+    for (const r of asks) pop.append(talkRequestRow(r));
   }
   if (reqs.length) {
     pop.append(el('div', 'pop-sec', `requests · ${reqs.length}`));
@@ -1801,6 +1824,13 @@ function renderPop() {
         pick.value = ACC.choice[r.id] || bestAgent(r);
       }
       pick.onchange = () => { ACC.choice[r.id] = pick.value; };
+      // ticked by default: their agent may ask the shared agent questions, not only read it
+      const talkBox = el('label', 'req-talk'), tick = el('input');
+      tick.type = 'checkbox';
+      tick.checked = ACC.talk[r.id] ?? true;
+      tick.onchange = () => { ACC.talk[r.id] = tick.checked; };
+      talkBox.append(tick, el('span', '', 'Let their agent ask questions too'));
+      box.append(talkBox);
       const row = el('div', 'req-row');
       const no = el('button', 'btn', 'Deny'), yes = el('button', 'btn sig', 'Accept');
       yes.disabled = !ACC.agents.length;
@@ -1811,7 +1841,7 @@ function renderPop() {
       yes.onclick = async () => {
         const ids = pick.value === '*' ? ACC.agents.map((a) => a.id) : [pick.value];
         no.disabled = yes.disabled = true;
-        try { await synapse.requests.accept(r.id, ids); toast(`synapsed with ${personName(r.from)}`); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
+        try { await synapse.requests.accept(r.id, ids, tick.checked); toast(`synapsed with ${personName(r.from)}`); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
       };
       row.append(pick, no, yes);
       box.append(row);

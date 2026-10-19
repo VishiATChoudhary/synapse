@@ -328,6 +328,8 @@ function appendLog(m, agentId, messages) {
 function routeTalk(m, it) {
   try {
     if (it.type === 'talk-ask') for (const reply of talk.receiveAsk(m, it)) queueItem(m, reply);
+    // their agent wants to ask one of mine that is shared read only: a prompt for me, nothing for them yet
+    else if (it.type === 'talk-request') for (const reply of talk.receiveTalkRequest(m, it)) queueItem(m, reply);
     // a talk-end is either the asker ending a conversation with my agent, or my friend's agent ending mine
     else if (it.type === 'talk-end' && talk.receiveEnd(m, it)) return;
     else talk.receiveReply(m, it);

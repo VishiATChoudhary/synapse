@@ -58,7 +58,7 @@ contextBridge.exposeInMainWorld('synapse', {
   requests: {
     list: () => call('requests:list'),
     agents: () => call('requests:agents'),
-    accept: (id, agents) => call('requests:accept', { id, agents }),
+    accept: (id, agents, talk = true) => call('requests:accept', { id, agents, talk }),
     deny: (id) => call('requests:deny', { id }),
     cancel: (id) => call('requests:cancel', { id }),
     onChange: (fn) => on('requests', fn),
@@ -67,6 +67,7 @@ contextBridge.exposeInMainWorld('synapse', {
   update: { get: () => call('update:get'), check: () => call('update:check'), install: () => call('update:install'), download: () => call('update:download'), onChange: (fn) => on('update', fn) },
   links: () => call('links'),
   talks: { list: () => call('talks:list'), onOpen: (fn) => on('talk:open', fn) },
+  talkRequests: { allow: (id) => call('talkreq:allow', { id }), dismiss: (id) => call('talkreq:dismiss', { id }) },
   cli: (args, as) => call('synapse', { args, as }),
   canvas: () => call('canvas'),
   onCanvasToggle: (fn) => on('canvas:toggle', fn),

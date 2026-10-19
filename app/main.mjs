@@ -10,7 +10,8 @@ import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
 import { git, listChoices, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
 import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork } from '../lib.mjs';
-import { createEdge } from '../ops.mjs';
+import { createEdge, allowTalkRequest, dismissTalkRequest } from '../ops.mjs';
+import { openRequests } from '../talk.mjs';
 import { isConnected } from '../remote.mjs';
 import { createUpdater, bundleOf, MANIFEST_URL } from './updater.mjs';
 
@@ -310,7 +311,7 @@ function state() {
   const messages = readJSON(FILES.messages, []);
   const unread = {};
   for (const m of messages) if (!m.delivered) unread[m.to] = (unread[m.to] || 0) + 1;
-  return { projects: projects(), agents: byPty, edges, unread, talks: openTalks(), profiles: config().profiles, autoSendFork: !!config().autoSendFork, demo: DEMO };
+  return { projects: projects(), agents: byPty, edges, unread, talks: openTalks(), talkRequests: openTalkRequests(edges), profiles: config().profiles, autoSendFork: !!config().autoSendFork, demo: DEMO };
 }
 
 // ---------------------------------------------------------------- agent talk
@@ -326,6 +327,33 @@ function openTalks() {
     asked: Array.isArray(c.turns) ? c.turns.length : 0, firstQ: String(c.turns?.[0]?.q || ''), lastAt: c.lastAt || 0,
     live: running.has(c.id) ? 'answering' : queued.has(c.id) ? 'queued' : 'open',
   }));
+}
+
+// A friend's agent wants to ask one of mine that is shared read only: Allow / Not now in the circle.
+function openTalkRequests(edges) {
+  let list = [];
+  try { list = openRequests(readJSON(FILES.talks, {}), edges); } catch {}
+  return list.filter((r) => typeof r?.id === 'string').map((r) => ({
+    id: r.id, peerName: String(r.peerName || ''), peerHandle: String(r.peerHandle || ''), target: r.target,
+    targetName: String(r.targetName || ''), askerName: String(r.askerName || ''), at: r.at || 0,
+  }));
+}
+// One notification per request, ever (remembered in app.json), so a restart does not announce it again.
+function notifyTalkRequests(list) {
+  if (!list.length) return;
+  const c = config(), seen = new Set(c.talkRequestsNotified || []);
+  const fresh = list.filter((r) => !seen.has(r.id));
+  if (!fresh.length) return;
+  for (const r of fresh) seen.add(r.id);
+  c.talkRequestsNotified = [...seen].slice(-500);
+  writeJSON(FILES.app, c);
+  if (!Notification.isSupported() || process.env.SYNAPSE_SHOT) return;
+  for (const r of fresh) {
+    const who = r.peerHandle ? `@${r.peerHandle}` : r.peerName || 'A friend';
+    const n = new Notification({ title: 'Synapse', body: `${who}'s agent wants to ask your ${r.targetName || 'agent'} questions. Allow it?` });
+    n.on('click', () => { if (!win) return; win.show(); win.focus(); win.webContents.send('requests:open'); });
+    n.show();
+  }
 }
 
 // A notification when a friend's agent asks one of mine its first question. Conversations open at start stay
@@ -510,7 +538,7 @@ app.whenReady().then(() => {
   pollRequests(); setInterval(pollRequests, REQUEST_POLL);
   serveFriends(); setInterval(serveFriends, TALK_CHECK);
   if (UPDATES) { setTimeout(() => updater.check(), UPDATE_DELAY); setInterval(() => updater.check(), UPDATE_EVERY); }
-  setInterval(() => { if (win) { const st = state(); win.webContents.send('state', st); notifyTalks(st.talks); pumpForks(); } }, 1000);
+  setInterval(() => { if (win) { const st = state(); win.webContents.send('state', st); notifyTalks(st.talks); notifyTalkRequests(st.talkRequests); pumpForks(); } }, 1000);
   if (process.env.SYNAPSE_SHOT) {
     setTimeout(async () => {
       win.show(); win.focus();
@@ -766,14 +794,18 @@ handle('people:remove', async ({ id }) => (await acct()).untrust(id));
 handle('requests:list', () => feed);
 handle('requests:agents', () => localAgentList());
 // accept and deny answer the cloud, then poll at once so the circle changes without waiting for the next tick
-async function decide(id, fn) {
+async function decide(id, fn, extra = {}) {
   if (FAKE) {
     const f = fake(), r = f.incoming.find((x) => x.id === id);
-    if (r) { f.incoming = f.incoming.filter((x) => x !== r); if (fn === 'accept') f.links.push({ direction: 'out', owner: r.from?.name || r.from?.handle, agent: r.agent, local: { id: 'local', name: 'local' }, edgeId: `fake-${id}` }); writeJSON(FAKE, f); }
+    if (r) { f.incoming = f.incoming.filter((x) => x !== r); if (fn === 'accept') { f.links.push({ direction: 'out', owner: r.from?.name || r.from?.handle, agent: r.agent, local: { id: 'local', name: 'local' }, edgeId: `fake-${id}` }); (f.accepted ||= []).push({ id, ...extra }); } writeJSON(FAKE, f); }
   }
   await pollRequests();
 }
-handle('requests:accept', async ({ id, agents }) => { const out = FAKE ? null : await (await acct()).accept(id, agents); await decide(id, 'accept'); return out; });
+// talk: let their agent ask the shared agents questions too (the accept popover's checkbox, ticked by default)
+handle('requests:accept', async ({ id, agents, talk = true }) => { const out = FAKE ? null : await (await acct()).accept(id, agents, { talk: !!talk }); await decide(id, 'accept', { agents, talk: !!talk }); return out; });
+// a friend's agent asked one of mine over a read-only share: Allow switches that share to talk, Not now waits a day
+handle('talkreq:allow', ({ id }) => { const out = allowTalkRequest(id); win?.webContents.send('state', state()); return out; });
+handle('talkreq:dismiss', ({ id }) => { const out = dismissTalkRequest(id); win?.webContents.send('state', state()); return out; });
 handle('requests:deny', async ({ id }) => { const out = FAKE ? null : await (await acct()).deny(id); await decide(id, 'deny'); return out; });
 handle('requests:cancel', async ({ id }) => { const out = await (await acct()).cancel(id); await pollRequests(); return out; });
 handle('update:get', () => ({ ...updater.state, enabled: UPDATES }));

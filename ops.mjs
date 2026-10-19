@@ -68,6 +68,21 @@ export function setMode(edgeId, mode) {
   return { edge };
 }
 
+// A friend's agent asked one of mine over a sync share: Allow switches exactly that share to talk and tells
+// their machine; Not now keeps the same request quiet for a day.
+export function allowTalkRequest(id) {
+  const r = talk.openRequests().find((x) => x.id === id);
+  if (!r) throw new Error('No such request.');
+  const edge = readJSON(FILES.edges, []).find((e) => !e.mirrored && e.from === r.target && e.to === remoteId(r.peer, r.asker));
+  setMode(edge.id, 'talk');
+  talk.decideRequest(id, 'allowed');
+  return { allowed: true, edge: edge.id };
+}
+export function dismissTalkRequest(id) {
+  if (!talk.decideRequest(id, 'dismissed')) throw new Error('No such request.');
+  return { dismissed: true };
+}
+
 // Who am I connected to?
 export function peers(me, { all = false } = {}) {
   const agents = listAgents();
@@ -151,8 +166,18 @@ export async function ask(me, query, question, { conversation, waitMs = talk.LIM
   const other = resolve(listAgents(), query);
   if (!other.remote) throw new Error(`${other.name} runs on this machine. Use "send" to message it; ask is for a friend's agent.`);
   const edges = readJSON(FILES.edges, []);
-  if (!edges.some((e) => e.mirrored && e.from === other.id && e.to === me.id && e.mode === 'talk')) {
-    throw new Error(`talk is off: ${other.remote.owner} shares ${other.name} with you for reading only. Questions work once ${other.remote.owner} turns on talk for it (use "read" meanwhile).`);
+  const shared = edges.filter((e) => e.mirrored && e.from === other.id && e.to === me.id);
+  if (!shared.some((e) => e.mode === 'talk')) {
+    // read only, from a friend paired through a request: ask them to let us ask, rather than a dead end
+    if (!shared.length || config().peers?.[other.remote.machine]?.via !== 'request') {
+      throw new Error(`talk is off: ${other.remote.owner} shares ${other.name} with you for reading only. Questions work once ${other.remote.owner} turns on talk for it (use "read" meanwhile).`);
+    }
+    const { id, send } = talk.openTalkRequest({ me, agent: other, now: now() });
+    if (send) {
+      remote.queueItem(other.remote.machine, { type: 'talk-request', id, target: other.remote.agentId, asker: me.id, askerName: me.name });
+      await Promise.resolve(sync()).catch(() => {});
+    }
+    return { status: 'requested', request: id, note: `Asked ${other.remote.owner} to let you ask ${other.name}. Try again once they allow it.` };
   }
   const q = String(question ?? '').trim();
   if (!q) throw new Error('Give a question to ask.');

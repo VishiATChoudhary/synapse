@@ -80,7 +80,8 @@ before(async () => {
   // alice's agent asks bob for four of his agents: two claude, a codex one, and one that stays read-only
   const sent = await cliJSON(HOME_A, ['request', BOB, '--target', 'the backend agents'], { SYNAPSE_AGENT: WEB });
   const shared = 'ml-eval,api-auth,api-rate-limit,api-review';
-  assert.equal((await cliJSON(HOME_B, ['accept', sent.id, '--agents', shared])).status, 'accepted');
+  // read only to begin with: the scenarios below switch talk on agent by agent (accept with talk is scenario 10)
+  assert.equal((await cliJSON(HOME_B, ['accept', sent.id, '--agents', shared, '--no-talk'])).status, 'accepted');
   await until(() => ['ml-eval', 'api-auth', 'api-rate-limit', 'api-review'].every((n) => edgesOf(HOME_A).some((e) => e.mirrored && e.from.endsWith(`-demo-${n}`))));
 });
 after(() => {
@@ -138,15 +139,43 @@ test('3 a busy line queues the second question, then answers it', { skip }, asyn
   assert.ok(owner.find((t) => t.q === 'first of two').answeredAt <= owner.find((t) => t.q === 'second of two').answeredAt, 'answered in order');
 });
 
-test('7 sync only: reading works, asking says talk is off', { skip }, async () => {
+const talkRequests = (home) => readJSON(path.join(home, 'talks.json'), {}).talkRequests || [];
+test('7 sync only: reading works, asking asks bob to allow it', { skip }, async () => {
   const read = await cli(HOME_A, ['read', 'api-review@bob'], { SYNAPSE_AGENT: WEB });
   assert.match(read, /P1/);
-  await assert.rejects(aliceAsk('api-review@bob', 'anything?'), /talk is off/);
+  const r = await aliceAsk('api-review@bob', 'anything?');
+  assert.equal(r.status, 'requested', JSON.stringify(r));
+  assert.equal(r.note, 'Asked bob to let you ask api-review. Try again once they allow it.');
+  await until(() => talkRequests(HOME_B).some((x) => x.status === 'pending' && x.target === 'demo-api-review'));
+  assert.equal(convs(HOME_B, 'owner').filter((c) => c.target === 'demo-api-review').length, 0, 'nothing is answered yet');
   // and turning talk off again closes the line
   await cliJSON(HOME_B, ['talk', 'ml-eval', 'off']);
   await until(() => !convs(HOME_B, 'owner').some((c) => c.status === 'open'));
   await aliceSees('demo-ml-eval', null);
-  await assert.rejects(aliceAsk('ml-eval@bob', 'still there?'), /talk is off/);
+  assert.equal((await aliceAsk('ml-eval@bob', 'still there?')).status, 'requested');
+});
+
+test('11 bob allows the request and alice\'s next ask is answered', { skip }, async () => {
+  // asked again within the hour: still one prompt on bob's side
+  assert.equal((await aliceAsk('api-review@bob', 'anything now?')).status, 'requested');
+  await sleep(1500);
+  const pending = talkRequests(HOME_B).filter((x) => x.target === 'demo-api-review');
+  assert.equal(pending.length, 1);
+  const st = await (await fetch(`http://127.0.0.1:${portB}/api/state`)).json();
+  const row = st.talkRequests.find((x) => x.target === 'demo-api-review');
+  assert.ok(row, 'the canvas state carries the prompt');
+  assert.equal(row.peerName, 'alice');
+  // another site can not allow it for bob
+  const evil = await fetch(`http://127.0.0.1:${portB}/api/talk-requests/${row.id}/allow`, { method: 'POST', headers: { origin: 'https://evil.example' } });
+  assert.equal(evil.status, 403);
+  const ok = await fetch(`http://127.0.0.1:${portB}/api/talk-requests/${row.id}/allow`, { method: 'POST' });
+  assert.equal(ok.status, 200);
+  assert.equal(edgesOf(HOME_B).find((e) => !e.mirrored && e.from === 'demo-api-review').mode, 'talk');
+  await aliceSees('demo-api-review', 'talk');
+  // alice's agent hears it in its inbox
+  await until(async () => (await cliJSON(HOME_A, ['inbox'], { SYNAPSE_AGENT: WEB })).some((m) => /bob let you ask api-review/.test(m.text)));
+  const r = await aliceAsk('api-review@bob', 'Which finding is P1?');
+  assert.match(fakeOut(r).stdin, /Which finding is P1\?/);
 });
 
 test('5 an agent bob never shared cannot be asked', { skip }, async () => {
@@ -194,7 +223,11 @@ test('6 the owner cuts a conversation during a slow answer', { skip }, async () 
 test('10 both ways: each side asks the other at the same time', { skip }, async () => {
   const sent = await cliJSON(HOME_B, ['request', 'alice', '--target', 'web tests'], { SYNAPSE_AGENT: ML });
   assert.equal((await cliJSON(HOME_A, ['accept', sent.id, '--agents', 'web-e2e'])).status, 'accepted');
-  await cliJSON(HOME_A, ['talk', 'web-e2e', 'on']);
+  // accepted with talk (the default): bob's agent may ask straight away, and only over this new share
+  const mine = edgesOf(HOME_A).filter((e) => !e.mirrored && e.to.startsWith('r-'));
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].from, WEB);
+  assert.equal(mine[0].mode, 'talk');
   await cliJSON(HOME_B, ['talk', 'ml-eval', 'on']);
   await aliceSees('demo-ml-eval', 'talk');
   await until(() => edgesOf(HOME_B).some((e) => e.mirrored && e.to === ML && e.mode === 'talk'));

@@ -8,7 +8,7 @@ import os from 'node:os';
 import { exec, execFile } from 'node:child_process';
 import { pipeline } from 'node:stream';
 import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, projectOfAgent, colorOf, renameAgent, renameProject } from './lib.mjs';
-import { createEdge, removeEdge, setMode, endTalk } from './ops.mjs';
+import { createEdge, removeEdge, setMode, endTalk, allowTalkRequest, dismissTalkRequest } from './ops.mjs';
 import * as remote from './remote.mjs';
 import * as talk from './talk.mjs';
 
@@ -77,7 +77,9 @@ function talks({ open = false } = {}) {
 
 // the canvas only needs who, which agents and what is happening; texts come from GET /api/talks
 const brief = ({ turns, ...c }) => ({ ...c, asked: turns?.length || 0 });
-const state = () => ({ agents: agents(), edges: readJSON(FILES.edges, []), layout: readJSON(FILES.layout, {}), talks: talks({ open: true }).map(brief) });
+// a friend's agent wants to ask one of mine that is shared read only: Allow / Not now on the target agent
+const talkRequests = () => talk.openRequests(readJSON(FILES.talks, {})).map(({ id, peerName, peerHandle, target, targetName, asker, askerName, at }) => ({ id, peerName, peerHandle, target, targetName, asker, askerName, at }));
+const state = () => ({ agents: agents(), edges: readJSON(FILES.edges, []), layout: readJSON(FILES.layout, {}), talks: talks({ open: true }).map(brief), talkRequests: talkRequests() });
 
 // --- SSE ---
 const clients = new Set();
@@ -88,7 +90,7 @@ let lastSig = '';
 setInterval(() => {
   if (!clients.size) return;
   const s = state();
-  const sig = JSON.stringify([s.agents.map((a) => [a.id, a.status, a.name, a.lastActivity]), s.edges, s.talks]);
+  const sig = JSON.stringify([s.agents.map((a) => [a.id, a.status, a.name, a.lastActivity]), s.edges, s.talks, s.talkRequests]);
   if (sig !== lastSig) { lastSig = sig; broadcast('state', s); }
 }, 1000);
 
@@ -209,7 +211,15 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---- agent talk: a friend's questions and answers, and switches only the canvas page itself may use
-  if ((p === '/api/talks' || p.startsWith('/api/talks/') || /^\/api\/edges\/[^/]+\/mode$/.test(p)) && !ownPage(req)) return json(res, 403, { error: 'forbidden' });
+  if ((p === '/api/talks' || p.startsWith('/api/talks/') || p.startsWith('/api/talk-requests/') || /^\/api\/edges\/[^/]+\/mode$/.test(p)) && !ownPage(req)) return json(res, 403, { error: 'forbidden' });
+  const treq = p.match(/^\/api\/talk-requests\/([\w-]+)\/(allow|dismiss)$/);
+  if (treq && req.method === 'POST') {
+    let out;
+    try { out = treq[2] === 'allow' ? allowTalkRequest(treq[1]) : dismissTalkRequest(treq[1]); } catch (e) { return json(res, 409, { error: e.message }); }
+    lastSig = '';
+    broadcast('state', state());
+    return json(res, 200, out);
+  }
   const mode = p.match(/^\/api\/edges\/([\w-]+)\/mode$/);
   if (mode && req.method === 'POST') {
     let out;

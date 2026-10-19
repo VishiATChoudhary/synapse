@@ -66,6 +66,7 @@ const dot = () => js(`(() => { const d = document.querySelector('#syn-dot'); ret
   // no live agents in the fixture, so Accept waits for one; give the select an agent like the main process would
   await js(`(() => { const s = document.querySelector('#syn-pop .req-pick'); s.disabled = false; s.innerHTML = '<option value="x1">shell</option>'; s.value = 'x1'; const b = [...document.querySelectorAll('#syn-pop button')].find((b) => b.textContent === 'Accept'); b.disabled = false; b.click(); })()`);
   await until(async () => (await dot()) === 'live', 'accept: the circle turns green');
+  assert.deepEqual(JSON.parse(fs.readFileSync(feed, 'utf8')).accepted.map((a) => [a.id, a.talk]), [['r2', true]], 'accepted with "let their agent ask" ticked by default');
   await js(`document.querySelector('#stage').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
   await until(() => js(`document.querySelector('#syn-pop').hidden`), 'outside click closes the popover');
   await js(`document.querySelector('#syn-dot').dispatchEvent(new MouseEvent('mouseenter'))`);
@@ -75,6 +76,48 @@ const dot = () => js(`(() => { const d = document.querySelector('#syn-dot'); ret
   assert.match(list, /Sam Rivera.*api-auth/s, 'grouped under its owner');
   await js(`document.querySelector('#syn-dot').dispatchEvent(new MouseEvent('mouseleave'))`);
   await until(() => js(`document.querySelector('#syn-pop').hidden`), 'leaving closes a hover popover');
+
+  // unticked: the accept is read only
+  const f3 = JSON.parse(fs.readFileSync(feed, 'utf8'));
+  f3.incoming = [request('r3')];
+  fs.writeFileSync(feed, JSON.stringify(f3));
+  await until(async () => (await dot()) === 'blink', 'blinks for the third request');
+  await js(`document.querySelector('#syn-dot').click()`);
+  await until(() => js(`!!document.querySelector('#syn-pop .req-talk input')`), 'the talk checkbox');
+  assert.match(await js(`document.querySelector('#syn-pop .req-talk').textContent`), /^Let their agent ask questions too$/);
+  assert.equal(await js(`document.querySelector('#syn-pop .req-talk input').checked`), true);
+  await js(`(() => { const t = document.querySelector('#syn-pop .req-talk input'); t.click(); const s = document.querySelector('#syn-pop .req-pick'); s.disabled = false; s.innerHTML = '<option value="x1">shell</option>'; s.value = 'x1'; const b = [...document.querySelectorAll('#syn-pop button')].find((b) => b.textContent === 'Accept'); b.disabled = false; b.click(); })()`);
+  await until(() => JSON.parse(fs.readFileSync(feed, 'utf8')).accepted.length === 2, 'third accept');
+  assert.deepEqual(JSON.parse(fs.readFileSync(feed, 'utf8')).accepted[1], { id: 'r3', agents: ['x1'], talk: false }, 'unticked: read only');
+  await js(`document.querySelector('#stage').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
+
+  // a friend's agent asked over a read-only share: one Allow / Not now row; Allow switches that share to talk
+  const R = '11111111-1111-4111-8111-111111111111';
+  fs.writeFileSync(path.join(state, 'remote.json'), JSON.stringify({ relay: 'http://127.0.0.1:9', token: 't', peers: { m1: { name: 'Sam Rivera', pair: 'p', via: 'request', handle: 'sam', since: 1 } }, blocked: [] }));
+  fs.writeFileSync(path.join(state, 'edges.json'), JSON.stringify([
+    { id: 'e-share', from: 'demo-api-auth', to: 'r-m1-a1', fromName: 'api-auth', toName: 'api-auth' },
+    { id: 'e-other', from: 'demo-docs', to: 'r-m1-a1', fromName: 'docs', toName: 'api-auth' },
+  ]));
+  fs.writeFileSync(path.join(state, 'talks.json'), JSON.stringify({ conversations: [], talkRequests: [
+    { id: R, peer: 'm1', peerName: 'Sam Rivera', peerHandle: 'sam', target: 'demo-api-auth', targetName: 'api-auth', asker: 'a1', askerName: '<img src=x onerror=window.pwned=1>', at: Date.now(), status: 'pending' },
+  ] }));
+  await until(async () => (await dot()) === 'blink', 'the circle blinks for a talk request');
+  await js(`document.querySelector('#syn-dot').click()`);
+  await until(() => js(`!!document.querySelector('#syn-pop .talk-req')`), 'talk request row');
+  const ask = await js(`document.querySelector('#syn-pop .talk-req').textContent`);
+  assert.match(ask, /@sam's agent wants to ask\s*api-auth/);
+  assert.match(ask, /<img src=x/, 'the asker name shows as text');
+  assert.equal(await js(`!!document.querySelector('#syn-pop img[src="x"]') || !!window.pwned`), false, 'and never as markup');
+  assert.equal(await js(`document.querySelectorAll('#syn-pop .talk-req').length`), 1);
+  await js(`[...document.querySelectorAll('#syn-pop .talk-req button')].find((b) => b.textContent === 'Allow').click()`);
+  await until(() => JSON.parse(fs.readFileSync(path.join(state, 'edges.json'), 'utf8')).find((e) => e.id === 'e-share').mode === 'talk', 'allow: the share talks');
+  const edgesAfter = JSON.parse(fs.readFileSync(path.join(state, 'edges.json'), 'utf8'));
+  assert.equal(edgesAfter.find((e) => e.id === 'e-other').mode, undefined, 'only that share');
+  const t = JSON.parse(fs.readFileSync(path.join(state, 'talks.json'), 'utf8'));
+  assert.equal(t.talkRequests[0].status, 'allowed');
+  assert.deepEqual(t.outgoing, [{ to: 'm1', item: { type: 'talk-status', requestId: R, state: 'allowed' } }]);
+  await until(() => js(`!document.querySelector('#syn-pop .talk-req')`), 'the row goes');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'utf8')).talkRequestsNotified, [R], 'announced once');
 
   assert.deepEqual(errors.filter((e) => !/Security Warning/.test(e)), [], 'no renderer errors: ' + errors.join(' | '));
   console.log('requests circle: ok');
