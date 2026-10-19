@@ -45,18 +45,22 @@ function config() {
 // ---------------------------------------------------------------- open at login
 // A friend's questions are only answered while the app runs, so offer to open it at login. Never turned on by
 // itself. SYNAPSE_FAKE_LOGIN_ITEMS=<file> keeps the setting in a file so tests never touch this Mac's login items.
-const FAKE_LOGIN = process.env.SYNAPSE_FAKE_LOGIN_ITEMS || '';
+const FAKE_LOGIN = process.env.SYNAPSE_DEMO ? process.env.SYNAPSE_FAKE_LOGIN_ITEMS || '' : '';
 function loginOpen() {
   if (FAKE_LOGIN) return !!readJSON(FAKE_LOGIN, {}).openAtLogin;
   return !!app.getLoginItemSettings().openAtLogin;
 }
+// macOS 13+ (Darwin 22+) registers login items through SMAppService, where Electron ignores openAsHidden and
+// wasOpenedAsHidden is always false: the app opens its window at login. Older macOS still honours both.
+const modernLogin = process.platform === 'darwin' && parseInt(os.release(), 10) >= 22;
+const loginPayload = (on) => (modernLogin ? { openAtLogin: on, type: 'mainAppService' } : { openAtLogin: on, openAsHidden: true });
 function setLoginOpen(on) {
   on = !!on;
-  if (FAKE_LOGIN) { const f = readJSON(FAKE_LOGIN, {}); (f.calls ||= []).push({ openAtLogin: on, openAsHidden: true }); f.openAtLogin = on; writeJSON(FAKE_LOGIN, f); }
-  else app.setLoginItemSettings({ openAtLogin: on, openAsHidden: true });
+  if (FAKE_LOGIN) { const f = readJSON(FAKE_LOGIN, {}); (f.calls ||= []).push(loginPayload(on)); f.openAtLogin = on; writeJSON(FAKE_LOGIN, f); }
+  else app.setLoginItemSettings(loginPayload(on));
   return loginOpen();
 }
-// Started by the login item: no window in the way, the canvas server still runs for friends.
+// Only older macOS can start hidden (or an explicit --hidden); on 13+ this is false and the window shows.
 const startedHidden = () => (FAKE_LOGIN ? !!readJSON(FAKE_LOGIN, {}).startHidden : !!(app.getLoginItemSettings().wasOpenedAsHidden || process.argv.includes('--hidden')));
 
 // The first time a link goes to talk (a talk edge we had not seen), suggest it once. Edges present at launch are

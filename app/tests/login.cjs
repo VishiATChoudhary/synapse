@@ -49,10 +49,10 @@ const saved = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'ut
   assert.equal(await js(`${row}.checked`), false, 'default off');
   await js(`${row}.click()`);
   await until(() => calls().length === 1, 'enable call');
-  assert.deepEqual(calls()[0], { openAtLogin: true, openAsHidden: true });
+  assert.deepEqual(calls()[0], { openAtLogin: true, type: 'mainAppService' });
   await js(`${row}.click()`);
   await until(() => calls().length === 2, 'disable call');
-  assert.deepEqual(calls()[1], { openAtLogin: false, openAsHidden: true });
+  assert.deepEqual(calls()[1], { openAtLogin: false, type: 'mainAppService' });
   await js(`document.querySelector('#modal').hidden = true`);
 
   // a link goes to talk: one suggestion, nothing turned on by itself
@@ -75,7 +75,7 @@ const saved = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'ut
   await until(box, 'suggestion again (renderer path)');
   await js(`[...document.querySelectorAll('#login-suggest button')].find((b) => /Turn on/.test(b.textContent)).click()`);
   await until(() => calls().length === 3, 'turn on call');
-  assert.deepEqual(calls()[2], { openAtLogin: true, openAsHidden: true });
+  assert.deepEqual(calls()[2], { openAtLogin: true, type: 'mainAppService' });
 
   assert.deepEqual(errors.filter((e) => !/Security Warning/.test(e)), [], 'no renderer errors: ' + errors.join(' | '));
   console.log('login: ok');

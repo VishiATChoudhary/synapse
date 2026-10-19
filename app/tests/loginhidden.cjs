@@ -1,5 +1,5 @@
-// Real Electron test for open at login, with the login item stubbed to a file (never this Mac's): the settings toggle
-// calls it with true/false, and the one-time suggestion appears when a link first goes to talk, never turning it on alone.
+// Real Electron test for the hidden-start path (older macOS wasOpenedAsHidden / --hidden, stubbed here by the login file's startHidden):
+// no window shows at launch but the renderer loads, and it can be shown afterwards.
 // Run: SYNAPSE_APP_PORT=<free port> node tests/loginhidden.cjs
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
