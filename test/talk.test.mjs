@@ -101,7 +101,7 @@ test('1 simple ask: the fork answers, bob keeps the conversation', { skip }, asy
   const r = await aliceAsk('ml-eval@bob', 'What did the eval show?');
   assert.ok(r.conversation);
   const out = fakeOut(r);
-  assert.match(out.stdin, /agent asks \(not your owner[^\n]*\nWhat did the eval show\?$/);
+  assert.match(out.stdin, /agent asks \(not your owner[^\n]*\n<question [^\n]*>\nWhat did the eval show\?\n<\/question nonce="\w+">$/);
   assert.equal(out.external, '1');
   for (const flag of ['--tools', '--strict-mcp-config', '--fork-session']) assert.ok(out.argv.includes(flag), flag);
   const owner = convs(HOME_B, 'owner');
@@ -130,8 +130,8 @@ test('3 a busy line queues the second question, then answers it', { skip }, asyn
   const two = aliceAsk('ml-eval@bob', 'second of two', ['--conversation', conv]);
   const [a, b] = await Promise.all([one, two]);
   setSleep(0);
-  assert.match(fakeOut(a).stdin, /\nfirst of two$/);
-  assert.match(fakeOut(b).stdin, /\nsecond of two$/);
+  assert.match(fakeOut(a).stdin, /\nfirst of two\n<\/question nonce="\w+">$/);
+  assert.match(fakeOut(b).stdin, /\nsecond of two\n<\/question nonce="\w+">$/);
   const turns = convs(HOME_A, 'asker').find((c) => c.id === conv).turns;
   assert.equal(turns.find((t) => t.q === 'second of two').position, 2, 'behind the running answer she is second');
   const owner = convs(HOME_B, 'owner')[0].turns;
@@ -201,6 +201,6 @@ test('10 both ways: each side asks the other at the same time', { skip }, async 
   setSleep(800);
   const [a, b] = await Promise.all([aliceAsk('ml-eval@bob', 'ping from alice'), bobAsk('web-e2e@alice', 'ping from bob')]);
   setSleep(0);
-  assert.match(fakeOut(a).stdin, /\nping from alice$/);
-  assert.match(fakeOut(b).stdin, /ping from bob$/);
+  assert.match(fakeOut(a).stdin, /\nping from alice\n<\/question nonce="\w+">$/);
+  assert.match(fakeOut(b).stdin, /ping from bob\n<\/question nonce="\w+">$/);
 });
