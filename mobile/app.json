@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "Synapse",
+    "slug": "synapse",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "dev.synapse.mobile",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#F1EFE9",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "package": "dev.synapse.mobile"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-secure-store",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 160,
+          "resizeMode": "contain",
+          "backgroundColor": "#F1EFE9",
+          "dark": {
+            "backgroundColor": "#0B0B0B",
+            "image": "./assets/splash-icon-dark.png"
+          }
+        }
+      ]
+    ],
+    "scheme": "synapse",
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}
