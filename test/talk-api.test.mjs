@@ -129,3 +129,25 @@ test('talk routes refuse cross-site callers', async () => {
   // the canvas itself still gets through
   assert.equal(await raw('/api/talks', 'GET', { 'sec-fetch-site': 'same-origin', origin: `http://127.0.0.1:${PORT}` }), 200);
 });
+
+// every API route: a rebinding host name reads nothing, a foreign page changes nothing
+test('a foreign Host gets 403 on every API route', async () => {
+  const foreign = { host: `evil.example:${PORT}` };
+  for (const p of ['/api/state', '/api/agents/demo-api-auth/recent', '/api/remote']) assert.equal(await raw(p, 'GET', foreign), 403, p);
+  // localhost by any of its names still reads
+  for (const host of [`127.0.0.1:${PORT}`, `localhost:${PORT}`, 'localhost']) {
+    assert.equal(await raw('/api/state', 'GET', { host }), 200, host);
+    assert.equal(await raw('/api/agents/demo-api-auth/recent', 'GET', { host }), 200, host);
+  }
+});
+
+test('a cross-site write to any API route gets 403', async () => {
+  const site = { 'sec-fetch-site': 'cross-site', origin: 'https://evil.example', 'content-type': 'text/plain' };
+  assert.equal(await raw('/api/edges/e-req', 'DELETE', site), 403);
+  assert.ok(read('edges.json').some((e) => e.id === 'e-req'), 'the edge is still there');
+  for (const p of ['/api/edges', '/api/layout', '/api/agents/demo-api-auth/name', '/api/projects/name', '/api/remote/name']) {
+    assert.equal(await raw(p, 'POST', site), 403, p);
+  }
+  // the canvas page itself may: a layout write with its own Origin
+  assert.equal(await raw('/api/layout', 'POST', { 'sec-fetch-site': 'same-origin', origin: `http://127.0.0.1:${PORT}` }), 200);
+});

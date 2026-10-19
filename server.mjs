@@ -162,6 +162,8 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'font/woff2', 'cache-control': 'max-age=31536000' });
     return fs.createReadStream(file).pipe(res);
   }
+  // every API route answers only to its own host (no DNS rebinding), and only the canvas page itself may change things
+  if (p.startsWith('/api/') && (!localHost(req) || (req.method !== 'GET' && !ownPage(req)))) return json(res, 403, { error: 'forbidden' });
   if (p === '/api/events') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
     clients.add(res);
