@@ -8,6 +8,7 @@
 //     or APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER, or APPLE_KEYCHAIN_PROFILE)
 //   - the `synapse` notarytool profile: `xcrun notarytool store-credentials synapse` once, then nothing to pass.
 // A signed-but-not-notarized app still trips Gatekeeper, so this fails unless the result passes `spctl`.
+import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 
@@ -54,4 +55,15 @@ if (assess.status !== 0 || !/Notarized Developer ID/.test(verdict)) {
   process.exit(1);
 }
 run('/usr/bin/xcrun', ['stapler', 'validate', APP]);
+
+// The dmg is what people download: sign, notarize and staple it too, so it opens without a warning even offline.
+const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+const DMG = path.join(ROOT, 'dist', `Synapse-${version}-arm64.dmg`);
+const name = identity.match(/"(.+)"/)[1];
+run('/usr/bin/codesign', ['--force', '--timestamp', '--sign', name, DMG]);
+if (env.APPLE_KEYCHAIN_PROFILE) {
+  run('/usr/bin/xcrun', ['notarytool', 'submit', DMG, '--keychain-profile', env.APPLE_KEYCHAIN_PROFILE, '--wait']);
+  run('/usr/bin/xcrun', ['stapler', 'staple', DMG]);
+  run('/usr/sbin/spctl', ['-a', '-t', 'open', '--context', 'context:primary-signature', '-vv', DMG]);
+} else console.warn('build-app: the dmg is signed but only the app inside is notarized (no keychain profile)');
 console.log('build-app: signed, notarized and stapled');
