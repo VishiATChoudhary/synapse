@@ -28,8 +28,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "build:web": "expo export --platform web",
-    "build:ios": "eas build --platform ios --profile production",
-    "testflight": "eas build --platform ios --profile production --auto-submit"
+    "build:ios": "npx --yes eas-cli@latest build --platform ios --profile production",
+    "testflight": "npx --yes eas-cli@latest build --platform ios --profile production --auto-submit"
   },
   "private": true,
   "description": "Synapse on your phone: every agent on your machine, start new ones, chat with them"
