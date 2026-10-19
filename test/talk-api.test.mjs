@@ -3,6 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -84,6 +85,10 @@ test('GET /api/talks lists both sides, recent ones only, and state carries the o
   assert.equal(list.find((c) => c.id === 'c-ask').live, 'answering');
   const st = (await call('/api/state')).body;
   assert.deepEqual(st.talks.map((c) => c.id).sort(), ['c-ask', 'c-own']);
+  // the live state carries no texts, only how many were asked
+  const lean = st.talks.find((c) => c.id === 'c-own');
+  assert.equal('turns' in lean, false);
+  assert.equal(lean.asked, 2);
 });
 
 test('POST /api/talks/:id/end ends my side as owner and hers as asker', async () => {
@@ -102,4 +107,25 @@ test('POST /api/talks/:id/end ends my side as owner and hers as asker', async ()
 
   assert.deepEqual((await call('/api/state')).body.talks, []);
   assert.equal((await call('/api/talks/nope/end', 'POST')).status, 404);
+});
+
+// a page on another site (or a rebinding host name) must not flip a share to talk, end a conversation, or read one
+const raw = (p, method, headers) => new Promise((resolve, reject) => {
+  const r = http.request({ host: '127.0.0.1', port: PORT, path: p, method, headers }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+  r.on('error', reject);
+  r.end(method === 'POST' ? JSON.stringify({ mode: 'talk' }) : undefined);
+});
+test('talk routes refuse cross-site callers', async () => {
+  const hostile = [
+    { 'sec-fetch-site': 'cross-site', origin: 'https://evil.example', 'content-type': 'text/plain' },
+    { origin: 'https://evil.example' },
+    { host: `evil.example:${PORT}` },
+  ];
+  for (const h of hostile) {
+    assert.equal(await raw('/api/edges/e-req/mode', 'POST', h), 403);
+    assert.equal(await raw('/api/talks/c-own/end', 'POST', h), 403);
+    assert.equal(await raw('/api/talks', 'GET', h), 403);
+  }
+  // the canvas itself still gets through
+  assert.equal(await raw('/api/talks', 'GET', { 'sec-fetch-site': 'same-origin', origin: `http://127.0.0.1:${PORT}` }), 200);
 });

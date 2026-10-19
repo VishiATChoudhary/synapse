@@ -641,7 +641,7 @@ async function addEdge(from, to) {
   toast(dst.remote ? `${dst.name} on ${dst.remote.owner}'s machine can now see ${agents.get(from).a.name}` : `${dst.name} can now see ${agents.get(from).a.name}`);
 }
 async function removeEdge(id) {
-  await fetch(`/api/edges/${id}`, { method: 'DELETE' });
+  await fetch(`/api/edges/${encodeURIComponent(id)}`, { method: 'DELETE' });
   if (selected?.id === id) selected = null;
 }
 
@@ -922,7 +922,7 @@ function runSearch() {
   resultIdx = clamp(resultIdx, 0, Math.max(0, res.length - 1));
   $('search').classList.toggle('open', !!query.trim() && document.activeElement === $('q'));
   $('results').innerHTML = res.slice(0, 8).map((r, i) => `
-    <div class="res ${i === resultIdx ? 'on' : ''}" data-id="${r.id}">
+    <div class="res ${i === resultIdx ? 'on' : ''}" data-id="${esc(r.id)}">
       <span class="sw" style="${cssShade(shadeOf(r.n))}"></span>
       <span class="nm">${highlight(r.n.a.name, r.idxAll.name || [])}</span>
       <span class="meta">${highlight(r.n.a.kind, r.idxAll.kind || [])} · ${highlight(short(r.n.a.frame, 18), r.idxAll.project || [])}</span>
@@ -1028,7 +1028,7 @@ function forkSection(a) {
   const par = a.forkOf && agents.get(a.forkOf);
   const kids = [...agents.values()].filter((o) => !o.dying && o.a?.forkOf === a.id);
   if (!par && !kids.length) return '';
-  const line = (o, arrow, q) => `<div class="link"><span class="arrow">${arrow}</span><span class="name" data-go="${o.a.id}">${esc(o.a.name)}</span><span class="fq" title="${esc(q || '')}">${esc(q || '')}</span></div>`;
+  const line = (o, arrow, q) => `<div class="link"><span class="arrow">${arrow}</span><span class="name" data-go="${esc(o.a.id)}">${esc(o.a.name)}</span><span class="fq" title="${esc(q || '')}">${esc(q || '')}</span></div>`;
   return `<section><h3>Fork tree</h3>${par ? line(par, '⑂ from', a.forkQ) : ''}${kids.map((o) => line(o, '↳', o.a.external ? `asked by ${peerLabel(o.a.external)}` : o.a.forkQ)).join('')}</section>`;
 }
 async function renderPanel(fetchFeed) {
@@ -1039,8 +1039,8 @@ async function renderPanel(fetchFeed) {
   const inc = edges.filter((e) => e.to === a.id && agents.has(e.from));
   const out = edges.filter((e) => e.from === a.id && agents.has(e.to));
   const row = (e, other, arrow) => `<div class="link"><span class="orb" style="${cssShade(shadeOf(agents.get(other)))};width:9px;height:9px;margin:0"></span>
-      <span class="arrow">${arrow}</span><span class="name" data-go="${other}">${esc(agents.get(other).a.name)}</span>
-      <button data-rm="${e.id}" title="Remove link">unlink</button></div>`;
+      <span class="arrow">${arrow}</span><span class="name" data-go="${esc(other)}">${esc(agents.get(other).a.name)}</span>
+      <button data-rm="${esc(e.id)}" title="Remove link">unlink</button></div>`;
   const feed = panel.querySelector('.feed');
   const keepFeed = !fetchFeed && feed && panel.dataset.id === a.id ? feed.outerHTML : '<div class="feed"></div>';
   panel.dataset.id = a.id;
@@ -1132,7 +1132,7 @@ function placeEpop() {
 }
 async function setEdgeMode(id, mode) {
   try {
-    await api(`/api/edges/${id}/mode`, { mode });
+    await api(`/api/edges/${encodeURIComponent(id)}/mode`, { mode });
     const e = edges.find((x) => x.id === id), src = agents.get(e?.from)?.a, dst = agents.get(e?.to)?.a;
     toast(mode === 'talk' ? `${dst?.name || 'Their agent'} can now ask ${src?.name || 'yours'} questions` : `Back to sync: ${dst?.name || 'their agent'} only reads ${src?.name || 'yours'}`);
   } catch (err) { toast(err.message); }
@@ -1147,8 +1147,8 @@ function openThread(t) {
 let threadReq = 0;
 async function renderThread() {
   const want = thread, req = ++threadReq;
-  let list = talks;
-  try { list = await api('/api/talks'); } catch {}
+  let list;
+  try { list = await api('/api/talks'); } catch { return; } // the texts only come from here; keep what is shown
   if (thread !== want || req !== threadReq) return; // closed or switched while loading
   const e = want.edge ? edges.find((x) => x.id === want.edge) : null;
   const mineFor = (c) => (e ? (c.role === 'owner' ? isOwnerEdge(e, c) : isAskerEdge(e, c)) : c.id === want.conv);
@@ -1170,7 +1170,7 @@ async function renderThread() {
   const turns = (c?.turns || []).map((t) => {
     const q = `<div class="bubble ${owner ? 'in' : 'out'}"><span class="who">${esc(owner ? theirs : mine)} asked · ${clock(t.askedAt)} · ${ago(t.askedAt)}</span><div class="md">${md(t.q)}</div></div>`;
     const a = t.a != null ? `<div class="bubble ${owner ? 'out' : 'in'}"><span class="who">${esc(owner ? `${mine} (${c.mode === 'replay' ? 'replay' : 'fork'})` : theirs)} answered · ${clock(t.answeredAt || t.askedAt)}</span><div class="md">${md(t.a)}</div></div>`
-      : open ? `<div class="bubble wait"><span class="sq ${live === 'answering' ? 'busy' : ''}"></span>${live === 'answering' || live === 'queued' ? live : 'waiting for the answer'}${t.position && live === 'queued' ? ` · ${t.position} in line` : ''}</div>`
+      : open ? `<div class="bubble wait"><span class="sq ${live === 'answering' ? 'busy' : ''}"></span>${live === 'answering' || live === 'queued' ? live : 'waiting for the answer'}${t.position && live === 'queued' ? ` · ${Number(t.position)} in line` : ''}</div>`
       : '<div class="bubble wait">no answer</div>';
     return q + a;
   }).join('');
@@ -1201,7 +1201,7 @@ async function renderThread() {
   $('closeP').onclick = () => { selected = null; closePanel(); };
   const on = (sel, fn) => { const b = panel.querySelector(sel); if (b) b.onclick = fn; };
   on('[data-end]', async () => {
-    try { await api(`/api/talks/${c.id}/end`, {}); toast(`Ended the conversation with ${friend}`); } catch (err) { toast(err.message); }
+    try { await api(`/api/talks/${encodeURIComponent(c.id)}/end`, {}); toast(`Ended the conversation with ${friend}`); } catch (err) { toast(err.message); }
   });
   on('[data-sync]', () => setEdgeMode(edge.id, 'sync'));
   on('[data-disc]', () => { removeEdge(edge.id); selected = null; closePanel(); });
@@ -1594,7 +1594,7 @@ function drawNode(id, n, t) {
   ctx.font = '10px "Fragment Mono", ui-monospace, monospace';
   const hiddenKids = forkChildren(id).filter((child) => child.hidden).length;
   const ext = a.external, sub = hiddenKids ? `+${hiddenKids} children collapsed · right-click`
-    : ext ? `${busy ? '■' : '□'} ${ext.mode === 'replay' ? 'answered by replay' : 'fork'} · ${ext.live === 'answering' ? 'answering' : ext.live === 'queued' ? 'queued' : `${ext.turns.length} asked`}`.toUpperCase()
+    : ext ? `${busy ? '■' : '□'} ${ext.mode === 'replay' ? 'answered by replay' : 'fork'} · ${ext.live === 'answering' ? 'answering' : ext.live === 'queued' ? 'queued' : `${ext.asked} asked`}`.toUpperCase()
     : `${busy ? '■' : '□'} ${a.kind} · ${a.forkQ ? `⑂ ${short(a.forkQ, 22)}` : short(a.frame, 22)}`.toUpperCase();
   knockout(sub, 0, R + 38);
   ctx.fillStyle = busy ? V.sig : rgba(V.ink, 0.5);

@@ -55,6 +55,9 @@ function update(fn) {
 }
 
 const isStr = (v) => typeof v === 'string' && v.length > 0;
+// conversation ids come from the asker's machine and end up in file paths, URLs and the canvas: UUIDs only
+const CONV_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isConv = (v) => typeof v === 'string' && CONV_ID.test(v);
 const end = (conv, reason, note, now = Date.now()) => {
   conv.status = 'ended'; conv.endReason = reason; conv.lastAt = now;
   if (note) conv.endNote = note;
@@ -71,8 +74,8 @@ export function allowed(peer, target, asker) {
 
 export function receiveAsk(peer, item, now = Date.now()) {
   const conv = item && item.conv;
-  if (!item || !isStr(conv) || !isStr(item.target) || !isStr(item.asker) || !Number.isInteger(item.seq) || typeof item.question !== 'string') {
-    return [endItem(typeof conv === 'string' ? conv : '', 'refused')];
+  if (!item || !isConv(conv) || !isStr(item.target) || !isStr(item.asker) || !Number.isInteger(item.seq) || typeof item.question !== 'string') {
+    return [endItem(isConv(conv) ? conv : '', 'refused')];
   }
   const question = item.question.trim();
   if (!question || question.length > LIMITS.question) return [endItem(conv, 'refused')];
@@ -166,7 +169,7 @@ export function release(convId, seq, now = Date.now()) {
 }
 
 export function receiveReply(peer, item, now = Date.now()) {
-  if (!item || !isStr(item.conv)) return;
+  if (!item || !isConv(item.conv)) return;
   update((s) => {
     const c = convOf(s, item.conv);
     if (!c || c.role !== 'asker' || c.peer !== peer || c.status !== 'open') return;
@@ -500,6 +503,27 @@ function start(job, opts) {
   });
   child.stdin?.on('error', () => {}); // a child that died early must not take the server with it
   child.stdin?.end(cmd.input);
+}
+
+// Once at server start: a conversation whose answerer died with the previous server can not get that answer.
+// End it (so its fork session file is deleted) and forget running entries whose process is gone.
+export function recover() {
+  const ended = update((s) => {
+    const dead = s.running.filter((r) => !Number.isInteger(r.pid) || !alive(r.pid));
+    s.running = s.running.filter((r) => !dead.includes(r));
+    const out = [];
+    for (const r of dead) {
+      const c = convOf(s, r.conv);
+      if (!c || c.role !== 'owner' || c.status !== 'open') continue;
+      end(c, 'error', 'restarted');
+      s.queue = s.queue.filter((j) => j.conv !== c.id);
+      s.outgoing.push({ to: c.peer, item: endItem(c.id, 'error', 'restarted') });
+      out.push({ ...c });
+    }
+    return out;
+  });
+  for (const c of ended) cleanup(c);
+  return ended.map((c) => c.id);
 }
 
 // One pass: close what must close, drop answers whose runner died, start what can start. Never waits on a child.

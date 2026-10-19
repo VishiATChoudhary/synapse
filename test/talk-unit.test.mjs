@@ -59,6 +59,8 @@ test('findAgent matches name@handle', () => {
 
 // ---------------------------------------------------------------- talk.mjs: store, validation, queue
 const talk = await import('../talk.mjs');
+// conversation ids are UUIDs; U('c1') is a fixed one per label so tests stay readable
+const U = (label) => `00000000-0000-4000-8000-${Buffer.from(label).toString('hex').padStart(12, '0').slice(-12)}`;
 const reset = () => { writeJSON(FILES.talks, {}); writeJSON(FILES.edges, []); };
 const talkEdge = (target = localAgents()[0].id, asker = 'x') => {
   peer({ via: 'request', handle: 'bob' });
@@ -66,7 +68,7 @@ const talkEdge = (target = localAgents()[0].id, asker = 'x') => {
   writeJSON(FILES.edges, [e]);
   return { target, asker };
 };
-const ask = (target, seq = 1, extra = {}) => ({ type: 'talk-ask', conv: 'c1', seq, target, asker: 'x', askerName: 'ax', question: 'why?', ...extra });
+const ask = (target, seq = 1, extra = {}) => ({ type: 'talk-ask', conv: U('c1'), seq, target, asker: 'x', askerName: 'ax', question: 'why?', ...extra });
 const state = () => readJSON(FILES.talks, {});
 
 test('ask without a talk edge is refused', () => {
@@ -104,8 +106,8 @@ test('mode follows the target kind', () => {
 
 test('sixth waiting ask for one agent is busy', () => {
   reset(); const { target } = talkEdge();
-  for (let i = 1; i <= 5; i++) assert.equal(talk.receiveAsk('m1', ask(target, i, { conv: `c${i}` }))[0].type, 'talk-status');
-  const out = talk.receiveAsk('m1', ask(target, 1, { conv: 'c6' }));
+  for (let i = 1; i <= 5; i++) assert.equal(talk.receiveAsk('m1', ask(target, i, { conv: U(`c${i}`) }))[0].type, 'talk-status');
+  const out = talk.receiveAsk('m1', ask(target, 1, { conv: U('c6') }));
   assert.equal(out[0].reason, 'busy');
   assert.equal(state().queue.length, 5);
 });
@@ -114,11 +116,11 @@ test('61st ask in an hour is busy', () => {
   reset(); const { target } = talkEdge();
   const t0 = Date.now();
   for (let i = 1; i <= 60; i++) {
-    assert.equal(talk.receiveAsk('m1', ask(target, 1, { conv: `r${i}` }), t0 + i)[0].type, 'talk-status', `ask ${i}`);
+    assert.equal(talk.receiveAsk('m1', ask(target, 1, { conv: U(`r${i}`) }), t0 + i)[0].type, 'talk-status', `ask ${i}`);
     writeJSON(FILES.talks, { ...state(), queue: [] });
   }
-  assert.equal(talk.receiveAsk('m1', ask(target, 1, { conv: 'r61' }), t0 + 100)[0].reason, 'busy');
-  assert.equal(talk.receiveAsk('m1', ask(target, 1, { conv: 'r62' }), t0 + 3_700_000)[0].type, 'talk-status');
+  assert.equal(talk.receiveAsk('m1', ask(target, 1, { conv: U('r61') }), t0 + 100)[0].reason, 'busy');
+  assert.equal(talk.receiveAsk('m1', ask(target, 1, { conv: U('r62') }), t0 + 3_700_000)[0].type, 'talk-status');
 });
 
 test('the 21st turn ends the conversation and the next ask starts fresh', () => {
@@ -147,8 +149,8 @@ test('revalidates at the front of the queue', () => {
 test('nextJob skips a target that is running', () => {
   reset(); const { target } = talkEdge();
   talk.receiveAsk('m1', ask(target));
-  assert.deepEqual(talk.nextJob(), { conv: 'c1', seq: 1 });
-  writeJSON(FILES.talks, { ...state(), running: [{ conv: 'c1', pid: 1 }] });
+  assert.deepEqual(talk.nextJob(), { conv: U('c1'), seq: 1 });
+  writeJSON(FILES.talks, { ...state(), running: [{ conv: U('c1'), pid: 1 }] });
   assert.equal(talk.nextJob(), null);
 });
 
@@ -156,13 +158,13 @@ test('reconcile ends idle and cut conversations', () => {
   reset(); const { target } = talkEdge();
   const t0 = Date.now();
   talk.receiveAsk('m1', ask(target), t0);
-  assert.deepEqual(talk.reconcile(t0 + 31 * 60_000), ['c1']);
+  assert.deepEqual(talk.reconcile(t0 + 31 * 60_000), [U('c1')]);
   assert.equal(state().conversations[0].endReason, 'idle');
   assert.equal(state().queue.length, 0);
   writeJSON(FILES.talks, {});
   talk.receiveAsk('m1', ask(target), t0);
   writeJSON(FILES.edges, readJSON(FILES.edges, []).map((e) => { const { mode, snapshot, ...rest } = e; return rest; }));
-  assert.deepEqual(talk.reconcile(t0 + 1000), ['c1']);
+  assert.deepEqual(talk.reconcile(t0 + 1000), [U('c1')]);
   assert.equal(state().conversations[0].endReason, 'owner');
 });
 
@@ -170,7 +172,7 @@ test('reconcile ends a conversation whose peer is gone', () => {
   reset(); const { target } = talkEdge();
   talk.receiveAsk('m1', ask(target));
   writeJSON(FILES.remote, { relay: 'http://x', token: 't', peers: {}, blocked: [] });
-  assert.deepEqual(talk.reconcile(), ['c1']);
+  assert.deepEqual(talk.reconcile(), [U('c1')]);
   assert.equal(state().conversations[0].endReason, 'revoked');
 });
 
@@ -309,7 +311,7 @@ test('external forks never show as agents', async () => {
     assert.ok(lib.externalForks().pids.has(pid));
     assert.ok(!localAgents().some((a) => a.pid === pid));
     // ending the conversation kills its answer at once
-    talk.endConversation('c1', 'owner');
+    talk.endConversation(U('c1'), 'owner');
     await waitFor(idle);
     assert.throws(() => process.kill(pid, 0), /ESRCH/);
     assert.equal(conv0().endReason, 'owner');
@@ -329,7 +331,7 @@ test('cleanup deletes only the fork session file', async () => {
   const dir = path.join(home, 'claude', 'projects', '-dev-acme-api');
   fs.mkdirSync(dir, { recursive: true });
   for (const f of [`${fork}.jsonl`, 'demo-api-auth.jsonl', `${fork}.jsonl.bak`]) fs.writeFileSync(path.join(dir, f), '{}\n');
-  talk.endConversation('c1', 'asker');
+  talk.endConversation(U('c1'), 'asker');
   assert.deepEqual(fs.readdirSync(dir).sort(), ['demo-api-auth.jsonl', `${fork}.jsonl.bak`].sort());
 });
 
@@ -371,7 +373,7 @@ test('killed first turn still gets cleaned up', async () => {
     const dir = path.join(home, 'claude', 'projects', '-dev-killed');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, `${fork}.jsonl`), '{}\n');
-    talk.endConversation('c1', 'owner');
+    talk.endConversation(U('c1'), 'owner');
     await waitFor(idle);
     assert.equal(fs.existsSync(path.join(dir, `${fork}.jsonl`)), false);
   } finally { delete process.env.FAKE_CLAUDE_SLEEP_MS; }
@@ -401,7 +403,7 @@ test('session id equal to the agent is rejected', async () => {
 const remote = await import('../remote.mjs');
 const { spawnSync } = await import('node:child_process');
 const asker = (extra = {}) => ({
-  id: 'c9', role: 'asker', peer: 'm1', target: 'r-m1-x', status: 'open', turns: [{ seq: 1, q: 'hi', a: null }], createdAt: 1, lastAt: 1, ...extra,
+  id: U('c9'), role: 'asker', peer: 'm1', target: 'r-m1-x', status: 'open', turns: [{ seq: 1, q: 'hi', a: null }], createdAt: 1, lastAt: 1, ...extra,
 });
 
 // the production path: remote.sync() polling a stub relay that hands out `items` once (push is refused, which
@@ -450,16 +452,16 @@ test('queueItem appends to the outbox', () => {
 
 test('receiveReply records status, answer and end for the asker only', () => {
   reset(); peer({ via: 'request' });
-  writeJSON(FILES.talks, { conversations: [asker(), asker({ id: 'o1', role: 'owner' })] });
-  talk.receiveReply('m1', { type: 'talk-status', conv: 'c9', seq: 1, state: 'answering' });
+  writeJSON(FILES.talks, { conversations: [asker(), asker({ id: U('o1'), role: 'owner' })] });
+  talk.receiveReply('m1', { type: 'talk-status', conv: U('c9'), seq: 1, state: 'answering' });
   assert.equal(state().conversations[0].turns[0].state, 'answering');
-  talk.receiveReply('m2', { type: 'talk-answer', conv: 'c9', seq: 1, answer: 'wrong peer' });
+  talk.receiveReply('m2', { type: 'talk-answer', conv: U('c9'), seq: 1, answer: 'wrong peer' });
   talk.receiveReply('m1', { type: 'talk-answer', conv: 'unknown', seq: 1, answer: 'x' });
-  talk.receiveReply('m1', { type: 'talk-answer', conv: 'o1', seq: 1, answer: 'owner role' });
+  talk.receiveReply('m1', { type: 'talk-answer', conv: U('o1'), seq: 1, answer: 'owner role' });
   assert.equal(state().conversations[0].turns[0].a, null);
-  talk.receiveReply('m1', { type: 'talk-answer', conv: 'c9', seq: 1, answer: 'a'.repeat(9000) });
+  talk.receiveReply('m1', { type: 'talk-answer', conv: U('c9'), seq: 1, answer: 'a'.repeat(9000) });
   assert.equal(state().conversations[0].turns[0].a.length, 8000);
-  talk.receiveReply('m1', { type: 'talk-end', conv: 'c9', reason: 'owner' });
+  talk.receiveReply('m1', { type: 'talk-end', conv: U('c9'), reason: 'owner' });
   assert.equal(state().conversations[0].status, 'ended');
   assert.equal(state().conversations[0].endReason, 'owner');
   assert.equal(state().conversations[1].turns.length, 1);
@@ -628,8 +630,8 @@ test('ask rejects an empty or oversized question', async () => {
 
 test('endTalk refuses a conversation that is not yours', () => {
   sharedWithMe();
-  writeJSON(FILES.talks, { conversations: [asker({ id: 'o1', role: 'owner' })] });
-  assert.throws(() => ops.endTalk(me(), 'o1'), /conversation/i);
+  writeJSON(FILES.talks, { conversations: [asker({ id: U('o1'), role: 'owner' })] });
+  assert.throws(() => ops.endTalk(me(), U('o1')), /conversation/i);
   assert.throws(() => ops.endTalk(me(), 'nope'), /conversation/i);
 });
 
@@ -685,4 +687,41 @@ test('ending your own conversation puts nothing in the inbox', async () => {
   talk.sweepAnswers(Date.now() + 200_000);
   await viaRelay([]);
   assert.equal(lib.takeInbox(me().id).length, 0);
+});
+
+test('an ask whose conversation id is not a UUID is refused', () => {
+  reset();
+  const { target } = talkEdge();
+  for (const conv of ['c1', 'x" onmouseover="alert(1)', `${U('c1')}x`, '../../etc']) {
+    const out = talk.receiveAsk('m1', ask(target, 1, { conv }));
+    assert.equal(out[0].type, 'talk-end');
+    assert.equal(out[0].reason, 'refused');
+    assert.equal(out[0].conv, '');
+  }
+  assert.equal((state().conversations || []).length, 0);
+});
+
+test('server start ends a conversation whose answerer died and deletes its session', () => {
+  reset();
+  const { target } = talkEdge();
+  const fork = '22222222-2222-4222-8222-222222222222';
+  const dir = path.join(home, 'claude', 'projects', 'p');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${fork}.jsonl`), '{}\n');
+  const dead = 2 ** 22 + 12345; // above any pid macOS or Linux hands out by default
+  writeJSON(FILES.talks, { conversations: [
+    { id: U('d1'), role: 'owner', peer: 'm1', asker: 'x', target, mode: 'native', forkSession: fork, status: 'open', turns: [{ seq: 1, q: 'q', a: null }], createdAt: Date.now(), lastAt: Date.now() },
+    { id: U('d2'), role: 'owner', peer: 'm1', asker: 'x', target, mode: 'native', status: 'open', turns: [], createdAt: Date.now(), lastAt: Date.now() },
+  ], queue: [{ conv: U('d1'), seq: 2 }], running: [{ conv: U('d1'), seq: 1, pid: dead, owner: dead }, { conv: 'gone', pid: null }], rate: {}, outgoing: [] });
+  assert.deepEqual(talk.recover(), [U('d1')]);
+  const s = state();
+  const c = s.conversations.find((x) => x.id === U('d1'));
+  assert.equal(c.status, 'ended');
+  assert.equal(c.endReason, 'error');
+  assert.equal(c.endNote, 'restarted');
+  assert.equal(s.conversations.find((x) => x.id === U('d2')).status, 'open');
+  assert.deepEqual(s.running, []);
+  assert.deepEqual(s.queue, []);
+  assert.ok(s.outgoing.some((o) => o.item.type === 'talk-end' && o.item.conv === U('d1') && o.item.note === 'restarted'));
+  assert.equal(fs.existsSync(path.join(dir, `${fork}.jsonl`)), false);
 });

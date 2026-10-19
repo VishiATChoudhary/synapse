@@ -75,7 +75,9 @@ function talks({ open = false } = {}) {
     });
 }
 
-const state = () => ({ agents: agents(), edges: readJSON(FILES.edges, []), layout: readJSON(FILES.layout, {}), talks: talks({ open: true }) });
+// the canvas only needs who, which agents and what is happening; texts come from GET /api/talks
+const brief = ({ turns, ...c }) => ({ ...c, asked: turns?.length || 0 });
+const state = () => ({ agents: agents(), edges: readJSON(FILES.edges, []), layout: readJSON(FILES.layout, {}), talks: talks({ open: true }).map(brief) });
 
 // --- SSE ---
 const clients = new Set();
@@ -98,6 +100,8 @@ setInterval(() => {
   remote.sync().then(() => { syncError = null; }, (e) => { syncError = e.message; });
 }, Number(process.env.SYNAPSE_SYNC_MS || 3000));
 // Friends' agents ask ours questions: start what is queued, close what can no longer go on.
+// First, whatever the previous server was answering when it stopped is lost: end it and clean up.
+try { talk.recover(); } catch {}
 setInterval(() => { talk.tick().catch(() => {}); }, Number(process.env.SYNAPSE_SYNC_MS || 3000));
 
 // Context flow events written by the hook become edge pulses in the UI.
@@ -202,7 +206,8 @@ const server = http.createServer(async (req, res) => {
     catch (e) { return json(res, 404, { error: e.message }); }
   }
 
-  // ---- agent talk
+  // ---- agent talk: a friend's questions and answers, and switches only the canvas page itself may use
+  if ((p === '/api/talks' || p.startsWith('/api/talks/') || /^\/api\/edges\/[^/]+\/mode$/.test(p)) && !ownPage(req)) return json(res, 403, { error: 'forbidden' });
   const mode = p.match(/^\/api\/edges\/([\w-]+)\/mode$/);
   if (mode && req.method === 'POST') {
     let out;
