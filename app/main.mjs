@@ -309,7 +309,57 @@ function state() {
   const messages = readJSON(FILES.messages, []);
   const unread = {};
   for (const m of messages) if (!m.delivered) unread[m.to] = (unread[m.to] || 0) + 1;
-  return { projects: projects(), agents: byPty, edges, unread, profiles: config().profiles, autoSendFork: !!config().autoSendFork, demo: DEMO };
+  return { projects: projects(), agents: byPty, edges, unread, talks: openTalks(), profiles: config().profiles, autoSendFork: !!config().autoSendFork, demo: DEMO };
+}
+
+// ---------------------------------------------------------------- agent talk
+
+// Open conversations, both sides, for the sidebar and the circle: who, which agents and what is happening.
+// The texts stay out (the canvas thread and settings fetch them from the canvas server).
+function openTalks() {
+  const s = readJSON(FILES.talks, {});
+  const running = new Set((s.running || []).map((r) => r.conv)), queued = new Set((s.queue || []).map((j) => j.conv));
+  return (Array.isArray(s.conversations) ? s.conversations : []).filter((c) => c?.status === 'open' && typeof c.id === 'string').map((c) => ({
+    id: c.id, role: c.role, peerName: String(c.peerName || ''), peerHandle: String(c.peerHandle || ''),
+    asker: c.asker, askerName: String(c.askerName || ''), target: c.target, targetName: String(c.targetName || ''),
+    asked: Array.isArray(c.turns) ? c.turns.length : 0, firstQ: String(c.turns?.[0]?.q || ''), lastAt: c.lastAt || 0,
+    live: running.has(c.id) ? 'answering' : queued.has(c.id) ? 'queued' : 'open',
+  }));
+}
+
+// A notification when a friend's agent asks one of mine its first question. Conversations open at start stay
+// quiet, like the requests feed; each one is announced once.
+let talksSeen = null;
+function notifyTalks(list) {
+  const asked = list.filter((c) => c.role === 'owner' && c.asked > 0);
+  if (talksSeen && Notification.isSupported() && !process.env.SYNAPSE_SHOT) {
+    for (const c of asked) {
+      if (talksSeen.has(c.id)) continue;
+      const who = c.peerHandle ? `@${c.peerHandle}` : c.peerName || 'A friend';
+      const q = c.firstQ.replace(/\s+/g, ' ').trim();
+      const n = new Notification({ title: 'Synapse', body: `${who}'s agent asks your ${c.targetName || 'agent'}: ${q.length > 120 ? q.slice(0, 119) + '…' : q}` });
+      n.on('click', () => { if (!win) return; win.show(); win.focus(); win.webContents.send('talk:open', c.id); });
+      n.show();
+    }
+  }
+  talksSeen ||= new Set();
+  for (const c of asked) talksSeen.add(c.id);
+}
+
+// Past and open conversations for settings, from the canvas server (it filters to the last 30 days). A request
+// from this process sends no Origin, which the server's own-page guard lets through.
+async function talkHistory() {
+  const base = await ensureCanvas();
+  return new Promise((resolve, reject) => {
+    const req = http.get(`${base}api/talks`, { timeout: 5000 }, (r) => {
+      let body = '';
+      r.setEncoding('utf8');
+      r.on('data', (d) => { body += d; });
+      r.on('end', () => { try { const v = JSON.parse(body); if (r.statusCode !== 200) throw new Error(v.error || `canvas said ${r.statusCode}`); resolve(v); } catch (e) { reject(e); } });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('the canvas server did not answer')); });
+  });
 }
 
 // ---------------------------------------------------------------- forks
@@ -452,7 +502,7 @@ app.whenReady().then(() => {
   createWindow();
   pollRequests(); setInterval(pollRequests, REQUEST_POLL);
   if (UPDATES) { setTimeout(() => updater.check(), UPDATE_DELAY); setInterval(() => updater.check(), UPDATE_EVERY); }
-  setInterval(() => { if (win) { win.webContents.send('state', state()); pumpForks(); } }, 1000);
+  setInterval(() => { if (win) { const st = state(); win.webContents.send('state', st); notifyTalks(st.talks); pumpForks(); } }, 1000);
   if (process.env.SYNAPSE_SHOT) {
     setTimeout(async () => {
       win.show(); win.focus();
@@ -690,6 +740,7 @@ handle('update:get', () => ({ ...updater.state, enabled: UPDATES }));
 handle('update:check', async () => ({ ...(await updater.check()), enabled: UPDATES }));
 handle('update:install', () => { if (updater.install({ relaunch: true, open: UPDATE_OPEN })) setTimeout(() => app.quit(), 50); });
 handle('update:download', () => { const u = updater.state.dmg; if (u) shell.openExternal(u); });
+handle('talks:list', () => talkHistory());
 handle('links', async () => (FAKE ? fake().links : (await acct()).externalLinks()));
 // a collapsed child shares with its parent on demand: the parent can read it, nothing is pushed into its prompt
 handle('fork:link', ({ child, parent }) => {

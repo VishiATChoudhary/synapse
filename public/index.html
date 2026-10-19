@@ -711,6 +711,8 @@ function doAction(d) {
   if (d.action === 'unlink' && n) for (const e of edges.filter((e) => e.from === d.id || e.to === d.id)) removeEdge(e.id);
   if (d.action === 'arrange') { arrange(); toast('Arranged by project'); }
   if (d.action === 'fit') fit();
+  // the app's sidebar, circle, settings and notification open a conversation's thread here
+  if (d.action === 'thread' && typeof d.conv === 'string') openThread({ conv: d.conv });
 }
 cv.addEventListener('contextmenu', (ev) => {
   ev.preventDefault();

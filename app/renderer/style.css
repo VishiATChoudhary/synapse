@@ -414,3 +414,24 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .people-add input { flex: 1; border-bottom: 0 !important; }
 .people-add .btn { border-left: 1px solid var(--rule); }
 .opt.set .btn { margin-left: auto; padding: 6px 12px; border: 1px solid var(--rule); }
+
+/* ---------------------------------------------------------------- agent talk
+   a friend's agent asking one of mine: an outlined row under the asked agent, same badge as the canvas */
+.ext { display: flex; align-items: center; gap: 7px; margin-left: 24px; padding: 4px 10px 4px 22px; cursor: pointer; position: relative; font-size: 12px; }
+.ext::before { content: ''; position: absolute; left: 0; top: 50%; width: 14px; height: 0; border-top: 1px dashed var(--rule); }
+.ext:hover { background: var(--wash); }
+.ext .ext-av { width: 16px; height: 16px; font-size: 7.5px; border-style: dashed; }
+.ext .ext-badge { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
+.ext.busy .ext-badge { color: var(--sig); }
+.ext-of .slot-title { color: var(--ink-2); }
+.ext-box { position: relative; margin: 26px 0 18px; border: 1px dashed color-mix(in srgb, var(--ink) 28%, var(--paper)); }
+.ext-box > .proj-head { height: 22px; border-style: dashed; border-bottom-color: var(--paper); z-index: 1; cursor: default; }
+.ext-box > .proj-head:hover { background: var(--paper); color: inherit; }
+.ext-swatch { background: none; outline-style: dashed; }
+.talk-link { cursor: pointer; flex-wrap: wrap; }
+.talk-link:hover .ag { text-decoration: underline; }
+.talk-row { display: flex; align-items: baseline; gap: 10px; padding: 5px 14px 7px 50px; cursor: pointer; }
+.talk-row:hover { background: var(--wash); }
+.talk-row .k { font-size: 12.5px; }
+.talk-row .c { flex: 1; text-align: right; font: 10.5px var(--mono); color: var(--ink-3); white-space: nowrap; }
+.talk-row.open .c { color: var(--sig); }

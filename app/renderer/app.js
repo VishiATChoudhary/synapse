@@ -36,6 +36,7 @@ const M = {
   projects: [],   // from main: { key, label, path, color, worktrees: [{ path, branch, name }] }
   agents: {},     // ptyId -> { synapseId, name, kind, status }
   unread: {},     // synapseId -> count
+  talks: [],      // open agent talk conversations, both sides: { id, role, peerName, peerHandle, target, targetName, ... }
   profiles: {},
   slots: [],      // { id, worktree, sessions: [Session], path: [sessionId] }
   collapsed: new Set(), // hidden child branches; sessions keep running
@@ -626,6 +627,7 @@ function renderTree() {
   if (drag || folding) return;
   tree.replaceChildren();
   const cur = focusedSlot();
+  const asking = askingTalks(), placed = new Set();
   let n = 0;
   for (const p of M.projects) {
     const box = el('div', 'proj' + (M.open.has(p.key) ? '' : ' closed')); box.dataset.key = p.key;
@@ -679,12 +681,44 @@ function renderTree() {
           row.onclick = () => selectSession(s);
           sortable(row, row, '.slot', (t, side) => { M.slots = moveItem(M.slots, s, slot(Number(t.dataset.slot)), side); });
           wt.appendChild(row);
+          // a friend's agent asking one of this slot's agents: a row per open conversation under it
+          const ids = new Set(s.sessions.map((x) => M.agents[x.pty]?.synapseId).filter(Boolean));
+          for (const c of asking) if (ids.has(c.target) && !placed.has(c.id)) { placed.add(c.id); wt.appendChild(extRow(c)); }
         }
         box.appendChild(wt);
       }
     }
     tree.appendChild(box);
   }
+  // asked agents that run outside the app (or are closed: a fork answers from the transcript) get a box of their own
+  const rest = asking.filter((c) => !placed.has(c.id));
+  if (rest.length) {
+    const box = el('div', 'ext-box'), head = el('div', 'proj-head'), wt = el('div', 'wt');
+    head.append(el('span', 'swatch ext-swatch'), el('span', 'proj-name', 'agent talk'), el('span', 'proj-count', String(rest.length)));
+    const byTarget = new Map();
+    for (const c of rest) { if (!byTarget.has(c.target)) byTarget.set(c.target, []); byTarget.get(c.target).push(c); }
+    for (const list of byTarget.values()) {
+      const of = el('div', 'slot ext-of');
+      of.append(el('span', 'dot idle'), el('span', 'slot-title', list[0].targetName || 'agent'), el('span', 'slot-kind', 'outside the app'));
+      of.title = 'This agent is not open in the app. Its answers come from a fork of its conversation.';
+      wt.append(of, ...list.map(extRow));
+    }
+    box.append(head, wt);
+    tree.appendChild(box);
+  }
+}
+
+// open conversations where a friend's agent asks one of mine
+const askingTalks = () => (M.talks || []).filter((c) => c.role === 'owner');
+const peerHandle = (c) => (c.peerHandle ? `@${c.peerHandle}` : c.peerName || 'a friend');
+const TALK_LIVE = { answering: 'answering', queued: 'queued' };
+function extRow(c) {
+  const row = el('div', 'ext' + (c.live === 'answering' ? ' busy' : '')); row.dataset.conv = c.id;
+  row.append(avatar({ name: c.peerName, handle: c.peerHandle }, 'av ext-av'), el('span', 'badge ext-badge', `asked by ${peerHandle(c)}`));
+  if (TALK_LIVE[c.live]) row.append(el('span', 'slot-kind', TALK_LIVE[c.live]));
+  row.title = `${c.peerName || peerHandle(c)}'s ${c.askerName || 'agent'} asks your ${c.targetName || 'agent'} · ${c.asked} question${c.asked === 1 ? '' : 's'}\nclick to open the conversation`;
+  row.onclick = (e) => { e.stopPropagation(); openTalk(c.id); };
+  return row;
 }
 
 // All visible branches stay in the tab strip. Hover never opens or replaces it.
@@ -1352,10 +1386,19 @@ const SHORTCUTS = [
 // the gear in the node view asks for the same modal
 addEventListener('message', (ev) => {
   if (ev.source !== $('#canvas-frame').contentWindow) return;
-  if (ev.data?.type === 'synapse:ready') { sendTheme(); syncCanvasBranches(); }
+  if (ev.data?.type === 'synapse:ready') { canvasLive = true; sendTheme(); syncCanvasBranches(); if (pendingThread) { tellCanvas({ action: 'thread', conv: pendingThread }); pendingThread = null; } }
   if (ev.data?.type === 'synapse:settings' && $('#modal').hidden) openSettings();
   if (ev.data?.type === 'synapse:menu' && $('#modal').hidden) canvasMenu(ev.data);
 });
+// a conversation's thread opens in the node view's side panel: told now if the page is up, else once it says ready
+let canvasLive = false, pendingThread = null;
+function openTalk(id) {
+  if (!$('#modal').hidden) $('#modal').hidden = true;
+  closePop();
+  openCanvas();
+  if (canvasLive) tellCanvas({ action: 'thread', conv: id }); else pendingThread = id;
+}
+synapse.talks.onOpen(openTalk);
 // right-click in the node view: the canvas reports what was hit, the menu is ours
 const tellCanvas = (d) => $('#canvas-frame').contentWindow?.postMessage({ type: 'synapse:do', ...d }, '*');
 // start an agent in a folder that may not be in the sidebar yet: add it first, so the session has a row
@@ -1437,6 +1480,9 @@ async function openSettings() {
     const people = el('div', 'people');
     body.append(el('div', 'sub', 'trusted people'), people);
     drawPeople(people);
+    const hist = el('div', 'talk-hist');
+    body.append(el('div', 'sub', 'conversations'), hist);
+    drawTalkHistory(hist);
     for (const [title, keys] of SHORTCUTS) {
       const box = el('div', 'keys');
       for (const [k, what] of keys) { const row = el('span'); row.append(el('kbd', '', k), what); box.appendChild(row); }
@@ -1619,6 +1665,8 @@ async function refreshPullRequests() {
 async function refresh() { apply(await synapse.state()); }
 function apply(st) {
   M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo; M.autoSendFork = !!st.autoSendFork;
+  const talks = JSON.stringify(st.talks || []);
+  if (talks !== M.talksSig) { M.talksSig = talks; M.talks = st.talks || []; renderDot(); }
   // remember which agent each session runs while it is alive: that id is what a restart resumes. A resumed
   // agent that has not written its transcript yet must not wipe the id it was resumed from.
   for (const sl of M.slots) for (const x of sl.sessions) {
@@ -1657,11 +1705,11 @@ function renderMe() {
 }
 
 function renderDot() {
-  const dot = $('#syn-dot'), p = pendingRequests().length, links = (ACC.feed.links || []).length;
-  dot.hidden = !p && !links;
-  dot.className = p ? 'blink' : links ? 'live' : '';
+  const dot = $('#syn-dot'), p = pendingRequests().length, links = (ACC.feed.links || []).length, talks = (M.talks || []).length;
+  dot.hidden = !p && !links && !talks;
+  dot.className = p ? 'blink' : links || talks ? 'live' : '';
   $('#btn-canvas .glyph').hidden = !dot.hidden;
-  dot.setAttribute('aria-label', p ? `${p} synapse request${p > 1 ? 's' : ''}` : `${links} synapsed external agent${links > 1 ? 's' : ''}`);
+  dot.setAttribute('aria-label', p ? `${p} synapse request${p > 1 ? 's' : ''}` : links ? `${links} synapsed external agent${links > 1 ? 's' : ''}` : `${talks} open conversation${talks > 1 ? 's' : ''}`);
   if (dot.hidden) closePop(); else if (!$('#syn-pop').hidden) renderPop();
 }
 
@@ -1734,6 +1782,23 @@ function renderPop() {
       box.append(row);
       pop.append(box);
     }
+  }
+  // agent talk: a friend's agent asking mine, or mine asking theirs; a click opens the thread
+  const talks = M.talks || [];
+  if (talks.length) {
+    pop.append(el('div', 'pop-sec', `talking · ${talks.length}`));
+    const g = el('div', 'link-group');
+    for (const c of talks) {
+      const row = el('div', 'link talk-link'), owner = c.role === 'owner';
+      const who = el('span', 'ag', peerHandle(c)), theirs = el('span', 'mine', owner ? c.askerName || 'agent' : c.targetName || 'agent'), mine = el('span', 'mine', `your ${owner ? c.targetName || 'agent' : c.askerName || 'agent'}`);
+      if (owner) row.append(who, theirs, el('span', 'arr', 'asks'), mine);
+      else row.append(mine, el('span', 'arr', 'asks'), who, theirs);
+      if (TALK_LIVE[c.live]) row.append(el('span', 'badge', TALK_LIVE[c.live]));
+      row.title = owner ? `${c.peerName || peerHandle(c)}'s ${c.askerName || 'agent'} asks your ${c.targetName || 'agent'} questions` : `your ${c.askerName || 'agent'} asks ${c.peerName || peerHandle(c)}'s ${c.targetName || 'agent'} questions`;
+      row.onclick = () => openTalk(c.id);
+      g.append(row);
+    }
+    pop.append(g);
   }
   pop.append(el('div', 'pop-sec', `synapsed · ${links.length}`));
   if (!links.length) pop.append(el('div', 'pop-empty', 'no external agents yet'));
@@ -1999,6 +2064,39 @@ async function drawPeople(box) {
   }
   box.append(add, err);
 }
+
+// ---- agent talk history (in settings): the last 30 days, grouped per person, newest first
+
+const TALK_ENDS = { owner: 'you ended it', asker: 'they ended it', idle: 'idle', refused: 'refused', revoked: 'access removed', unavailable: 'agent unavailable', unsupported: 'unsupported', busy: 'busy', error: 'error' };
+async function drawTalkHistory(box) {
+  box.replaceChildren(el('div', 'hint', 'loading…'));
+  let list;
+  try { list = await synapse.talks.list(); } catch (e) { box.replaceChildren(el('div', 'hint err', e.message)); return; }
+  box.replaceChildren();
+  if (!Array.isArray(list) || !list.length) { box.append(el('div', 'hint', 'no conversations in the last 30 days · a friend\'s agent can ask yours once you switch a share to talk')); return; }
+  const byPeer = new Map();
+  for (const c of [...list].sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0))) {
+    const k = c.peer || c.peerHandle || c.peerName || '?';
+    if (!byPeer.has(k)) byPeer.set(k, []);
+    byPeer.get(k).push(c);
+  }
+  for (const convs of byPeer.values()) {
+    const c0 = convs[0], head = el('div', 'person');
+    head.append(avatar({ name: c0.peerName, handle: c0.peerHandle }), el('span', 'k', c0.peerName || peerHandle(c0)), el('span', 'c', c0.peerHandle ? `@${c0.peerHandle}` : ''));
+    box.append(head);
+    for (const c of convs) {
+      const owner = c.role === 'owner', n = c.turns?.length || 0;
+      const row = el('div', 'talk-row' + (c.status === 'open' ? ' open' : ''));
+      const what = owner ? `${c.askerName || 'their agent'} asked your ${c.targetName || 'agent'}` : `your ${c.askerName || 'agent'} asked ${c.targetName || 'their agent'}`;
+      row.append(el('span', 'k', what), el('span', 'c', `${n} question${n === 1 ? '' : 's'} · ${c.status === 'open' ? 'open' : TALK_ENDS[c.endReason] || 'ended'} · ${ageOf(c.lastAt)}`));
+      const q = c.turns?.[n - 1]?.q;
+      row.title = q ? `last question: ${String(q).slice(0, 300)}` : '';
+      row.onclick = () => openTalk(c.id);
+      box.append(row);
+    }
+  }
+}
+const ageOf = (t) => { const m = Math.max(0, Math.round((Date.now() - (t || 0)) / 60000)); return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
 
 // ---------------------------------------------------------------- boot
 
