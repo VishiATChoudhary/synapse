@@ -9,6 +9,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { execFileSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '../..');
 const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-talk-app-')));
@@ -42,9 +43,17 @@ async function until(check, label, ms = 10000) {
 const js = (code) => win.webContents.executeJavaScript(code, true);
 const freePort = () => new Promise((resolve) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
 
+// app.exit skips before-quit, so the canvas server this test started is stopped by its port
+const stopServer = (port) => {
+  let pids = [];
+  try { pids = execFileSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).split(/\s+/).filter(Boolean); } catch {}
+  for (const pid of pids) try { process.kill(Number(pid), 'SIGKILL'); } catch {}
+};
+
+let port;
 (async () => {
   // never the live app's port or home: a canvas server of our own on a free port, answers by the fake claude
-  const port = await freePort();
+  port = await freePort();
   assert.notEqual(port, 4757);
   Object.assign(process.env, { SYNAPSE_HOME: state, SYNAPSE_APP_PORT: String(port), SYNAPSE_DEMO: '1', SYNAPSE_FAKE_REQUESTS: feed, SYNAPSE_REQUEST_POLL: '300', SYNAPSE_CLOUD: 'http://127.0.0.1:9', SYNAPSE_TALK_CLAUDE: path.join(root, 'test/fixtures/fake-claude.mjs'), SHELL: '/bin/zsh' });
   for (const key of Object.keys(process.env)) if (key.startsWith('SYNAPSE_SHOT') || key === 'SYNAPSE_DEBUG') delete process.env[key];
@@ -55,6 +64,10 @@ const freePort = () => new Promise((resolve) => { const s = net.createServer(); 
   win.webContents.on('console-message', (event) => { if (event.level === 'error') errors.push(event.message); });
   win.show();
   await until(() => js(`!!document.querySelector('#btn-canvas')`), 'top bar');
+  // not connected (no friends, not signed in): the canvas server waits until something needs it
+  await sleep(1500);
+  const listening = await new Promise((resolve) => { const s = net.connect(port, '127.0.0.1', () => { s.destroy(); resolve(true); }); s.on('error', () => resolve(false)); });
+  assert.equal(listening, false, 'no canvas server before the canvas or settings open');
 
   // the sidebar: an external row under the agent it asks
   await until(() => js(`!!document.querySelector('#tree .ext')`), 'external row in the sidebar');
@@ -106,5 +119,6 @@ const freePort = () => new Promise((resolve) => { const s = net.createServer(); 
 
   assert.deepEqual(errors.filter((e) => !/Security Warning/.test(e)), [], 'no renderer errors: ' + errors.join(' | '));
   console.log('agent talk app surfaces: ok');
+  stopServer(port);
   app.exit(0);
-})().catch((e) => { console.error(e); app.exit(1); });
+})().catch((e) => { console.error(e); stopServer(port); app.exit(1); });

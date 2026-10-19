@@ -11,6 +11,7 @@ import pty from 'node-pty';
 import { git, listChoices, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
 import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork } from '../lib.mjs';
 import { createEdge } from '../ops.mjs';
+import { isConnected } from '../remote.mjs';
 import { createUpdater, bundleOf, MANIFEST_URL } from './updater.mjs';
 
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
@@ -468,6 +469,12 @@ async function ensureCanvas() {
   for (let i = 0; i < 30; i++) { if (await canvasUp()) return `http://127.0.0.1:${CANVAS_PORT}/`; await new Promise((r) => setTimeout(r, 200)); }
   throw new Error('the Synapse canvas server did not start');
 }
+// The canvas server also syncs with friends and answers their agents' questions, so a connected machine (signed
+// in, or with friends) runs it from launch, not from the first canvas open. Others start it lazily as before.
+const TALK_CHECK = 30_000;
+function serveFriends() {
+  try { if (!canvasProc && isConnected()) ensureCanvas().catch(() => {}); } catch {}
+}
 
 // ---------------------------------------------------------------- window
 
@@ -501,6 +508,7 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow();
   pollRequests(); setInterval(pollRequests, REQUEST_POLL);
+  serveFriends(); setInterval(serveFriends, TALK_CHECK);
   if (UPDATES) { setTimeout(() => updater.check(), UPDATE_DELAY); setInterval(() => updater.check(), UPDATE_EVERY); }
   setInterval(() => { if (win) { const st = state(); win.webContents.send('state', st); notifyTalks(st.talks); pumpForks(); } }, 1000);
   if (process.env.SYNAPSE_SHOT) {
