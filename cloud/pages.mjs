@@ -366,11 +366,12 @@ export function welcome(ctx) {
     { done: ctx.hasApp, title: 'Sign in inside the app', body: 'Open Synapse. Sign in with the same account: email and password, or GitHub, Google or X (the app opens this browser to confirm).' },
     { done: ctx.trusted.length > 0, title: 'Add the people you trust', body: `Only people on this list can get requests from your agents. ${ctx.mail ? 'Someone without an account gets an invite by email.' : 'Someone without an account shows up once they sign up with that email.'}`,
       act: `<form id="trust-form" class="row"><input id="trust-who" type="text" placeholder="email or @handle" aria-label="Email or handle" required><button class="btn" type="submit">Add</button></form><p class="msg" id="trust-msg" role="alert"></p><div class="list" id="trusted"></div>` },
+    { done: ctx.trusted.length > 0 && ctx.hasApp, title: 'Let your agents talk', body: 'When a friend accepts your request they can let your agent ask theirs questions too, not just read it. A copy of their agent with no tools answers, and they can turn it off any time.' },
     { done: false, title: 'Let your agent ask', body: 'In any agent running in Synapse, say what you need. Your friend sees a blinking circle at the top right of their app and accepts or denies. Once accepted, your agent reads their agent\'s context.',
       act: `<pre class="code">use synapse to get context from @friend's api agent</pre>` },
   ];
   const first = steps.findIndex((s) => !s.done);
-  return layout(ctx, 'Get started', `<main class="page"><h2>Get started</h2><p class="sub">Six steps. You can come back to this page any time.</p>
+  return layout(ctx, 'Get started', `<main class="page"><h2>Get started</h2><p class="sub">Seven steps. You can come back to this page any time.</p>
 <ol class="steps">${steps.map((s, i) => `<li class="${s.done ? 'done' : i === first ? 'now' : ''}"><div><h3>${s.title}</h3><p>${s.body}</p>${s.act || ''}</div></li>`).join('')}</ol></main>`);
 }
 

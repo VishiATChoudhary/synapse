@@ -145,12 +145,14 @@ paste one, and remove friends.
   The canvas syncs every 3 seconds, and the prompt hook and `synapse read` sync once before they look.
   Run your own with `cd relay && RELAY_SECRET=... npm start`, and point Synapse at it with `SYNAPSE_RELAY`.
 
-## Ask a friend's agent
+## Agent talk
 
-A share can be set to **talk** (the edge popover on a share to a friend you connected through a synapse
-request). Their agent can then ask yours questions. A copy of your agent with no tools, forked from its
-saved conversation, answers from what it already knows, using your Claude account and usage. It cannot
-run commands or read files, and it is told not to share secrets.
+When someone adds you as a trusted person, the app shows "@x added you: Trust back / Ignore" and you get one
+email. Both of you must trust each other before requests work. When you accept a request, "Let their agent ask
+questions too" is ticked by default (`synapse accept <id> --no-talk` to leave it off), and you can flip it later
+with `synapse talk <agent> on|off` or the edge popover.
+
+Their agent can then ask yours questions:
 
 ```bash
 synapse ask api@sam "How does the session refresh work?"   # waits up to 90 s
@@ -158,9 +160,17 @@ synapse ask api@sam "And when does it expire?" --conversation <id>
 synapse end <conversation>
 ```
 
-Agents get the same as `synapse_ask` and `synapse_end`. Answers that miss the 90 s wait, or questions to a
-friend who is offline, come back through `synapse_inbox`, each delivered once. Limits: questions up to
-4000 characters, answers up to 8000, 60 questions an hour per friend, 20 turns per conversation, and a
+Agents get the same as `synapse_ask` and `synapse_end`. On a read-only share, `ask` returns status `requested`
+and the owner gets Allow / Not now. Answers that miss the 90 s wait, or questions to a friend who is offline,
+come back through `synapse_inbox`, each delivered once.
+
+The answer comes from a copy of your agent with no tools: a native fork for Claude, and for Codex, Gemini,
+OpenCode and Cursor a tool-less Claude that reads the conversation. Copilot and Amp answer "unavailable" for
+now. It cannot run commands or read files, and it is told not to share secrets. Answers use your Claude usage.
+Settings has questions per hour per person (default 60), the answering model (agent, opus, sonnet or haiku)
+and usage for today and this week. You see "asked by @x" forks and a thread panel with End, Switch to sync and
+Disconnect. Turn on "Open Synapse at login" so questions get answered while you work (the app opens with its
+window). Limits: questions up to 4000 characters, answers up to 8000, 20 turns per conversation, and a
 conversation ends after 30 minutes of silence.
 
 ## Let agents do it themselves
@@ -221,7 +231,7 @@ Settings: `PORT`, `SYNAPSE_HOME` (state folder, default `~/.synapse`), `SYNAPSE_
 ## Desktop app
 
 `npm install && npm run app:install` packages the checkout into `Synapse.app` (Apple Silicon), copies it to
-`/Applications` and opens it. That build is ad-hoc signed: it runs on the machine that built it, and on another
+`/Applications` and opens it. Settings has "Open Synapse at login" (off until you turn it on) and the agent talk limits. That build is ad-hoc signed: it runs on the machine that built it, and on another
 Mac only after right-click → Open (or `xattr -dr com.apple.quarantine Synapse.app`).
 
 `npm run app:build` (and `npm run release`) build into `dist/` together with a `.dmg`, signed with the hardened

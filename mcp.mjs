@@ -18,7 +18,7 @@ The user links agents on the Synapse canvas, or you can link yourself with synap
   synapse_requests shows the answer. Once accepted, read it with synapse_read name@owner.
 - If their agent is shared for talk, synapse_ask name@owner puts a question to it and waits for the answer;
   later answers arrive in synapse_inbox. synapse_end closes the conversation. If it is shared for reading only,
-  synapse_ask asks its owner to allow questions (status "requested"); a note arrives in synapse_inbox once they do.`;
+  synapse_ask asks its owner to allow questions (status "requested", not an error: do not retry); a note arrives in synapse_inbox once they allow it.`;
 
 const agentArg = { type: 'string', description: 'Agent name or id (prefix is fine)' };
 const TOOLS = [
