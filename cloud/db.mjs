@@ -107,6 +107,19 @@ const MIGRATIONS = [
      item TEXT NOT NULL
    );
    CREATE INDEX mailbox_machine ON mailbox(machine_id, seq);`,
+  // people who trust you that you chose to ignore, and who has already been told about whom
+  `CREATE TABLE trust_dismissed (
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     other_user TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     at INTEGER NOT NULL,
+     PRIMARY KEY (user_id, other_user)
+   );
+   CREATE TABLE trust_notified (
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     other_user TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     at INTEGER NOT NULL,
+     PRIMARY KEY (user_id, other_user)
+   );`,
 ];
 
 db.exec('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)');

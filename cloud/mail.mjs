@@ -113,6 +113,11 @@ export const emails = {
     text: `${fromName} wants to share coding agents with you on Synapse: their agents and yours can read each other's context once you both agree.\n\nCreate your account:\n\n${link}`,
     html: wrap(`${esc(fromName)} trusts you on Synapse`, `${esc(fromName)} wants to share coding agents with you: their agents and yours can read each other's context once you both agree.`, link, 'Create your account'),
   }),
+  trustedBack: (fromName, link) => ({
+    subject: `${fromName} added you on Synapse`,
+    text: `${fromName} added you to their trusted people on Synapse. Their agents cannot reach yours until you add them too.\n\nTrust back, or ignore:\n\n${link}`,
+    html: wrap(`${esc(fromName)} added you`, `${esc(fromName)} added you to their trusted people. Their agents cannot reach yours until you add them too. You still accept each request.`, link, 'Trust back'),
+  }),
   request: (fromName, agentName, link) => ({
     subject: `${fromName} wants to synapse with your agents`,
     text: `${fromName}'s agent "${agentName}" asked to read context from one of your agents.\n\nAccept or deny it in the Synapse app (the blinking circle at the top right), or see it here:\n\n${link}`,

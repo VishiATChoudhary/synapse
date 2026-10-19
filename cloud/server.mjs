@@ -53,7 +53,7 @@ export function verify(token, kind) {
   } catch { return null; }
 }
 const pairOf = (a, b) => sign({ k: 'pair', m: [a, b].sort() });
-const CLOUD_ONLY = new Set(['request', 'revoked']);
+const CLOUD_ONLY = new Set(['request', 'revoked', 'trusted']);
 const pairCovers =(token, a, b) => { const p = verify(token, 'pair'); return !!p && p.m.includes(a) && p.m.includes(b) && a !== b; };
 
 // passwords: scrypt with a per-user salt
@@ -197,6 +197,27 @@ function trustedList(userId) {
       ? { id: r.id, handle: r.handle, name: r.name, avatar: r.avatar || null, email: r.email, pending: false,
           trustsYou: !!get('SELECT 1 FROM trusted WHERE user_id = ? AND trusted_user = ?', r.uid, userId) }
       : { id: r.id, handle: null, name: r.invited, avatar: null, email: r.invited, pending: true, trustsYou: false });
+}
+
+// People who trust you and you do not trust back, minus the ones you ignored.
+function incomingTrust(userId) {
+  return all(`SELECT t.id, t.created_at AS since, u.handle, u.name, u.avatar FROM trusted t JOIN users u ON u.id = t.user_id
+              WHERE t.trusted_user = ?
+                AND NOT EXISTS (SELECT 1 FROM trusted b WHERE b.user_id = ? AND b.trusted_user = t.user_id)
+                AND NOT EXISTS (SELECT 1 FROM trust_dismissed d WHERE d.user_id = ? AND d.other_user = t.user_id)
+              ORDER BY t.created_at DESC`, userId, userId, userId)
+    .map((r) => ({ id: r.id, handle: r.handle, name: r.name, avatar: r.avatar || null, since: r.since }));
+}
+
+// `from` just added `to`. If `to` does not trust them back, tell every machine and the inbox, once per 30 days per pair.
+async function tellTrusted(from, to) {
+  if (trusts(to.id, from.id)) return;
+  if (get('SELECT 1 FROM trust_dismissed WHERE user_id = ? AND other_user = ?', to.id, from.id)) return;
+  if (get('SELECT 1 FROM trust_notified WHERE user_id = ? AND other_user = ? AND at > ?', to.id, from.id, now() - 30 * DAY)) return;
+  run('INSERT OR REPLACE INTO trust_notified (user_id, other_user, at) VALUES (?, ?, ?)', to.id, from.id, now());
+  const who = { id: from.id, handle: from.handle, name: from.name, avatar: from.avatar || null };
+  for (const m of all('SELECT id FROM machines WHERE user_id = ?', to.id)) deliver(m.id, { type: 'trusted', from: who });
+  if (to.email && to.email_verified) await mail(to.email, emails.trustedBack(from.name, `${PUBLIC_URL}/settings#trust`));
 }
 
 const trusts = (userId, otherId) => !!get('SELECT 1 FROM trusted WHERE user_id = ? AND trusted_user = ?', userId, otherId);
@@ -469,6 +490,7 @@ const routes = {
     if (hit.user) {
       if (!get('SELECT 1 FROM trusted WHERE user_id = ? AND trusted_user = ?', user.id, hit.user.id)) {
         run('INSERT INTO trusted (id, user_id, trusted_user, created_at) VALUES (?, ?, ?, ?)', `t_${rid(9)}`, user.id, hit.user.id, now());
+        await tellTrusted(user, hit.user);
       }
     } else if (hit.email) {
       if (!get('SELECT 1 FROM trusted WHERE user_id = ? AND email = ? AND trusted_user IS NULL', user.id, hit.email)) {
@@ -479,6 +501,14 @@ const routes = {
     } else fail(404, `Nobody on Synapse is called @${hit.handle}. Add them by email instead: they get an invite.`);
     const person = trustedList(user.id).find((p) => (hit.user ? p.handle === hit.user.handle : p.email === hit.email));
     return json(res, 200, { person, emailed: !hit.user && mailConfigured() });
+  },
+  'GET /v1/trusted/incoming': async (req, res) => json(res, 200, { incoming: incomingTrust(must(req).user.id) }),
+  'POST /v1/trusted/incoming/:id/dismiss': async (req, res, b, params) => {
+    const { user } = must(req);
+    const row = get('SELECT user_id FROM trusted WHERE id = ? AND trusted_user = ?', params.id, user.id);
+    if (!row) fail(404, 'No such person.');
+    run('INSERT OR REPLACE INTO trust_dismissed (user_id, other_user, at) VALUES (?, ?, ?)', user.id, row.user_id, now());
+    return json(res, 200, { ok: true });
   },
   'DELETE /v1/trusted/:id': async (req, res, b, params) => {
     const { user } = must(req);

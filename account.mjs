@@ -86,6 +86,8 @@ export const resendVerification = () => api('POST', '/v1/auth/resend-verificatio
 
 export const trusted = () => api('GET', '/v1/trusted').then((r) => r.trusted);
 export const trust = (who) => api('POST', '/v1/trusted', { who }).then((r) => r.person);
+export const incomingTrust = () => api('GET', '/v1/trusted/incoming').then((r) => r.incoming);
+export const dismissTrust = (id) => api('POST', `/v1/trusted/incoming/${encodeURIComponent(id)}/dismiss`, {});
 export async function untrust(id) {
   // an id, or a handle / email / name from the list
   const q = String(id || '').replace(/^@/, '').toLowerCase();

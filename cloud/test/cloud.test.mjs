@@ -388,7 +388,7 @@ test('only someone who trusts you can ask you; ending trust revokes what was sha
   // Ben removes Ava: the share is revoked, both machines hear it, and the mailbox refuses them
   await call(`/v1/trusted/${again.id}`, { token: ben.json.token, method: 'DELETE' });
   const toAva = (await call('/v1/poll', { token: avaM.token, body: {} })).json.items;
-  const toBen = (await call('/v1/poll', { token: benM.token, body: {} })).json.items;
+  const toBen = (await call('/v1/poll', { token: benM.token, body: {} })).json.items.filter((i) => i.type !== 'trusted'); // Ben also holds Ava's "added you" note
   assert.deepEqual(toAva.map((i) => [i.type, i.id, i.machine]), [['revoked', r2.id, benM.machineId]]);
   assert.deepEqual(toBen.map((i) => [i.type, i.id, i.machine]), [['revoked', r2.id, avaM.machineId]]);
   assert.equal((await send(benM, avaM, [{ type: 'context', agent: 'ben-1', messages: [] }])).status, 403);
@@ -469,4 +469,68 @@ test('the database survives a restart', async () => {
     const r = await fetch(`http://127.0.0.1:${port}/v1/me`, { headers: { authorization: `Bearer ${before.json.token}` } });
     assert.equal((await r.json()).user.handle, 'kim');
   } finally { p2.kill(); }
+});
+
+test('trust back: the person you added hears about it once, sees you under incoming, and can trust back or ignore', async () => {
+  const zed = await signup('zed@example.com', 'Zed <b>Z</b>');
+  const yui = await signup('yui@example.com', 'Yui');
+  const xan = await signup('xan@example.com', 'Xan');
+  for (const who of ['yui', 'xan']) {
+    const l = linkIn(await outbox(), `${who}@example.com`, 'Confirm');
+    await call('/v1/auth/verify', { body: { token: l.searchParams.get('token') } });
+  }
+  const yuiM = await machine(yui.json.token), xanM = await machine(xan.json.token);
+  const mails = async (to) => (await outbox()).filter((m) => m.to === to && m.subject.includes('added you on Synapse'));
+
+  assert.deepEqual((await call('/v1/trusted/incoming', { token: yui.json.token })).json.incoming, []);
+  assert.equal((await call('/v1/trusted/incoming')).status, 401);
+
+  // Zed adds Yui and Xan: each gets one mailbox item and one email
+  const zedYui = (await call('/v1/trusted', { token: zed.json.token, body: { who: '@yui' } })).json.person;
+  await call('/v1/trusted', { token: zed.json.token, body: { who: '@xan' } });
+  const items = (await call('/v1/poll', { token: yuiM.token, body: {} })).json.items;
+  assert.equal(items.length, 1);
+  assert.equal(items[0].type, 'trusted');
+  assert.equal(items[0].from.handle, 'zed');
+  assert.equal(items[0].from.name, 'Zed <b>Z</b>');
+  const m = await mails('yui@example.com');
+  assert.equal(m.length, 1);
+  assert.ok(m[0].subject.includes('Zed <b>Z</b> added you'));
+  assert.ok(m[0].text.includes('/settings#trust'));
+  const { emails } = await import('../mail.mjs');
+  assert.ok(!emails.trustedBack('Zed <b>Z</b>', 'https://x.example').html.includes('<b>Z</b>'), 'friend name is escaped in the email');
+
+  // adding again (remove and re-add) does not repeat the item or the mail
+  await call(`/v1/trusted/${zedYui.id}`, { token: zed.json.token, method: 'DELETE' });
+  await call('/v1/trusted', { token: zed.json.token, body: { who: '@yui' } });
+  assert.equal((await call('/v1/poll', { token: yuiM.token, body: {} })).json.items.length, 0);
+  assert.equal((await mails('yui@example.com')).length, 1);
+
+  // incoming lists the one-way truster; trusting back removes them (and sends nothing back)
+  const inc = (await call('/v1/trusted/incoming', { token: yui.json.token })).json.incoming;
+  assert.equal(inc.length, 1);
+  assert.equal(inc[0].handle, 'zed');
+  assert.ok(inc[0].id && inc[0].since);
+  await call('/v1/trusted', { token: yui.json.token, body: { who: '@zed' } });
+  assert.deepEqual((await call('/v1/trusted/incoming', { token: yui.json.token })).json.incoming, []);
+  assert.equal((await call('/v1/poll', { token: (await machine(zed.json.token)).token, body: {} })).json.items.filter((i) => i.type === 'trusted').length, 0, 'trusting back does not notify');
+
+  // dismiss hides them, only for the dismisser
+  assert.equal((await call('/v1/trusted/incoming', { token: xan.json.token })).json.incoming.length, 1);
+  const id = (await call('/v1/trusted/incoming', { token: xan.json.token })).json.incoming[0].id;
+  assert.equal((await call(`/v1/trusted/incoming/${id}/dismiss`, { token: xan.json.token, body: {} })).json.ok, true);
+  assert.deepEqual((await call('/v1/trusted/incoming', { token: xan.json.token })).json.incoming, []);
+
+  // peers cannot forge it
+  const pair = (await call('/v1/invite', { token: yuiM.token, body: {} })).json.code;
+  const joined = await call('/v1/join', { token: xanM.token, body: { code: pair } });
+  await call('/v1/poll', { token: yuiM.token, body: {} });
+  await call('/v1/send', { token: xanM.token, body: { to: yuiM.machineId, pair: joined.json.pair, items: [{ type: 'trusted', from: { handle: 'evil' } }, { type: 'context', agent: 'a', messages: [] }] } });
+  assert.deepEqual((await call('/v1/poll', { token: yuiM.token, body: {} })).json.items.map((i) => i.type), ['context']);
+
+  // the settings page has the section
+  const cookie = (await call('/v1/auth/login', { body: { email: 'yui@example.com', password: 'correct horse' } })).headers.get('set-cookie').split(';')[0];
+  const page = await call('/settings', { cookie });
+  assert.equal(page.status, 200);
+  assert.ok(page.text.includes('id="trust"') && page.text.includes('People who trust you'));
 });

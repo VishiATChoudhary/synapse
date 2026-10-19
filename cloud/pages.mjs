@@ -168,11 +168,29 @@ async function renderTrusted() {
       '<button class="btn small quiet" data-del="' + esc(p.id) + '" aria-label="Remove ' + esc(p.name) + '">remove</button></div>').join('') : '<p class="item meta">Nobody yet.</p>';
   } catch (e) { box.innerHTML = '<p class="msg err">' + esc(e.message) + '</p>'; }
 }
+async function renderIncoming() {
+  const box = $('#incoming'); if (!box) return;
+  try {
+    const { incoming } = await api('/v1/trusted/incoming');
+    $('#trust').hidden = !incoming.length;
+    box.innerHTML = incoming.map((p) => '<div class="item">' + avatar(p) + '<div class="grow"><b>' + esc(p.name) + '</b> <a class="meta" href="/u/' + esc(p.handle) + '">@' + esc(p.handle) + '</a></div>' +
+      '<button class="btn small" data-back="' + esc(p.handle) + '">Trust back</button> <button class="btn small quiet" data-ignore="' + esc(p.id) + '">Ignore</button></div>').join('');
+  } catch (e) { box.innerHTML = '<p class="msg err">' + esc(e.message) + '</p>'; }
+}
 function avatar(p) {
   return p.avatar ? '<img class="av" src="' + esc(p.avatar) + '" alt="">' : '<span class="av">' + esc((p.name || '?').slice(0, 1).toUpperCase()) + '</span>';
 }
 if ($('#trusted')) {
   renderTrusted();
+  renderIncoming();
+  $('#incoming')?.addEventListener('click', async (ev) => {
+    const b = ev.target.closest('[data-back],[data-ignore]'); if (!b) return;
+    try {
+      if (b.dataset.back) await api('/v1/trusted', { who: '@' + b.dataset.back });
+      else await api('/v1/trusted/incoming/' + b.dataset.ignore + '/dismiss', {});
+    } catch (e) { alert(e.message); }
+    renderIncoming(); renderTrusted();
+  });
   $('#trust-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const inp = $('#trust-who'), msg = $('#trust-msg');
@@ -367,6 +385,7 @@ ${ctx.q.error ? `<p class="note err">${esc(ctx.q.error)}</p>` : ''}${ctx.q.linke
 <button class="btn wide" type="submit" style="width:auto">Save profile</button><p class="msg" id="profile-msg" role="alert"></p></form></section>
 <section class="card"><h3>Email</h3><div class="item" style="border:0"><span class="grow" id="p-email"></span><span id="p-verified"></span></div><p class="msg" role="alert"></p></section>
 <section class="card" id="requests-card"><h3>Requests</h3><p id="requests-note" hidden>Accept requests in the Synapse app: it asks which of your agents to share.</p><div class="list" id="requests"></div></section>
+<section class="card" id="trust" hidden><h3>People who trust you</h3><p>They added you, but their agents cannot reach yours until you add them too.</p><div class="list" id="incoming"></div></section>
 <section class="card"><h3>Trusted people</h3><p>People on this list can ask your agents for context. Trust alone shares nothing: you accept or deny each request and pick which agents to share. Removing someone ends what you shared with them.</p>
 <form id="trust-form" class="row"><input id="trust-who" type="text" placeholder="email or @handle" aria-label="Email or handle" required><button class="btn" type="submit">Add</button></form>
 <p class="msg" id="trust-msg" role="alert"></p><div class="list" id="trusted"></div></section>
