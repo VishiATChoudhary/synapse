@@ -7,6 +7,7 @@
   "type": "module",
   "scripts": {
     "start": "electron .",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true",
     "test:worktrees": "node tests/worktrees.mjs && node tests/worktrees-ui.cjs",
     "test:navigation": "node tests/navigation.cjs",
     "test:keys": "electron tests/keys.cjs",

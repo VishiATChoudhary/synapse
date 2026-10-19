@@ -24,6 +24,13 @@ const run = (cmd, a, env = {}) => {
 };
 const out = (cmd, a) => { try { return execFileSync(cmd, a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return ''; } };
 
+// node-pty's prebuilt spawn-helper ships without the execute bit, and then no terminal can start (posix_spawnp failed)
+const helper = path.join(ROOT, 'app', 'node_modules', 'node-pty', 'prebuilds', 'darwin-arm64', 'spawn-helper');
+if (fs.existsSync(helper) && !(fs.statSync(helper).mode & 0o111)) {
+  console.error(`build-app: ${path.relative(ROOT, helper)} is not executable; run \`npm install\` in app/ (its postinstall fixes it)`);
+  process.exit(1);
+}
+
 const identity = out('/usr/bin/security', ['find-identity', '-v', '-p', 'codesigning']).split('\n').find((l) => l.includes('Developer ID Application'));
 
 if (args.includes('--ad-hoc') || !identity) {
