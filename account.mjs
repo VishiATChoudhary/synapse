@@ -87,7 +87,7 @@ export const resendVerification = () => api('POST', '/v1/auth/resend-verificatio
 export const trusted = () => api('GET', '/v1/trusted').then((r) => r.trusted);
 export const trust = (who) => api('POST', '/v1/trusted', { who }).then((r) => r.person);
 export const incomingTrust = () => api('GET', '/v1/trusted/incoming').then((r) => r.incoming);
-export const dismissTrust = (id) => api('POST', `/v1/trusted/incoming/${encodeURIComponent(id)}/dismiss`, {});
+export const dismissTrust = (id) => api('POST', `/v1/trusted/incoming/${encodeURIComponent(id)}/dismiss`, {}).then(async (r) => { await requests().catch(() => {}); return r; });
 export async function untrust(id) {
   // an id, or a handle / email / name from the list
   const q = String(id || '').replace(/^@/, '').toLowerCase();
@@ -98,10 +98,15 @@ export async function untrust(id) {
   return out;
 }
 
+// Synapse requests, plus the people who added you and you have not trusted back (incomingTrust), cached for
+// the app and the agents. An older cloud without the incoming route keeps whatever the mailbox told us.
 export async function requests() {
-  const { incoming = [], outgoing = [] } = await api('GET', '/v1/requests');
-  writeJSON(FILES.requests, { incoming, outgoing, t: Date.now() });
-  return { incoming, outgoing };
+  const [{ incoming = [], outgoing = [] }, incomingTrust] = await Promise.all([
+    api('GET', '/v1/requests'),
+    api('GET', '/v1/trusted/incoming').then((r) => r.incoming || [], () => readJSON(FILES.requests, {})?.incomingTrust || []),
+  ]);
+  writeJSON(FILES.requests, { incoming, outgoing, incomingTrust, t: Date.now() });
+  return { incoming, outgoing, incomingTrust };
 }
 
 const agentBrief = (a) => ({ id: a.id, name: a.name, kind: a.kind, project: a.cwd ? projectOf(a.cwd).label : 'project' });

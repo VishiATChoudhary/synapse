@@ -343,6 +343,8 @@ async function pull(c, timeout) {
     if (!it || typeof it !== 'object') continue; // one bad item must not stop the rest
     // a synapse request was answered (from the cloud, not from a friend's machine)
     if (it.type === 'request' && typeof it.id === 'string') { noteRequest(it); continue; }
+    // someone added this user as a trusted person (from the cloud only: friends cannot send it)
+    if (it.type === 'trusted') { if (it.from && typeof it.from === 'object') noteTrusted(it.from); continue; }
     // trust ended: the cloud tells both machines to drop the pairing (friends cannot send this, it carries no pair)
     if (it.type === 'revoked' && !it.pair) {
       if (typeof it.id === 'string') noteRequest({ id: it.id, status: 'revoked' });
@@ -414,6 +416,18 @@ function noteRequest(it) {
   for (const r of [...(cache.incoming || []), ...(cache.outgoing || [])]) {
     if (r.id === it.id) { r.status = status; if (Array.isArray(it.shared)) r.shared = it.shared; r.decidedAt = Date.now(); }
   }
+  cache.stale = true;
+  writeJSON(FILES.requests, cache);
+}
+
+// Until the next requests refresh brings the cloud's list (with the id Ignore needs), show who added you.
+function noteTrusted(from) {
+  const who = { userId: clean(from.id, 64), handle: clean(from.handle, 24), name: clean(from.name, 40), avatar: null, since: Date.now() };
+  if (!who.handle && !who.name) return;
+  logEvent({ type: 'trusted-you', name: who.name || who.handle });
+  const cache = readJSON(FILES.requests, null) || { incoming: [], outgoing: [] };
+  const list = (cache.incomingTrust ||= []);
+  if (!list.some((p) => (who.handle && p.handle === who.handle) || (who.userId && p.userId === who.userId))) list.unshift(who);
   cache.stale = true;
   writeJSON(FILES.requests, cache);
 }

@@ -89,7 +89,12 @@ test('a request needs the person in your trusted list', { skip }, async () => {
   assert.equal(people.length, 1);
   // and bob has to trust alice back before she can ask him
   await assert.rejects(cli(HOME_A, ['request', BOB, '--target', 'ml eval'], { SYNAPSE_AGENT: 'demo-web-e2e' }), /has not added you to their trusted people/);
+  // bob's app and agents see that alice added him, cached with the requests
+  const { incomingTrust } = await inHome(HOME_B, 'return account.requests();');
+  assert.deepEqual(incomingTrust.map((p) => p.name), ['alice']);
+  assert.deepEqual(readJSON(path.join(HOME_B, 'requests.json'), {}).incomingTrust.map((p) => p.name), ['alice'], 'cached for the app');
   await cliJSON(HOME_B, ['trust', ALICE]);
+  assert.deepEqual((await inHome(HOME_B, 'return account.requests();')).incomingTrust, [], 'trusted back: no longer incoming');
 });
 
 test('alice\'s agent asks, bob accepts, and his agent\'s context reaches hers', { skip }, async () => {

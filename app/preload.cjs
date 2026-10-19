@@ -53,7 +53,8 @@ contextBridge.exposeInMainWorld('synapse', {
     openWeb: (path) => call('account:web', { path }),
     onChange: (fn) => on('account', fn),
   },
-  people: { list: () => call('people:list'), add: (who) => call('people:add', { who }), remove: (id) => call('people:remove', { id }) },
+  people: { list: () => call('people:list'), add: (who) => call('people:add', { who }), remove: (id) => call('people:remove', { id }),
+    trustBack: (id, handle) => call('trust:back', { id, handle }), ignore: (id) => call('trust:ignore', { id }) },
   requests: {
     list: () => call('requests:list'),
     agents: () => call('requests:agents'),

@@ -562,25 +562,25 @@ let accountMod = null;
 const acct = async () => (accountMod ||= await import('../account.mjs'));
 const DEVICE_LABEL = `Synapse on ${os.hostname().replace(/\.local$/, '')}`;
 const REQUEST_POLL = Number(process.env.SYNAPSE_REQUEST_POLL || 8000);
-// SYNAPSE_FAKE_REQUESTS=<file.json> drives the requests feed from a file ({ incoming, outgoing, links }),
-// for screenshots and the circle test; accept and deny edit the file the way the cloud would.
+// SYNAPSE_FAKE_REQUESTS=<file.json> drives the requests feed from a file ({ incoming, outgoing, links, incomingTrust }),
+// for screenshots and the circle tests; accept, deny, trust back and ignore edit the file the way the cloud would.
 const FAKE = process.env.SYNAPSE_FAKE_REQUESTS || '';
-const fake = () => ({ incoming: [], outgoing: [], links: [], ...readJSON(FAKE, {}) });
+const fake = () => ({ incoming: [], outgoing: [], links: [], incomingTrust: [], ...readJSON(FAKE, {}) });
 
-let feed = { incoming: [], outgoing: [], links: [] };
+let feed = { incoming: [], outgoing: [], links: [], incomingTrust: [] };
 let notified = null; // ids of incoming requests already announced; null until the first poll so old ones stay quiet
 async function pollRequests() {
   let next;
   if (FAKE) next = fake();
   else {
     const a = await acct().catch(() => null);
-    if (!a?.account()) next = { incoming: [], outgoing: [], links: [] };
+    if (!a?.account()) next = { incoming: [], outgoing: [], links: [], incomingTrust: [] };
     else {
       let r;
       try { r = await a.requests(); } catch { return; } // offline: keep showing what we had
       let links = [];
       try { links = a.externalLinks(); } catch {}
-      next = { incoming: r.incoming || [], outgoing: r.outgoing || [], links };
+      next = { incoming: r.incoming || [], outgoing: r.outgoing || [], links, incomingTrust: r.incomingTrust || [] };
     }
   }
   feed = next;
@@ -594,7 +594,24 @@ async function pollRequests() {
     }
   }
   notified = new Set(pending.map((r) => r.id));
+  notifyTrust(feed.incomingTrust || []);
   win?.webContents.send('requests', feed);
+}
+// Someone added me as a trusted person: one notification per person, ever (remembered in app.json), not one per poll.
+const trustKey = (p) => (p.handle ? `@${p.handle}` : p.userId || p.id || '');
+function notifyTrust(list) {
+  const c = config(), seen = new Set(c.trustNotified || []);
+  const fresh = list.filter((p) => trustKey(p) && !seen.has(trustKey(p)));
+  if (!fresh.length) return;
+  for (const p of fresh) seen.add(trustKey(p));
+  c.trustNotified = [...seen].slice(-500);
+  writeJSON(FILES.app, c);
+  if (!Notification.isSupported() || process.env.SYNAPSE_SHOT) return;
+  for (const p of fresh) {
+    const n = new Notification({ title: 'Synapse', body: `${p.handle ? `@${p.handle}` : p.name || 'Someone'} added you as a trusted person. Trust them back?` });
+    n.on('click', () => { if (!win) return; win.show(); win.focus(); win.webContents.send('requests:open'); });
+    n.show();
+  }
 }
 const accountChanged = async () => { const a = await acct(); win?.webContents.send('account', a.account()?.user || null); pollRequests(); };
 
@@ -729,7 +746,22 @@ handle('account:forgot', async ({ email }) => (await acct()).forgot(email));
 handle('account:resend', async () => (await acct()).resendVerification());
 handle('account:web', async ({ path: p }) => { if (!String(p || '').startsWith('/')) throw new Error('bad path'); shell.openExternal((await acct()).cloudUrl().replace(/\/+$/, '') + p); });
 handle('people:list', async () => (FAKE ? { trusted: fake().people || [] } : (await acct()).trusted()));
-handle('people:add', async ({ who }) => (await acct()).trust(who));
+handle('people:add', async ({ who }) => { const out = await (await acct()).trust(who); pollRequests(); return out; });
+// someone added me: trust them back, or ignore them (the cloud remembers and stops asking)
+handle('trust:back', async ({ id, handle: h }) => {
+  if (!h) throw new Error('this person has no handle yet, try again in a moment');
+  let out = null;
+  if (FAKE) { const f = fake(), p = f.incomingTrust.find((x) => x.id === id || x.handle === h); f.incomingTrust = f.incomingTrust.filter((x) => x !== p); (f.people ||= []).push({ id: `p-${id}`, handle: h, name: p?.name || h, trustsYou: true }); writeJSON(FAKE, f); }
+  else out = await (await acct()).trust(h);
+  await pollRequests();
+  return out;
+});
+handle('trust:ignore', async ({ id }) => {
+  if (!id) throw new Error('still loading this person, try again in a moment');
+  if (FAKE) { const f = fake(); f.incomingTrust = f.incomingTrust.filter((x) => x.id !== id); (f.dismissed ||= []).push(id); writeJSON(FAKE, f); }
+  else await (await acct()).dismissTrust(id);
+  await pollRequests();
+});
 handle('people:remove', async ({ id }) => (await acct()).untrust(id));
 handle('requests:list', () => feed);
 handle('requests:agents', () => localAgentList());

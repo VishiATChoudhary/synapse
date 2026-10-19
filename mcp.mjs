@@ -45,7 +45,7 @@ const TOOLS = [
   { name: 'synapse_end', description: "End a conversation with a friend's agent.",
     inputSchema: { type: 'object', properties: { conversation: { type: 'string' } }, required: ['conversation'] },
     run: (me, a) => ops.endTalk(me, a.conversation) },
-  { name: 'synapse_people', description: "List the user's trusted people (Synapse accounts you can send a synapse request to, once they trust the user back).",
+  { name: 'synapse_people', description: "List the user's trusted people (Synapse accounts you can send a synapse request to once trustsYou is true), and addedYou: people who trust the user but the user has not trusted back.",
     inputSchema: { type: 'object', properties: {} }, run: () => people() },
   { name: 'synapse_request', description: "Ask a trusted person to share one of their agents' context with you. They accept or deny in their Synapse app.",
     inputSchema: { type: 'object', properties: {
@@ -66,10 +66,13 @@ const TOOLS = [
 
 async function people() {
   const online = new Map(remote.friends().friends.map((f) => [f.name.toLowerCase(), f]));
-  return (await account.trusted()).map((p) => {
+  const [list, incoming] = await Promise.all([account.trusted(), account.incomingTrust().catch(() => [])]);
+  const trusted = list.map((p) => {
     const f = online.get(String(p.name || '').toLowerCase()) || online.get(String(p.handle || '').toLowerCase());
-    return { handle: p.handle, name: p.name, ...(p.pending ? { pending: 'invited, no account yet' } : {}), connected: !!f, online: !!f?.online, agentsSharedWithYou: f?.sharingWithYou || 0 };
+    return { handle: p.handle, name: p.name, ...(p.pending ? { pending: 'invited, no account yet' } : {}), trustsYou: !!p.trustsYou, connected: !!f, online: !!f?.online, agentsSharedWithYou: f?.sharingWithYou || 0 };
   });
+  const addedYou = incoming.map((p) => ({ handle: p.handle, name: p.name }));
+  return { trusted, addedYou, ...(addedYou.length ? { note: 'People in addedYou trust the user. The user can trust them back in the Synapse app (or: synapse trust <handle>); ask before doing it for them.' } : {}) };
 }
 
 let me = null;

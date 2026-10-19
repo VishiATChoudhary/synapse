@@ -1694,8 +1694,10 @@ synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { 
 
 // Signed in through Synapse Cloud, agents can ask trusted people for context. Their requests arrive as a
 // blinking circle on "synapse" at the top right; accepted links turn it green, hovering lists them.
-const ACC = { user: null, feed: { incoming: [], outgoing: [], links: [] }, sticky: false, agents: [], choice: {} };
+// People who added you as trusted, and you have not trusted back, blink it too.
+const ACC = { user: null, feed: { incoming: [], outgoing: [], links: [], incomingTrust: [] }, sticky: false, agents: [], choice: {} };
 const pendingRequests = () => (ACC.feed.incoming || []).filter((r) => r.status === 'pending');
+const pendingTrust = () => ACC.feed.incomingTrust || [];
 const personName = (p) => p?.name || (p?.handle ? `@${p.handle}` : p?.email) || 'someone';
 const initials = (u) => (u?.name || u?.handle || u?.email || '?').split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 function avatar(u, cls = 'av') {
@@ -1714,11 +1716,11 @@ function renderMe() {
 }
 
 function renderDot() {
-  const dot = $('#syn-dot'), p = pendingRequests().length, links = (ACC.feed.links || []).length, talks = (M.talks || []).length;
-  dot.hidden = !p && !links && !talks;
-  dot.className = p ? 'blink' : links || talks ? 'live' : '';
+  const dot = $('#syn-dot'), p = pendingRequests().length, t = pendingTrust().length, links = (ACC.feed.links || []).length, talks = (M.talks || []).length;
+  dot.hidden = !p && !t && !links && !talks;
+  dot.className = p || t ? 'blink' : links || talks ? 'live' : '';
   $('#btn-canvas .glyph').hidden = !dot.hidden;
-  dot.setAttribute('aria-label', p ? `${p} synapse request${p > 1 ? 's' : ''}` : links ? `${links} synapsed external agent${links > 1 ? 's' : ''}` : `${talks} open conversation${talks > 1 ? 's' : ''}`);
+  dot.setAttribute('aria-label', p ? `${p} synapse request${p > 1 ? 's' : ''}` : t ? `${t} ${t > 1 ? 'people' : 'person'} added you` : links ? `${links} synapsed external agent${links > 1 ? 's' : ''}` : `${talks} open conversation${talks > 1 ? 's' : ''}`);
   if (dot.hidden) closePop(); else if (!$('#syn-pop').hidden) renderPop();
 }
 
@@ -1750,10 +1752,34 @@ function bestAgent(r) {
   return best;
 }
 
+// "@x added you": Trust back adds them to my trusted people, Ignore tells the cloud to stop asking.
+// Used in the popover and in settings; `done` redraws whatever holds the row.
+function trustRow(p, done) {
+  const box = el('div', 'req trust-in');
+  const who = el('div', 'req-who');
+  who.append(avatar(p), el('b', '', p.handle ? `@${p.handle}` : personName(p)), el('span', '', ' added you'));
+  if (p.handle && p.name) who.append(el('span', 'h', p.name));
+  box.append(who, el('div', 'req-what', 'Trust them back to let your agents ask each other for context.'));
+  const row = el('div', 'req-row'), no = el('button', 'btn', 'Ignore'), yes = el('button', 'btn sig', 'Trust back');
+  const act = async (fn, msg) => {
+    no.disabled = yes.disabled = true;
+    try { await fn(); toast(msg); done?.(); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
+  };
+  no.onclick = () => act(() => synapse.people.ignore(p.id), `ignored ${personName(p)}`);
+  yes.onclick = () => act(() => synapse.people.trustBack(p.id, p.handle), `${personName(p)} is trusted`);
+  row.append(el('span', 'req-gap'), no, yes);
+  box.append(row);
+  return box;
+}
+
 function renderPop() {
   const pop = $('#syn-pop'), dot = $('#syn-dot');
   pop.replaceChildren();
-  const reqs = pendingRequests(), links = ACC.feed.links || [];
+  const reqs = pendingRequests(), links = ACC.feed.links || [], trusts = pendingTrust();
+  if (trusts.length) {
+    pop.append(el('div', 'pop-sec', `added you · ${trusts.length}`));
+    for (const p of trusts) pop.append(trustRow(p));
+  }
   if (reqs.length) {
     pop.append(el('div', 'pop-sec', `requests · ${reqs.length}`));
     for (const r of reqs) {
@@ -2025,7 +2051,7 @@ async function openAccount() {
     const foot = el('div', 'row');
     const web = el('button', 'btn', 'account settings on the web'), out = el('button', 'btn danger', 'sign out');
     web.onclick = () => synapse.account.openWeb('/settings').catch((e) => toast(e.message, true));
-    out.onclick = async () => { try { await synapse.account.logout(); ACC.user = null; ACC.feed = { incoming: [], outgoing: [], links: [] }; renderMe(); renderDot(); close(); toast('signed out'); } catch (e) { toast(e.message, true); } };
+    out.onclick = async () => { try { await synapse.account.logout(); ACC.user = null; ACC.feed = { incoming: [], outgoing: [], links: [], incomingTrust: [] }; renderMe(); renderDot(); close(); toast('signed out'); } catch (e) { toast(e.message, true); } };
     foot.append(web, out);
     body.append(foot);
     body.tabIndex = 0; body.onkeydown = (e) => { if (e.key === 'Escape') close(); };
@@ -2058,6 +2084,8 @@ async function drawPeople(box) {
   let list = [];
   try { const r = await synapse.people.list(); list = Array.isArray(r) ? r : r?.trusted || []; }
   catch (e) { box.append(el('div', 'hint err', e.message)); }
+  // people who added me and wait for an answer, on top with the same buttons as the popover
+  for (const p of pendingTrust()) box.append(trustRow(p, () => drawPeople(box)));
   if (!list.length) box.append(el('div', 'hint', 'nobody yet · your agents can only ask people on this list'));
   for (const p of list) {
     const row = el('div', 'person');
