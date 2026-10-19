@@ -232,6 +232,28 @@
   .friends .err { color: var(--sig); font: 11px var(--mono); margin-top: 6px; }
   .friends .err:empty { display: none; }
 
+  /* agent talk: the popover on a selected link, and the conversation thread in the side panel */
+  .epop { position: fixed; z-index: 6; min-width: 220px; max-width: 300px; background: var(--paper); border: 1px solid var(--ink); font: 10.5px var(--mono); text-transform: uppercase; transform: translate(-50%, 18px); display: none; }
+  .epop.show { display: block; }
+  .epop .hd { padding: 8px 12px; border-bottom: 1px solid var(--rule); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .epop .seg { display: flex; margin: 10px 12px 0; border: 1px solid var(--ink); }
+  .epop .seg button { flex: 1; padding: 5px 0; background: none; border: 0; cursor: pointer; font: inherit; text-transform: inherit; }
+  .epop .seg button + button { border-left: 1px solid var(--ink); }
+  .epop .seg button:hover { background: var(--wash); }
+  .epop .seg button.on { background: var(--ink); color: var(--paper); }
+  .epop .seg.off { opacity: .4; cursor: not-allowed; }
+  .epop .seg.off button { pointer-events: none; }
+  .epop .note { padding: 7px 12px 0; color: var(--ink-3); text-transform: none; font: 11px/1.45 var(--sans); }
+  .epop .acts { display: flex; gap: 6px; padding: 10px 12px; }
+  .epop .acts button, .panel .acts button { font: 10.5px var(--mono); text-transform: uppercase; padding: 5px 9px; background: none; border: 1px solid var(--ink); cursor: pointer; white-space: nowrap; }
+  .epop .acts button:hover, .panel .acts button:hover { background: var(--ink); color: var(--paper); }
+  .epop .acts button.warn:hover, .panel .acts button.warn:hover { background: var(--sig); border-color: var(--sig); color: #fff; }
+  .panel .acts { display: flex; gap: 6px; flex-wrap: wrap; padding: 12px 18px; border-bottom: 1px solid var(--rule); }
+  .panel .acts:empty { display: none; }
+  .panel .av { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border: 1px solid var(--ink); outline: 1px solid var(--ink); outline-offset: 2px; margin: 3px; font: 400 18px/1 var(--display); }
+  .bubble.wait { border-style: dashed; color: var(--ink-3); font: 10.5px var(--mono); text-transform: uppercase; }
+  .bubble.wait .sq { display: inline-block; margin-right: 6px; vertical-align: -1px; }
+
   .grain { position: fixed; inset: -50%; width: 200%; height: 200%; z-index: 20; pointer-events: none; opacity: var(--grain); mix-blend-mode: var(--blend);
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .5 0 0 0 0 .5 0 0 0 0 .5 0 0 0 1.5 -.25'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
     animation: grain .8s steps(5) infinite; }
@@ -303,6 +325,7 @@
 <div class="legend" id="legend"></div>
 <aside class="panel" id="panel"></aside>
 <aside class="viewer" id="viewer"></aside>
+<div class="epop" id="epop"></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -318,6 +341,9 @@ const cam = { x: 0, y: 0, k: 1, tx: 0, ty: 0, tk: 1 };
 let agents = new Map();   // id -> node {a, x, y, vx, vy, born, color, ...}
 let edges = [];
 let layout = {};
+let talks = [];           // open agent talk conversations, both sides (state.talks)
+let thread = null;        // {conv, edge}: the conversation the side panel shows
+const talkFriends = new Map(); // friend's machine id -> paired through a request (may talk)
 let hover = null;         // {type:'node'|'ring'|'edge'|'x', id}
 let selected = null;      // {type:'node'|'edge', id}
 let drag = null;
@@ -484,9 +510,24 @@ function spawnPoint(i, key) {
   return { x: c.x, y: c.y };
 }
 
+// A friend's open question to one of my agents is drawn as an outside fork hanging off that agent:
+// a node of its own in the agent's fork tree, gone (faded) once the conversation ends.
+const extId = (c) => `talk-${c.id}`;
+const peerLabel = (c) => (c.peerHandle ? `@${c.peerHandle}` : c.peerName || 'friend');
+function externalNodes(list, byId) {
+  return list.filter((c) => c.role === 'owner' && c.status === 'open' && byId.has(c.target)).map((c) => {
+    const t = byId.get(c.target);
+    return { id: extId(c), name: peerLabel(c), kind: 'external', status: c.live === 'answering' ? 'busy' : 'idle', forkOf: t.id,
+      project: t.project, projectKey: t.projectKey, frameKey: t.frameKey, frame: t.frame, color: t.color, cwd: t.cwd,
+      startedAt: c.createdAt, lastActivity: c.lastAt, external: c };
+  });
+}
+
 function applyState(s) {
   layout = s.layout || {};
+  talks = s.talks || [];
   const seen = new Set();
+  s.agents = [...s.agents, ...externalNodes(talks, new Map(s.agents.map((a) => [a.id, a])))];
   s.agents.forEach((a, i) => {
     // a server started before frames existed sends none: frame by project
     a.frameKey ??= a.projectKey; a.frame ??= a.project;
@@ -496,7 +537,7 @@ function applyState(s) {
       const parent = a.forkOf && agents.get(a.forkOf);
       const p = layout[a.id] || (parent ? nearParent(parent) : spawnPoint(agents.size, a.frameKey));
       n = { x: p.x, y: p.y, vx: 0, vy: 0, born: performance.now(), color: a.color, phase: Math.random() * 6.28, dying: 0 };
-      if (!layout[a.id]) setTimeout(() => agents.has(a.id) && saveLayout(a.id), 1500);
+      if (!layout[a.id] && !a.external) setTimeout(() => agents.has(a.id) && saveLayout(a.id), 1500);
       agents.set(a.id, n);
     }
     n.a = a; n.color = a.color; n.dying = 0;
@@ -505,13 +546,15 @@ function applyState(s) {
   updateBranchVisibility();
   assignShades();
   edges = s.edges;
-  const live = [...agents.values()].filter((n) => !n.dying);
+  const live = [...agents.values()].filter((n) => !n.dying && !n.a.external);
   $('nBusy').textContent = live.filter((n) => n.a.status === 'busy').length;
   $('nIdle').textContent = live.filter((n) => n.a.status !== 'busy').length;
   $('nEdges').textContent = edges.filter((e) => agents.has(e.from) && agents.has(e.to)).length;
   $('empty').classList.toggle('show', live.length === 0);
   renderLegend(live);
-  if (selected?.type === 'node') renderPanel(false);
+  if (thread) renderThread();
+  else if (selected?.type === 'node') renderPanel(false);
+  if (selected?.type === 'edge') renderEpop();
 }
 
 // ---------- friends (multiplayer) ----------
@@ -526,6 +569,7 @@ async function api(path, body) {
 async function loadFriends() {
   let f;
   try { f = await api('/api/remote'); } catch { return; }
+  for (const x of f.friends) talkFriends.set(x.machineId, !!x.talk);
   const online = f.friends.filter((x) => x.online).length;
   $('friendsLbl').textContent = f.friends.length ? `friends ${online}/${f.friends.length}` : 'friends';
   $('friendsDot').classList.toggle('live', online > 0);
@@ -629,6 +673,7 @@ function hitTest(wx, wy) {
     if (n.dying || n.hidden) continue;
     const d = Math.max(Math.abs(n.x - wx), Math.abs(n.y - wy));
     if (d <= R + 2) return { type: 'node', id };
+    if (n.a?.external) continue; // an outside fork cannot be linked
     if (d <= R + RING + 4 && (!best || d < best.d)) best = { type: 'ring', id, d };
   }
   if (best) return best;
@@ -670,7 +715,7 @@ function doAction(d) {
 cv.addEventListener('contextmenu', (ev) => {
   ev.preventDefault();
   const w = toWorld(ev.clientX, ev.clientY), h = hitTest(w.x, w.y);
-  const n = h?.type === 'node' || h?.type === 'ring' ? agents.get(h.id) : null;
+  const hn = h?.type === 'node' || h?.type === 'ring' ? agents.get(h.id) : null, n = hn?.a.external ? null : hn;
   const g = h?.type === 'group' ? groupRects().find((r) => r.key === h.key) : null;
   if (EMBEDDED) {
     // a repo's outer frame starts agents in the repo's own folder
@@ -697,7 +742,7 @@ cv.addEventListener('pointerdown', (ev) => {
   cv.setPointerCapture(ev.pointerId);
   const w = toWorld(ev.clientX, ev.clientY);
   const h = hitTest(w.x, w.y);
-  if (EMBEDDED && ev.metaKey && h?.type === 'node') {
+  if (EMBEDDED && ev.metaKey && h?.type === 'node' && !agents.get(h.id)?.a.external) {
     const a = agents.get(h.id)?.a;
     window.parent.postMessage({ type: 'synapse:open', id: h.id, pid: a?.pid, name: a?.name, kind: a?.kind, cwd: a?.cwd }, '*');
     return;
@@ -706,7 +751,10 @@ cv.addEventListener('pointerdown', (ev) => {
   if (h?.type === 'node') { const n = agents.get(h.id); drag = { mode: 'move', id: h.id, ox: w.x - n.x, oy: w.y - n.y, sx, sy, moved: false }; }
   else if (h?.type === 'ring') drag = { mode: 'link', id: h.id, sx, sy };
   else if (h?.type === 'x') { removeEdge(h.id); hover = null; }
-  else if (h?.type === 'edge') { selected = { type: 'edge', id: h.id }; closePanel(); }
+  else if (h?.type === 'edge') {
+    selected = { type: 'edge', id: h.id }; closePanel(); renderEpop();
+    if (edges.find((e) => e.id === h.id)?.mode === 'talk') openThread({ edge: h.id });
+  }
   else if (h?.type === 'group') drag = { mode: 'group', key: h.key, wx: w.x, wy: w.y, sx, sy, moved: false };
   else drag = { mode: 'pan', sx, sy, cx: cam.tx, cy: cam.ty, moved: false };
 });
@@ -739,6 +787,7 @@ addEventListener('pointerup', () => {
   if (!drag) return;
   if (drag.mode === 'move') {
     if (drag.moved) saveLayout(heldId());
+    else if (agents.get(drag.id)?.a.external) openThread({ conv: agents.get(drag.id).a.external.id });
     else { selected = { type: 'node', id: drag.id }; renderPanel(true); revealSelected(); }
   } else if (drag.mode === 'link') {
     const t = linkTarget();
@@ -753,7 +802,7 @@ addEventListener('pointerup', () => {
 function linkTarget() {
   let best = null, bd = Infinity;
   for (const [id, n] of agents) {
-    if (n.dying || n.hidden || id === drag?.id) continue;
+    if (n.dying || n.hidden || id === drag?.id || n.a?.external) continue;
     const d = Math.hypot(n.x - mouse.wx, n.y - mouse.wy);
     if (d < R + 34 && d < bd) { bd = d; best = id; }
   }
@@ -770,6 +819,7 @@ cv.addEventListener('dblclick', (ev) => {
   const w = toWorld(ev.clientX, ev.clientY), h = hitTest(w.x, w.y);
   if (!h) return fit();
   const foreign = h.type === 'node' && agents.get(h.id)?.a.remote;
+  if (h.type === 'node' && agents.get(h.id)?.a.external) return;
   if (h.type === 'node') { selected = { type: 'node', id: h.id }; renderPanel(true).then(foreign ? null : startRename); revealSelected(); }
   if (h.type === 'group' && !String(h.key).startsWith('remote:')) startProjectRename(h.key);
 });
@@ -842,7 +892,7 @@ function searchAgents(q) {
   if (!words.length) return [];
   const out = [];
   for (const [id, n] of agents) {
-    if (n.dying || n.hidden) continue;
+    if (n.dying || n.hidden || n.a.external) continue;
     // every word has to match some field; highlight the matches on the best field
     let total = 0, top = null;
     const idx = {};
@@ -971,7 +1021,7 @@ function flyToGroup(key) {
 
 // ---------- panel ----------
 const panel = $('panel');
-function closePanel() { panel.classList.remove('open'); }
+function closePanel() { panel.classList.remove('open'); thread = null; panel.dataset.thread = ''; }
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 // the panel's fork section: who this agent was forked from, and what was forked from it
 function forkSection(a) {
@@ -979,11 +1029,12 @@ function forkSection(a) {
   const kids = [...agents.values()].filter((o) => !o.dying && o.a?.forkOf === a.id);
   if (!par && !kids.length) return '';
   const line = (o, arrow, q) => `<div class="link"><span class="arrow">${arrow}</span><span class="name" data-go="${o.a.id}">${esc(o.a.name)}</span><span class="fq" title="${esc(q || '')}">${esc(q || '')}</span></div>`;
-  return `<section><h3>Fork tree</h3>${par ? line(par, '⑂ from', a.forkQ) : ''}${kids.map((o) => line(o, '↳', o.a.forkQ)).join('')}</section>`;
+  return `<section><h3>Fork tree</h3>${par ? line(par, '⑂ from', a.forkQ) : ''}${kids.map((o) => line(o, '↳', o.a.external ? `asked by ${peerLabel(o.a.external)}` : o.a.forkQ)).join('')}</section>`;
 }
 async function renderPanel(fetchFeed) {
   if (panel.querySelector('input.rename')) return; // don't wipe a rename in progress
   const n = agents.get(selected?.id); if (!n) return closePanel();
+  thread = null; panel.dataset.thread = '';
   const a = n.a, shade = cssShade(shadeOf(n));
   const inc = edges.filter((e) => e.to === a.id && agents.has(e.from));
   const out = edges.filter((e) => e.from === a.id && agents.has(e.to));
@@ -999,7 +1050,7 @@ async function renderPanel(fetchFeed) {
       <div class="cwd"><span class="fp" data-path="${esc(a.cwd)}" title="Browse folder">${esc(a.cwd)}</span></div>
       <div class="meta">
         <span class="tag">${esc(a.kind)}</span>
-        <span class="tag"><span class="sq ${a.status === 'busy' ? 'busy' : ''}"></span>${a.status === 'busy' ? 'working' : a.status === 'offline' ? 'offline' : 'idle'}</span>
+        <span class="tag"><span class="sq ${a.status === 'busy' ? 'busy' : ''}"></span>${a.status === 'busy' ? 'working' : a.status === 'offline' || a.status === 'closed' ? a.status : 'idle'}</span>
         <span class="tag">active ${ago(a.lastActivity)}</span>
         <span class="tag"><span class="sq" style="${shade}"></span>${esc(a.frame)}</span>
         ${a.remote ? `<span class="tag">⇄ on ${esc(a.remote.owner)}'s machine</span>` : `<span class="tag">pid ${a.pid}</span>
@@ -1015,7 +1066,11 @@ async function renderPanel(fetchFeed) {
   $('closeP').onclick = () => { selected = null; closePanel(); };
   if (!a.remote) { $('renP').onclick = startRename; $('pName').ondblclick = startRename; }
   panel.querySelectorAll('[data-rm]').forEach((b) => (b.onclick = () => removeEdge(b.dataset.rm)));
-  panel.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => { selected = { type: 'node', id: b.dataset.go }; renderPanel(true); revealSelected(); }));
+  panel.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => {
+    const ext = agents.get(b.dataset.go)?.a.external;
+    if (ext) return openThread({ conv: ext.id });
+    selected = { type: 'node', id: b.dataset.go }; renderPanel(true); revealSelected();
+  }));
   if (fetchFeed) {
     const id = a.id;
     const r = await fetch(`/api/agents/${id}/recent`).then((r) => r.json());
@@ -1029,6 +1084,129 @@ async function renderPanel(fetchFeed) {
     linkFiles(panel.querySelector('.feed'), a.cwd);
   }
 }
+// ---------- agent talk ----------
+// A share to a friend's agent is either sync (they read my agent's context) or talk (their agent may also ask mine,
+// and a tool-less fork answers). Owner side: my agent answers. Asker side: one of mine asks theirs.
+const TALK_ONLY_REQUEST = 'Talk works only with friends you connected through a synapse request.';
+const isOwnerEdge = (e, c) => !e.mirrored && e.from === c.target && e.to === `r-${c.peer}-${c.asker}`;
+const isAskerEdge = (e, c) => e.mirrored && e.from === `r-${c.peer}-${c.target}` && e.to === c.asker;
+const convEdge = (c) => edges.find((e) => (c.role === 'owner' ? isOwnerEdge(e, c) : isAskerEdge(e, c)));
+const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const LIVE = { open: 'waiting for a question', queued: 'queued', answering: 'answering', ended: 'ended' };
+
+// the popover on a selected link: who shares with whom, the sync / talk switch, unlink
+const epop = $('epop');
+function renderEpop() {
+  const e = selected?.type === 'edge' && edges.find((x) => x.id === selected.id);
+  const src = e && agents.get(e.from)?.a, dst = e && agents.get(e.to)?.a;
+  if (!src || !dst) { epop.classList.remove('show'); return; }
+  const talk = e.mode === 'talk';
+  let body = '';
+  if (dst.remote && !e.mirrored) {
+    const ok = talkFriends.get(dst.remote.machine);
+    body = `<div class="seg ${ok ? '' : 'off'}" title="${ok ? `Sync: ${esc(dst.name)} reads ${esc(src.name)}. Talk: it may also ask ${esc(src.name)} questions.` : TALK_ONLY_REQUEST}">
+        <button type="button" data-mode="sync" class="${talk ? '' : 'on'}">sync</button><button type="button" data-mode="talk" class="${talk ? 'on' : ''}">talk</button></div>
+      <div class="note">${talk ? `${esc(dst.remote.owner)}'s ${esc(dst.name)} can ask ${esc(src.name)}; a copy without tools answers.` : ok ? `${esc(dst.remote.owner)}'s ${esc(dst.name)} reads ${esc(src.name)}.` : TALK_ONLY_REQUEST}</div>`;
+  } else if (e.mirrored && talk) {
+    body = `<div class="note">${esc(e.owner || src.remote?.owner || 'Your friend')} lets ${esc(dst.name)} ask ${esc(src.name)} questions.</div>`;
+  }
+  const html = `<div class="hd">${esc(src.name)} → ${esc(dst.name)}${talk ? ' · talk' : ''}</div>${body}
+    <div class="acts">${talk ? '<button type="button" data-thread>thread</button>' : ''}<button type="button" class="warn" data-unlink>unlink</button></div>`;
+  if (epop.dataset.html !== html) {
+    epop.innerHTML = epop.dataset.html = html;
+    epop.querySelectorAll('[data-mode]').forEach((b) => (b.onclick = () => setEdgeMode(e.id, b.dataset.mode)));
+    const th = epop.querySelector('[data-thread]'); if (th) th.onclick = () => openThread({ edge: e.id });
+    epop.querySelector('[data-unlink]').onclick = () => removeEdge(e.id);
+  }
+  epop.classList.add('show');
+  placeEpop();
+}
+function placeEpop() {
+  const e = selected?.type === 'edge' && edges.find((x) => x.id === selected.id), g = e && edgeGeom(e);
+  if (!g) { epop.classList.remove('show'); return; }
+  const m = qpt(g, 0.5);
+  // stay on screen and clear of the side panel
+  const w = epop.offsetWidth, h = epop.offsetHeight, right = (panel.classList.contains('open') ? W - 380 : W) - w / 2 - 8;
+  epop.style.left = `${Math.round(clamp(m.x * cam.k + cam.x, w / 2 + 8, Math.max(w / 2 + 8, right)))}px`;
+  epop.style.top = `${Math.round(clamp(m.y * cam.k + cam.y, 56, H - h - 26))}px`;
+}
+async function setEdgeMode(id, mode) {
+  try {
+    await api(`/api/edges/${id}/mode`, { mode });
+    const e = edges.find((x) => x.id === id), src = agents.get(e?.from)?.a, dst = agents.get(e?.to)?.a;
+    toast(mode === 'talk' ? `${dst?.name || 'Their agent'} can now ask ${src?.name || 'yours'} questions` : `Back to sync: ${dst?.name || 'their agent'} only reads ${src?.name || 'yours'}`);
+  } catch (err) { toast(err.message); }
+}
+
+// the side panel as a conversation: whose agent asks which one, every turn with its time, what is happening now
+function openThread(t) {
+  if (t.conv) selected = { type: 'talk', id: extId({ id: t.conv }) };
+  thread = t;
+  renderThread();
+}
+let threadReq = 0;
+async function renderThread() {
+  const want = thread, req = ++threadReq;
+  let list = talks;
+  try { list = await api('/api/talks'); } catch {}
+  if (thread !== want || req !== threadReq) return; // closed or switched while loading
+  const e = want.edge ? edges.find((x) => x.id === want.edge) : null;
+  const mineFor = (c) => (e ? (c.role === 'owner' ? isOwnerEdge(e, c) : isAskerEdge(e, c)) : c.id === want.conv);
+  // an edge shows its open conversation, else the latest one
+  const c = list.filter(mineFor).sort((p, q) => (q.status === 'open') - (p.status === 'open') || q.lastAt - p.lastAt)[0];
+  const edge = e || (c && convEdge(c));
+  if (!c && !edge) { if (panel.dataset.thread) { thread = null; closePanel(); } return; }
+  const owner = c ? c.role === 'owner' : !edge.mirrored;
+  const remoteA = agents.get(edge ? (owner ? edge.to : edge.from) : `r-${c.peer}-${owner ? c.asker : c.target}`)?.a;
+  const myA = agents.get(edge ? (owner ? edge.from : edge.to) : owner ? c.target : c.asker)?.a;
+  const friend = c ? (owner ? peerLabel(c) : remoteA?.remote?.handle ? `@${remoteA.remote.handle}` : c.peerName) : remoteA?.remote?.handle ? `@${remoteA.remote.handle}` : remoteA?.remote?.owner || 'friend';
+  const friendName = c?.peerName || remoteA?.remote?.owner || 'your friend';
+  const mine = c ? (owner ? c.targetName : c.askerName) : myA?.name || '';
+  const theirs = c ? (owner ? c.askerName || 'their agent' : c.targetName) : remoteA?.name || 'their agent';
+  const open = c?.status === 'open';
+  const title = owner ? friend : `${theirs}`;
+  const line = owner ? `${theirs} on ${friendName}'s machine asks your ${mine}` : `your ${mine} asks ${theirs} on ${friendName}'s machine`;
+  const live = c ? c.live || (open ? 'open' : 'ended') : 'none';
+  const turns = (c?.turns || []).map((t) => {
+    const q = `<div class="bubble ${owner ? 'in' : 'out'}"><span class="who">${esc(owner ? theirs : mine)} asked · ${clock(t.askedAt)} · ${ago(t.askedAt)}</span><div class="md">${md(t.q)}</div></div>`;
+    const a = t.a != null ? `<div class="bubble ${owner ? 'out' : 'in'}"><span class="who">${esc(owner ? `${mine} (${c.mode === 'replay' ? 'replay' : 'fork'})` : theirs)} answered · ${clock(t.answeredAt || t.askedAt)}</span><div class="md">${md(t.a)}</div></div>`
+      : open ? `<div class="bubble wait"><span class="sq ${live === 'answering' ? 'busy' : ''}"></span>${live === 'answering' || live === 'queued' ? live : 'waiting for the answer'}${t.position && live === 'queued' ? ` · ${t.position} in line` : ''}</div>`
+      : '<div class="bubble wait">no answer</div>';
+    return q + a;
+  }).join('');
+  const acts = [open ? '<button type="button" class="warn" data-end>end conversation</button>' : '',
+    owner && edge?.mode === 'talk' ? '<button type="button" data-sync>switch to sync</button>' : '',
+    edge ? '<button type="button" class="warn" data-disc>disconnect</button>' : ''].join('');
+  const html = `
+    <header>
+      <h2><span class="av">${esc(initials(String(friend).replace(/^@/, '')).slice(0, 1) || '?')}</span><span>${esc(title)}</span></h2>
+      <div class="cwd">${esc(line)}</div>
+      <div class="meta">
+        <span class="tag"><span class="sq ${live === 'answering' ? 'busy' : ''}"></span>${esc(c ? (open ? LIVE[live] || live : `ended · ${c.endReason || 'ended'}`) : 'no questions yet')}</span>
+        ${c ? `<span class="tag">${owner ? (c.mode === 'replay' ? 'answered by replay' : 'answered by a fork') : 'talk'}</span>
+        <span class="tag">${c.turns.length} / 20 turns</span><span class="tag">started ${ago(c.createdAt)}</span>` : ''}
+      </div>
+      <button class="close" id="closeP" aria-label="Close">×</button>
+    </header>
+    <div class="acts">${acts}</div>
+    <div class="feed"><h3>Conversation</h3>${turns || `<div class="none" style="padding-top:4px">${owner ? `${esc(friendName)}'s agent has not asked ${esc(mine)} anything yet.` : `Ask with synapse_ask from ${esc(mine)}; the thread shows here.`}</div>`}</div>`;
+  if (panel.dataset.thread !== html) {
+    const feed = panel.querySelector('.feed'), atEnd = feed && feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 4;
+    panel.innerHTML = panel.dataset.thread = html;
+    panel.dataset.id = '';
+    const nf = panel.querySelector('.feed');
+    if (atEnd || !feed) nf.scrollTop = nf.scrollHeight; // follow the conversation as it grows
+  }
+  panel.classList.add('open');
+  $('closeP').onclick = () => { selected = null; closePanel(); };
+  const on = (sel, fn) => { const b = panel.querySelector(sel); if (b) b.onclick = fn; };
+  on('[data-end]', async () => {
+    try { await api(`/api/talks/${c.id}/end`, {}); toast(`Ended the conversation with ${friend}`); } catch (err) { toast(err.message); }
+  });
+  on('[data-sync]', () => setEdgeMode(edge.id, 'sync'));
+  on('[data-disc]', () => { removeEdge(edge.id); selected = null; closePanel(); });
+}
+
 panel.addEventListener('click', (ev) => {
   const f = ev.target.closest('[data-path]');
   if (f) openFile(f.dataset.path, f.dataset.cwd || agents.get(selected?.id)?.a.cwd);
@@ -1270,6 +1448,7 @@ function drawForks(t) {
     ctx.save();
     ctx.globalAlpha = (matches && !(matches.has(n.a.forkOf) && matches.has(id)) ? 0.12 : 0.7) * fade;
     ctx.strokeStyle = V.ink; ctx.lineWidth = 1;
+    if (n.a.external) ctx.setLineDash([3, 3]); // a friend's question, answered outside the tree's own sessions
     ctx.beginPath(); ctx.moveTo(x0, y0);
     if (!dir || y1 <= y0) ctx.lineTo(x1, y1);
     else {
@@ -1278,6 +1457,7 @@ function drawForks(t) {
       ctx.lineTo(x1, y1);
     }
     ctx.stroke();
+    ctx.setLineDash([]);
     ctx.fillStyle = V.ink; ctx.fillRect(x1 - 3, y1 - 3, 6, 6);
     ctx.font = '11px "Fragment Mono", ui-monospace, monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const gy = (ym + y1) / 2;
@@ -1301,9 +1481,11 @@ function drawEdge(e, t) {
   ctx.lineCap = 'butt';
   ctx.strokeStyle = burst > 0.05 ? rgba(V.sig, al) : rgba(V.ink, al);
   ctx.lineWidth = 1.2 + burst * 1.3 + (hot ? 0.8 : 0);
+  if (e.mode === 'talk') ctx.setLineDash([9, 3, 2, 3]); // talk: the friend's agent may also ask, dash-dot
   ctx.beginPath();
   for (let i = 0; i <= 40; i++) { const p = qpt(g, lerp(t0, t1, i / 40)); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); }
   ctx.stroke();
+  ctx.setLineDash([]);
 
   // arrowhead
   const pa = qpt(g, t1 - 0.02), ang = Math.atan2(p1.y - pa.y, p1.x - pa.x);
@@ -1337,11 +1519,11 @@ function drawNode(id, n, t) {
   const a = n.a, c = V.ink;
   const appear = ease(clamp((t - n.born) / 700, 0, 1));
   const vanish = n.dying ? 1 - clamp((t - n.dying) / 600, 0, 1) : 1;
-  const vis = appear * vanish * (a.status === 'offline' ? 0.45 : 1);
+  const vis = appear * vanish * (a.status === 'offline' || a.status === 'closed' ? 0.45 : 1);
   if (vis <= 0) return;
   const busy = a.status === 'busy';
   const isHover = hover?.id === id && (hover.type === 'node' || hover.type === 'ring');
-  const isSel = selected?.type === 'node' && selected.id === id;
+  const isSel = (selected?.type === 'node' || selected?.type === 'talk') && selected.id === id;
   const isTarget = drag?.mode === 'link' && linkTarget() === id;
   const isSource = drag?.mode === 'link' && drag.id === id;
 
@@ -1381,10 +1563,19 @@ function drawNode(id, n, t) {
   }
 
   // body
-  ctx.fillStyle = shadePattern(shadeOf(n)); sqPath(r); ctx.fill();
-  if (a.remote) ctx.setLineDash([4, 3]); // a friend's agent: dashed outline
-  ctx.strokeStyle = V.ink; ctx.lineWidth = isSel ? 2 : 1.4; ctx.stroke();
-  ctx.setLineDash([]);
+  if (a.external) {
+    // an outside fork: outlined twice on paper, the asker's initial inside
+    ctx.fillStyle = V.paper; sqPath(r); ctx.fill();
+    ctx.strokeStyle = V.ink; ctx.lineWidth = isSel ? 2 : 1.4; ctx.stroke();
+    ctx.lineWidth = 1; ctx.strokeRect(-r + 4, -r + 4, (r - 4) * 2, (r - 4) * 2);
+    ctx.font = `400 ${Math.round(r * 0.95)}px "Big Shoulders Display", "Arial Narrow", sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = V.ink; ctx.fillText((a.name.replace(/^@/, '')[0] || '?').toUpperCase(), 0, 1);
+  } else {
+    ctx.fillStyle = shadePattern(shadeOf(n)); sqPath(r); ctx.fill();
+    if (a.remote) ctx.setLineDash([4, 3]); // a friend's agent: dashed outline
+    ctx.strokeStyle = V.ink; ctx.lineWidth = isSel ? 2 : 1.4; ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
   // working: a tick running round the frame
   if (busy) {
@@ -1397,12 +1588,14 @@ function drawNode(id, n, t) {
 
   // labels
   ctx.font = '11.5px "Fragment Mono", ui-monospace, monospace';
-  const name = short(a.name).toUpperCase();
+  const name = (a.external ? `asked by ${short(a.name, 20)}` : short(a.name)).toUpperCase();
   knockout(name, 0, R + 22);
   ctx.fillStyle = V.ink; ctx.fillText(name, 0, R + 22);
   ctx.font = '10px "Fragment Mono", ui-monospace, monospace';
   const hiddenKids = forkChildren(id).filter((child) => child.hidden).length;
-  const sub = hiddenKids ? `+${hiddenKids} children collapsed · right-click` : `${busy ? '■' : '□'} ${a.kind} · ${a.forkQ ? `⑂ ${short(a.forkQ, 22)}` : short(a.frame, 22)}`.toUpperCase();
+  const ext = a.external, sub = hiddenKids ? `+${hiddenKids} children collapsed · right-click`
+    : ext ? `${busy ? '■' : '□'} ${ext.mode === 'replay' ? 'answered by replay' : 'fork'} · ${ext.live === 'answering' ? 'answering' : ext.live === 'queued' ? 'queued' : `${ext.turns.length} asked`}`.toUpperCase()
+    : `${busy ? '■' : '□'} ${a.kind} · ${a.forkQ ? `⑂ ${short(a.forkQ, 22)}` : short(a.frame, 22)}`.toUpperCase();
   knockout(sub, 0, R + 38);
   ctx.fillStyle = busy ? V.sig : rgba(V.ink, 0.5);
   ctx.fillText(sub, 0, R + 38);
@@ -1501,7 +1694,7 @@ function drawGroups() {
     }
     // tab: shade swatch, project name, agent count
     ctx.font = '10.5px "Fragment Mono", ui-monospace, monospace'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
-    const text = `${foreign ? '⇄ ' : ''}${g.label.toUpperCase()}  ${g.nodes.length}`, tw = ctx.measureText(text).width + 30;
+    const text = `${foreign ? '⇄ ' : ''}${g.label.toUpperCase()}  ${g.nodes.filter(([, n]) => !n.a.external).length}`, tw = ctx.measureText(text).width + 30;
     ctx.fillStyle = hot ? V.ink : V.paper; ctx.fillRect(x0, y0 - 20, tw, 20);
     ctx.strokeRect(x0, y0 - 20, tw, 20);
     ctx.fillStyle = shadePattern(g.shade); ctx.fillRect(x0 + 7, y0 - 14, 8, 8);
@@ -1578,7 +1771,7 @@ let saveTimer = null;
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveAll, 900); }
 function saveAll() {
   const out = {};
-  for (const [id, n] of agents) if (!n.dying) out[id] = { x: Math.round(n.x), y: Math.round(n.y) };
+  for (const [id, n] of agents) if (!n.dying && !n.a?.external) out[id] = { x: Math.round(n.x), y: Math.round(n.y) };
   fetch('/api/layout', { method: 'POST', body: JSON.stringify(out) });
 }
 
@@ -1681,6 +1874,7 @@ function frame(t) {
   // draw selected/hovered last so they sit on top
   const order = [...agents.entries()].sort(([a], [b]) => (a === hover?.id || a === selected?.id) - (b === hover?.id || b === selected?.id));
   for (const [id, n] of order) drawNode(id, n, t);
+  if (epop.classList.contains('show')) placeEpop();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

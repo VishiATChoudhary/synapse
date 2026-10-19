@@ -8,7 +8,7 @@ import os from 'node:os';
 import { exec, execFile } from 'node:child_process';
 import { pipeline } from 'node:stream';
 import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, projectOfAgent, colorOf, renameAgent, renameProject } from './lib.mjs';
-import { createEdge, removeEdge } from './ops.mjs';
+import { createEdge, removeEdge, setMode, endTalk } from './ops.mjs';
 import * as remote from './remote.mjs';
 import * as talk from './talk.mjs';
 
@@ -58,7 +58,24 @@ function agents() {
   });
 }
 
-const state = () => ({ agents: agents(), edges: readJSON(FILES.edges, []), layout: readJSON(FILES.layout, {}) });
+// Agent talk conversations for the canvas, both sides. `live` says what the thread is doing right now:
+// on my side whether a fork is answering or a question waits, on hers what my machine last reported.
+const MONTH = 30 * 24 * 3600_000;
+function talks({ open = false } = {}) {
+  const s = readJSON(FILES.talks, {});
+  const running = new Set((s.running || []).map((r) => r.conv)), queued = new Set((s.queue || []).map((j) => j.conv));
+  return (s.conversations || [])
+    .filter((c) => (open ? c.status === 'open' : c.status === 'open' || Date.now() - (c.lastAt || 0) < MONTH))
+    .map(({ forkSession, ...c }) => {
+      const waiting = c.turns?.findLast((t) => t.a == null);
+      const live = c.status !== 'open' ? 'ended' : c.role === 'owner'
+        ? running.has(c.id) ? 'answering' : queued.has(c.id) ? 'queued' : 'open'
+        : waiting ? waiting.state || 'queued' : 'open';
+      return { ...c, live };
+    });
+}
+
+const state = () => ({ agents: agents(), edges: readJSON(FILES.edges, []), layout: readJSON(FILES.layout, {}), talks: talks({ open: true }) });
 
 // --- SSE ---
 const clients = new Set();
@@ -69,7 +86,7 @@ let lastSig = '';
 setInterval(() => {
   if (!clients.size) return;
   const s = state();
-  const sig = JSON.stringify([s.agents.map((a) => [a.id, a.status, a.name, a.lastActivity]), s.edges]);
+  const sig = JSON.stringify([s.agents.map((a) => [a.id, a.status, a.name, a.lastActivity]), s.edges, s.talks]);
   if (sig !== lastSig) { lastSig = sig; broadcast('state', s); }
 }, 1000);
 
@@ -165,7 +182,11 @@ const server = http.createServer(async (req, res) => {
     return json(res, 201, edge);
   }
   // ---- multiplayer
-  if (p === '/api/remote' && req.method === 'GET') return json(res, 200, { ...remote.friends(), syncError });
+  if (p === '/api/remote' && req.method === 'GET') {
+    // `talk`: paired through a synapse request, so a share to them may be switched to talk
+    const f = remote.friends(), peers = remote.config().peers || {};
+    return json(res, 200, { ...f, friends: f.friends.map((x) => ({ ...x, talk: peers[x.machineId]?.via === 'request' })), syncError });
+  }
   if (p === '/api/remote/invite' && req.method === 'POST') {
     try { return json(res, 200, await remote.invite({ name: (await body(req)).name })); }
     catch (e) { return json(res, 502, { error: e.message }); }
@@ -179,6 +200,33 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/remote/unfriend' && req.method === 'POST') {
     try { const out = remote.unfriend((await body(req)).machineId); lastSig = ''; broadcast('state', state()); return json(res, 200, out); }
     catch (e) { return json(res, 404, { error: e.message }); }
+  }
+
+  // ---- agent talk
+  const mode = p.match(/^\/api\/edges\/([\w-]+)\/mode$/);
+  if (mode && req.method === 'POST') {
+    let out;
+    try { out = setMode(mode[1], (await body(req)).mode); } catch (e) { return json(res, 409, { error: e.message }); }
+    // back to sync ends what was open over this share
+    try { talk.reconcile(); talk.tick().catch(() => {}); } catch {}
+    lastSig = '';
+    broadcast('state', state());
+    return json(res, 200, out.edge);
+  }
+  if (p === '/api/talks' && req.method === 'GET') return json(res, 200, talks());
+  const endT = p.match(/^\/api\/talks\/([\w-]+)\/end$/);
+  if (endT && req.method === 'POST') {
+    const c = talks().find((x) => x.id === endT[1]);
+    if (!c) return json(res, 404, { error: 'No such conversation.' });
+    try {
+      // my agent answering: end it here and tell her machine. Mine asking: end it as the asker would.
+      if (c.role === 'owner') talk.endConversation(c.id, 'owner');
+      else endTalk(listAgents().find((a) => a.id === c.asker) || { id: c.asker, name: c.askerName }, c.id);
+      await talk.tick().catch(() => {});
+    } catch (e) { return json(res, 409, { error: e.message }); }
+    lastSig = '';
+    broadcast('state', state());
+    return json(res, 200, { ended: true });
   }
 
   const del = p.match(/^\/api\/edges\/([\w-]+)$/);
