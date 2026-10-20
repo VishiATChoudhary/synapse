@@ -7,14 +7,14 @@ import { DEFAULT_CLOUD } from '../link';
 import { setMediaOn, supported as mediaSupported, useMediaOn } from '../media';
 import { choose, deleteAccount, leaveDemo, signOutPhone, useSynapse } from '../store';
 import { FONT, useTheme } from '../theme';
-import { Button, Label, Rule, ago } from '../ui';
+import { Button, Meta, Rule, ago } from '../ui';
 
 const SUPPORT_URL = 'https://github.com/VishiATChoudhary/synapse/issues';
 
 function Section({ title, children }) {
   return (
     <View style={{ gap: 10 }}>
-      <Label>{title}</Label>
+      <Text style={{ fontFamily: FONT.sansMedium, fontSize: 14, color: useTheme().ink2 }}>{title.charAt(0).toUpperCase() + title.slice(1)}</Text>
       {children}
     </View>
   );
@@ -49,7 +49,7 @@ export default function Settings() {
               <Pressable key={c.id} onPress={() => choose(c)} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: c.id === computerId ? t.ink : t.rule, padding: 12 }}>
                 <View style={{ width: 8, height: 8, backgroundColor: c.id === computerId ? t.sig : t.rule }} />
                 <Text style={[body, { flex: 1 }]}>{c.name}</Text>
-                <Label>{c.lastSeen ? `seen ${ago(c.lastSeen)}` : ''}</Label>
+                <Meta>{!c.lastSeen ? '' : ago(c.lastSeen) === 'now' ? 'Seen just now' : `Seen ${ago(c.lastSeen)} ago`}</Meta>
               </Pressable>
             ))}
           </Section>

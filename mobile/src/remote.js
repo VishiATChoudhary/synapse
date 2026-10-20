@@ -22,7 +22,7 @@ export function createRemote(emit, acc, computer) {
   const fail = (e) => { state = { ...state, error: e.message }; emit(state); setTimeout(() => { state = { ...state, error: null }; emit(state); }, 5000); };
   const say = (msg) => conn.send(msg).catch(fail);
   // hello says whether this phone shows images and videos (the settings switch)
-  const hello = () => ({ t: 'hello', ...(media.mediaOn() ? { media: 1 } : {}) });
+  const hello = () => ({ t: 'hello', ...(media.supported && media.mediaOn() ? { media: 1 } : {}) });
   const ask = (msg) => conn.send(msg).catch(() => {});
   media.attach(ask);
 

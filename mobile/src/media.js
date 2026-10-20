@@ -16,7 +16,7 @@ const WINDOW = 2, RETRY = 20_000;
 
 // ---------------------------------------------------------------- the switch
 
-let on = supported;
+let on = true; // the web build has no cache: it only shows bundled demo media
 const switchers = new Set();
 if (supported) SecureStore.getItemAsync(KEY).then((v) => { on = v !== 'off'; switchers.forEach((l) => l()); }).catch(() => {});
 export const mediaOn = () => on;
@@ -78,7 +78,7 @@ export const detach = (say) => { if (ask === say) ask = null; };
 
 export function wantImage(id) {
   const it = item(id);
-  if (!on || !ask || it.state === 'ready' || (it.state === 'loading' && Date.now() - it.at < RETRY)) return;
+  if (!supported || !on || !ask || it.state === 'ready' || (it.state === 'loading' && Date.now() - it.at < RETRY)) return;
   set(id, { state: 'loading', at: Date.now() });
   ask({ t: 'media', id });
 }
@@ -86,7 +86,7 @@ export function wantImage(id) {
 const parts = new Map(); // video id -> { n, size, got: Map(i -> bytes), asked: Map(i -> time) }
 export function wantVideo(ref) {
   const it = item(ref.id);
-  if (!on || !ask || it.state === 'ready' || ref.state !== 'ready') return;
+  if (!supported || !on || !ask || it.state === 'ready' || ref.state !== 'ready') return;
   let p = parts.get(ref.id);
   if (!p) { p = { n: ref.pieces, size: ref.size, got: new Map(), asked: new Map() }; parts.set(ref.id, p); set(ref.id, { state: 'loading', got: 0, n: p.n }); }
   pump(ref.id, p);

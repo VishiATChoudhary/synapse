@@ -285,7 +285,7 @@ function snapshot() {
     const pr = projectOf(a.cwd), msgs = messagesOf(a);
     const last = [...msgs].reverse().find((x) => !x.tool) || msgs.at(-1);
     return {
-      id: a.id, kind: a.kind, name: a.name, status: a.status,
+      id: a.id, kind: a.kind, name: a.name, status: a.status, forkOf: a.forkOf || null,
       project: { key: pr.key, label: pr.label, color: colorOf(pr.key) },
       worktree: pr.worktree?.name || null,
       inApp: !!host.ptyOf(a.pid),
