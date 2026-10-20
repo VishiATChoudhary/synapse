@@ -13,6 +13,7 @@
     "lib.mjs",
     "ops.mjs",
     "remote.mjs",
+    "talk.mjs",
     "account.mjs",
     "hook.mjs",
     "mcp.mjs",
@@ -42,8 +43,11 @@
       "dmg",
       "dir"
     ],
-    "hardenedRuntime": false,
-    "gatekeeperAssess": false
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "entitlements": "app/build/entitlements.mac.plist",
+    "entitlementsInherit": "app/build/entitlements.mac.inherit.plist",
+    "notarize": true
   },
   "dmg": {
     "title": "Synapse",
