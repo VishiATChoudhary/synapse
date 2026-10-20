@@ -75,7 +75,7 @@ const click = (scope, label) => js(`[...document.querySelectorAll(${JSON.stringi
   await until(async () => (await dot()) === 'blink', 'blinks for a third truster');
   await js(`document.querySelector('#settings').click()`);
   await until(() => js(`!!document.querySelector('#modal .people .trust-in')`), 'incoming truster in settings');
-  assert.equal(await js(`(() => { const b = document.querySelector('#modal .people'); return [...b.children].findIndex((c) => c.classList.contains('trust-in')) < [...b.children].findIndex((c) => c.classList.contains('person')); })()`), true, 'incoming sits on top');
+  assert.equal(await js(`(() => { const b = document.querySelector('#modal .people'); return [...b.children].findIndex((c) => c.classList.contains('trust-in')) < [...b.children].findIndex((c) => c.classList.contains('person-card')); })()`), true, 'incoming sits on top');
   assert.match(await js(`document.querySelector('#modal .people .trust-in').textContent`), /@lee added you/);
   await click('#modal .people .trust-in', 'Trust back');
   await until(() => js(`!document.querySelector('#modal .people .trust-in')`), 'settings row goes after trust back');
