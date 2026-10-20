@@ -1,7 +1,7 @@
 // Synapse desktop: Electron main process.
 // Owns the PTYs, reads Synapse state from ~/.synapse through lib.mjs, watches fork requests
 // filed by the prompt hook, and pushes everything to the renderer over IPC.
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, screen, shell, systemPreferences } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -580,9 +580,9 @@ function serveFriends() {
 
 // ---------------------------------------------------------------- window
 
-function createWindow() {
+function createWindow({ show = !startedHidden() } = {}) {
   win = new BrowserWindow({
-    show: !startedHidden(),
+    show,
     width: 1440, height: 900, minWidth: 900, minHeight: 560,
     titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 },
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0B0B0B' : '#F1EFE9',
@@ -608,8 +608,56 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
 }
 
+// ---------------------------------------------------------------- first launch
+
+// A packaged app opened from the DMG or Downloads offers to move itself to /Applications (macOS relaunches it).
+function offerMove() {
+  if (!app.isPackaged || process.platform !== 'darwin' || app.isInApplicationsFolder()) return;
+  const { response } = dialog.showMessageBoxSync({
+    type: 'question', buttons: ['Move to Applications', 'Not now'], defaultId: 0, cancelId: 1,
+    message: 'Move Synapse to your Applications folder?', detail: 'It keeps Synapse in one place and lets it update itself.',
+  });
+  if (response !== 0) return;
+  try { app.moveToApplicationsFolder(); } catch (e) { dialog.showErrorBox('Could not move Synapse', String(e.message || e)); }
+}
+
+// The first time the packaged app opens, intro.html plays over the whole screen (neurons firing into the name, with sound) and the main
+// window appears as it fades. SYNAPSE_INTRO=1 plays it on every run, for trying it out from source.
+const FORCE_INTRO = process.env.SYNAPSE_INTRO === '1';
+function wantsIntro() {
+  if (FORCE_INTRO) return true;
+  if (!app.isPackaged || startedHidden() || process.env.SYNAPSE_SHOT) return false;
+  if (systemPreferences.getAnimationSettings?.().prefersReducedMotion) return false;
+  return !readJSON(FILES.app, {}).introPlayed;
+}
+function playIntro() {
+  return new Promise((resolve) => {
+    const { bounds } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const intro = new BrowserWindow({
+      ...bounds, frame: false, transparent: true, hasShadow: false, resizable: false, movable: false,
+      focusable: false, skipTaskbar: true, enableLargerThanScreen: true, show: false, backgroundColor: '#00000000',
+      webPreferences: { contextIsolation: true, nodeIntegration: false, autoplayPolicy: 'no-user-gesture-required' },
+    });
+    intro.setAlwaysOnTop(true, 'screen-saver'); // above the menu bar and the Dock
+    intro.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    intro.setIgnoreMouseEvents(true);
+    let done = false;
+    const finish = () => { if (done) return; done = true; clearTimeout(guard); if (!intro.isDestroyed()) intro.destroy(); resolve(); };
+    const guard = setTimeout(finish, 8000); // the page closes itself at the end; never leave it over the screen
+    intro.on('closed', finish);
+    intro.once('ready-to-show', () => intro.showInactive());
+    intro.loadFile(path.join(ROOT, 'renderer', 'intro.html')).catch(finish);
+    if (!FORCE_INTRO) writeJSON(FILES.app, { ...readJSON(FILES.app, {}), introPlayed: true });
+  });
+}
+
 app.whenReady().then(() => {
-  createWindow();
+  offerMove();
+  if (wantsIntro()) {
+    createWindow({ show: false });
+    playIntro();
+    setTimeout(() => { win?.show(); win?.focus(); }, 2800); // the window rises under the fading intro
+  } else createWindow();
   pollRequests(); setInterval(pollRequests, REQUEST_POLL);
   serveFriends(); setInterval(serveFriends, TALK_CHECK);
   startPhone();
