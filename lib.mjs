@@ -97,7 +97,18 @@ function claudeMessage(e) {
 
 function codexMessage(e) {
   const p = e.payload || {};
+  // newer Codex logs each shell command as a CommandExecution item, often with no matching function_call
+  if (e.type === 'event_msg' && p.type === 'item_completed' && p.item?.type === 'CommandExecution') {
+    const c = p.item.command;
+    const cmd = Array.isArray(c) ? (c.length >= 3 && /^-l?c$/.test(c[c.length - 2]) ? c[c.length - 1] : c.join(' ')) : String(c || '');
+    return cmd ? { role: 'assistant', text: toolLine('exec', { command: cmd }), ts: e.timestamp, tool: true } : null;
+  }
   if (e.type !== 'response_item') return null;
+  // code mode wraps commands in a script (`tools.exec_command(...)`); those show up as CommandExecution above
+  if (p.type === 'custom_tool_call' && p.name === 'exec') {
+    const called = [...new Set([...String(p.input || '').matchAll(/tools\.(\w+)\(/g)].map((m) => m[1]))].filter((n) => n !== 'exec_command');
+    return called.length ? { role: 'assistant', text: toolLine('exec', { command: called.join(', ') }), ts: e.timestamp, tool: true } : null;
+  }
   if (p.type === 'message' && (p.role === 'user' || p.role === 'assistant')) {
     const text = (p.content || []).map((c) => c.text || '').join('\n').trim();
     if (!text || NOISE.test(text)) return null;
@@ -359,9 +370,30 @@ function cwds(pids) {
 }
 
 const transcriptCache = new Map(); // agent id -> path
-function codexTranscript(id, cwd, start) {
+// `codex resume <id>` (how the app brings agents back after a restart) keeps appending to the session's original
+// rollout, born long before this process: find that one by the id in its name instead of by time
+function codexRolloutById(homes, sessionId) {
+  const suffix = `-${sessionId}.jsonl`;
+  const kids = (d) => { try { return fs.readdirSync(d).sort().reverse(); } catch { return []; } };
+  for (const home of homes) {
+    const root = path.join(home, 'sessions');
+    for (const y of kids(root)) for (const m of kids(path.join(root, y))) for (const d of kids(path.join(root, y, m))) {
+      const f = kids(path.join(root, y, m, d)).find((x) => x.startsWith('rollout-') && x.endsWith(suffix));
+      if (f) return path.join(root, y, m, d, f);
+    }
+  }
+  return null;
+}
+
+export function codexTranscript(id, cwd, start, cmd = '') {
   if (transcriptCache.has(id)) return transcriptCache.get(id);
   const homes = [process.env.CODEX_HOME, path.join(HOME, '.codex')].filter(Boolean);
+  const resumed = /\bresume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i.exec(cmd || '');
+  if (resumed) {
+    const p = codexRolloutById(homes, resumed[1].toLowerCase());
+    if (p) transcriptCache.set(id, p);
+    return p;
+  }
   let best = null;
   for (const home of homes) {
     for (let d = 0; d < 3; d++) {
@@ -453,7 +485,7 @@ function processAgents() {
   const dirs = cwds(roots.map((r) => r.pid));
   return roots.filter((r) => dirs.get(r.pid)).map((r) => {
     const cwd = dirs.get(r.pid), id = `${r.kind}-${r.pid}`;
-    const transcript = r.kind === 'codex' ? codexTranscript(id, cwd, r.start)
+    const transcript = r.kind === 'codex' ? codexTranscript(id, cwd, r.start, r.cmd)
       : r.kind === 'gemini' ? geminiTranscript(cwd, r.start)
       : r.kind === 'opencode' ? opencodeTranscript(cwd, r.start)
       : r.kind === 'cursor-agent' ? cursorTranscript(cwd, r.start) : null;
