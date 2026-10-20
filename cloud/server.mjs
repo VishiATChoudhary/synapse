@@ -430,6 +430,7 @@ const routes = {
   'POST /v1/auth/app-code': async (req, res, b) => {
     limitIp('app-code', req, 30, 15 * 60_000);
     const row = useEmailToken(b.code, 'app');
+    console.log(`app-code ${row ? 'ok' : 'refused'}`);
     if (!row) fail(401, 'That sign-in expired. Try again.');
     return signedIn(res, req, get('SELECT * FROM users WHERE id = ?', row.user_id), b);
   },
@@ -806,6 +807,7 @@ async function oauthCallback(req, res, provider, url) {
   const st = get('SELECT * FROM oauth_states WHERE state = ? AND provider = ?', String(url.searchParams.get('state') || ''), provider);
   if (st) run('DELETE FROM oauth_states WHERE state = ?', st.state);
   const back = (msg) => redirect(res, `/login?error=${encodeURIComponent(msg)}`);
+  console.log(`oauth callback ${provider} state=${st ? 'known' : 'unknown'} next=${st?.next || '-'}`);
   if (!st || st.expires_at < now()) return back('That sign-in took too long. Try again.');
   if (url.searchParams.get('error')) return back(`${pages.providerLabel(provider)} sign-in was cancelled.`);
   let p;
@@ -855,6 +857,7 @@ function page(req, res, url) {
     case '/app/done': {
       const state = String(ctx.q.state || '');
       if (!/^[\w-]{16,64}$/.test(state)) return html(res, 400, pages.message({ title: 'Hold on', body: 'This sign-in link is not complete. Start again in the app.', link: '/', cta: 'Home' }));
+      console.log(`app/done state=${state.slice(0, 6)}… signed-in=${!!ctx.user} ua=${clean(req.headers['user-agent'], 60)}`);
       if (!ctx.user) return needUser(`/app/done?state=${state}`);
       return redirect(res, `synapse://signed-in?code=${emailToken(a.user.id, 'app', 2 * 60_000, null)}&state=${state}`);
     }
