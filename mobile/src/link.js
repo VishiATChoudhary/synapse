@@ -34,27 +34,17 @@ export async function signInApple(cloud, { identityToken, name }, phoneName) {
   return registerPhone(cloud, token, user, phoneName);
 }
 
-// GitHub, Google or X: the cloud's "connect the app" flow, the one Synapse on the computer uses. open(url) shows
-// the sign-in page; this polls until it is approved there and resolves with the account, or throws.
-export async function signInWith(cloud, provider, phoneName, open, { signal } = {}) {
-  const d = await api(cloud, 'POST', '/v1/device/start', { body: { label: phoneName } });
-  const url = `${d.url.startsWith('/') ? cloud + d.url : d.url}&via=${encodeURIComponent(provider)}`;
-  const closed = open(url);
-  const until = Date.now() + (d.expiresIn || 600) * 1000;
-  let gone = false;
-  closed?.then?.(() => { gone = true; });
-  while (Date.now() < until) {
-    await new Promise((r) => setTimeout(r, (d.interval || 2) * 1000));
-    if (signal?.aborted) throw new Error('cancelled');
-    const r = await api(cloud, 'POST', '/v1/device/poll', { body: { deviceCode: d.deviceCode } });
-    if (r.status === 'approved') return registerPhone(cloud, r.token, r.user, phoneName);
-    if (gone) { // the sheet was closed: one last look, then give up
-      const last = await api(cloud, 'POST', '/v1/device/poll', { body: { deviceCode: d.deviceCode } });
-      if (last.status === 'approved') return registerPhone(cloud, last.token, last.user, phoneName);
-      throw new Error('cancelled');
-    }
-  }
-  throw new Error('That sign-in took too long. Try again.');
+// GitHub, Google or X: the provider's sign-in in a browser sheet, which ends on the cloud's /app/done and comes
+// back to the app as synapse://signed-in with a one-time code (only the app that opened the sheet gets it).
+// open(url) shows the sheet and resolves with the URL it came back with, or null if it was closed.
+export async function signInWith(cloud, provider, phoneName, open) {
+  const state = util.encodeBase64(nacl.randomBytes(18)).replace(/[+/=]/g, (c) => ({ '+': '-', '/': '_', '=': '' })[c]);
+  const back = await open(`${cloud}/auth/${encodeURIComponent(provider)}/start?next=${encodeURIComponent(`/app/done?state=${state}`)}`);
+  if (!back) throw new Error('cancelled');
+  const q = Object.fromEntries((back.split('?')[1] || '').split('&').filter(Boolean).map((kv) => kv.split('=').map(decodeURIComponent)));
+  if (q.state !== state || !q.code) throw new Error('That sign-in did not finish. Try again.');
+  const { token, user } = await api(cloud, 'POST', '/v1/auth/app-code', { body: { code: q.code, client: 'phone', label: phoneName } });
+  return registerPhone(cloud, token, user, phoneName);
 }
 
 export const providers = (cloud) => api(cloud, 'GET', '/v1/auth/providers');

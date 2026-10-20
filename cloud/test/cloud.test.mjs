@@ -535,3 +535,22 @@ test('Sign in with Apple from the phone: Apple-signed tokens only, same person s
   assert.equal((await apple(appleToken({ sub: 'apple-1' }, { key: forger.privateKey }))).status, 401, 'a token not signed by Apple is refused');
   assert.equal((await apple('not.a.token')).status, 401);
 });
+
+test('the phone app signs in with GitHub through its browser sheet: a one-time code back to the app, no code to compare', async () => {
+  const state = 'phone-state-1234567890';
+  const start = await call(`/auth/github/start?next=${encodeURIComponent(`/app/done?state=${state}`)}`);
+  const auth = await fetch(start.headers.get('location'), { redirect: 'manual' });
+  const cb = await call(new URL(auth.headers.get('location')).pathname + new URL(auth.headers.get('location')).search);
+  assert.equal(cb.headers.get('location'), `/app/done?state=${state}`);
+  const done = await call(`/app/done?state=${state}`, { cookie: cb.headers.get('set-cookie').split(';')[0] });
+  const back = new URL(done.headers.get('location'));
+  assert.equal(back.protocol, 'synapse:');
+  assert.equal(back.searchParams.get('state'), state);
+  const ex = await call('/v1/auth/app-code', { body: { code: back.searchParams.get('code'), client: 'phone', label: 'iPhone' } });
+  assert.equal(ex.status, 200);
+  assert.match(ex.json.token, /^syn_/);
+  assert.ok(ex.json.user.providers.includes('github'), 'signed in as the account the GitHub login belongs to');
+  assert.equal((await call('/v1/auth/app-code', { body: { code: back.searchParams.get('code') } })).status, 401, 'a code works once');
+  assert.match((await call(`/app/done?state=${state}`)).headers.get('location'), /^\/login\?next=/, 'signed out: sign in first');
+  assert.equal((await call('/app/done?state=x')).status, 400);
+});

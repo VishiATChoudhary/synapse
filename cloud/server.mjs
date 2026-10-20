@@ -345,6 +345,13 @@ const routes = {
     const user = userForIdentity('apple', p, clean(b.name, 60));
     return signedIn(res, req, user, b);
   },
+  // the phone app trades the one-time code from /app/done for a session
+  'POST /v1/auth/app-code': async (req, res, b) => {
+    limitIp('app-code', req, 30, 15 * 60_000);
+    const row = useEmailToken(b.code, 'app');
+    if (!row) fail(401, 'That sign-in expired. Try again.');
+    return signedIn(res, req, get('SELECT * FROM users WHERE id = ?', row.user_id), b);
+  },
   'POST /v1/auth/logout': async (req, res) => {
     const a = auth(req);
     if (a) run('DELETE FROM sessions WHERE id = ?', a.session.id);
@@ -711,6 +718,14 @@ function page(req, res, url) {
       }
       const d = get('SELECT * FROM devices WHERE user_code = ?', String(ctx.q.code || '').toUpperCase());
       return html(res, 200, pages.device({ ...ctx, device: d && d.expires_at > now() && d.status === 'pending' ? { code: d.user_code, label: d.label } : null }));
+    }
+    // the phone app's GitHub, Google or X sign-in ends here (in its browser sheet): hand the app a one-time
+    // code through its own redirect, which only the app that opened the sheet receives
+    case '/app/done': {
+      const state = String(ctx.q.state || '');
+      if (!/^[\w-]{16,64}$/.test(state)) return html(res, 400, pages.message({ title: 'Hold on', body: 'This sign-in link is not complete. Start again in the app.', link: '/', cta: 'Home' }));
+      if (!ctx.user) return needUser(`/app/done?state=${state}`);
+      return redirect(res, `synapse://signed-in?code=${emailToken(a.user.id, 'app', 2 * 60_000, null)}&state=${state}`);
     }
     case '/welcome': return needUser('/welcome') || html(res, 200, pages.welcome({ ...ctx,
       hasApp: !!get("SELECT 1 FROM sessions WHERE user_id = ? AND kind IN ('app', 'cli')", a.user.id),

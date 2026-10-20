@@ -45,11 +45,11 @@ export default function Login() {
     const name = [c.fullName?.givenName, c.fullName?.familyName].filter(Boolean).join(' ');
     await signInWithApple({ identityToken: c.identityToken, name }, phoneName);
   });
-  // the provider's sign-in, then "Connect", in a browser sheet; it closes by itself once the app is connected
-  const withProvider = (p) => attempt(async () => {
-    try { await signInWithProvider(p, phoneName, (url) => WebBrowser.openAuthSessionAsync(url, 'synapse://signed-in')); }
-    finally { WebBrowser.dismissAuthSession(); }
-  });
+  // the provider's sign-in in a browser sheet that closes straight back into the app
+  const withProvider = (p) => attempt(() => signInWithProvider(p, phoneName, async (url) => {
+    const r = await WebBrowser.openAuthSessionAsync(url, 'synapse://signed-in');
+    return r.type === 'success' ? r.url : null;
+  }));
   const LABEL = { github: 'GitHub', google: 'Google', x: 'X' };
 
   const go = async () => {

@@ -127,16 +127,20 @@ const again = await link.signIn(cloud.base, { email: 'owner@example.com', passwo
 await link.signOut(again);
 await assert.rejects(link.connect(again, mac).send({ t: 'hello' }), (e) => e.status === 403);
 
-// GitHub, Google or X on the phone: the cloud's connect-the-app flow; the "browser" here approves it as the owner
+// GitHub, Google or X on the phone: the browser sheet ends on /app/done, which hands the app a one-time code.
+// The "browser" here is already signed in on the web as the owner (as after the provider's sign-in).
+const web = await fetch(`${cloud.base}/v1/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'owner@example.com', password: 'correct horse' }) });
+const cookie = web.headers.get('set-cookie').split(';')[0];
 const viaBrowser = await link.signInWith(cloud.base, 'github', 'Third iPhone', async (url) => {
-  const code = new URL(url).searchParams.get('code');
-  assert.equal(new URL(url).searchParams.get('via'), 'github');
-  await fetch(`${cloud.base}/v1/device/approve`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${owner.token}` }, body: JSON.stringify({ userCode: code }) });
-  await new Promise(() => {}); // the sheet stays open until the app closes it
+  const u = new URL(url);
+  assert.equal(u.pathname, '/auth/github/start');
+  const done = await fetch(cloud.base + u.searchParams.get('next'), { headers: { cookie }, redirect: 'manual' });
+  return done.headers.get('location'); // synapse://signed-in?code=...&state=...
 });
 assert.equal(viaBrowser.user.email, 'owner@example.com');
 assert.ok((await link.computers(viaBrowser)).some((m) => m.id === mac.id), 'signed in through the browser, it finds the Mac too');
-await assert.rejects(link.signInWith(cloud.base, 'github', 'Gave up', async () => {}), /cancelled/, 'closing the sheet cancels');
+await assert.rejects(link.signInWith(cloud.base, 'github', 'Gave up', async () => null), /cancelled/, 'closing the sheet cancels');
+await assert.rejects(link.signInWith(cloud.base, 'github', 'Forged', async () => 'synapse://signed-in?code=abc&state=wrong'), /did not finish/, 'a callback for another sign-in is refused');
 
 console.log('PASS phone link: account sign-in, the Mac asks first, state, chat, other accounts shut out, replay and forgery dropped, read-only agents, spawn rules, remove and sign out, browser sign-in');
 cloud.stop();
