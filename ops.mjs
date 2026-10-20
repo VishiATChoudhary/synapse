@@ -65,6 +65,7 @@ export function setMode(edgeId, mode) {
     delete edge.snapshot;
   }
   writeJSON(FILES.edges, edges);
+  if (mode === 'talk') talk.resolveRequestsFor(peer[0], edge.from, edge.to.slice(remoteId(peer[0], '').length));
   return { edge };
 }
 
@@ -74,8 +75,8 @@ export function allowTalkRequest(id) {
   const r = talk.openRequests().find((x) => x.id === id);
   if (!r) throw new Error('No such request.');
   const edge = readJSON(FILES.edges, []).find((e) => !e.mirrored && e.from === r.target && e.to === remoteId(r.peer, r.asker));
-  setMode(edge.id, 'talk');
-  talk.decideRequest(id, 'allowed');
+  if (!edge) throw new Error('That share is gone.');
+  setMode(edge.id, 'talk'); // allows the request and tells the asker
   return { allowed: true, edge: edge.id };
 }
 export function dismissTalkRequest(id) {
@@ -171,6 +172,10 @@ export async function ask(me, query, question, { conversation, waitMs = talk.LIM
     // read only, from a friend paired through a request: ask them to let us ask, rather than a dead end
     if (!shared.length || config().peers?.[other.remote.machine]?.via !== 'request') {
       throw new Error(`talk is off: ${other.remote.owner} shares ${other.name} with you for reading only. Questions work once ${other.remote.owner} turns on talk for it (use "read" meanwhile).`);
+    }
+    // an owner on 0.4.0 drops a talk-request silently: no waiting for a note that can never come
+    if (readJSON(FILES.peerState, {})[other.remote.machine]?.talkRequests !== true) {
+      throw new Error(`talk is off: ${other.remote.owner} shares ${other.name} read-only, and their Synapse is too old to get your request. Ask them to switch talk on.`);
     }
     const { id, send } = talk.openTalkRequest({ me, agent: other, now: now() });
     if (send) {

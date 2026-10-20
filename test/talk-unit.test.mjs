@@ -501,12 +501,17 @@ const asker = (extra = {}) => ({
 // the production path: remote.sync() polling a stub relay that hands out `items` once (push is refused, which
 // leaves the outbox alone)
 const http = await import('node:http');
-const viaRelay = async (items) => {
+// `sent` collects what a push tried to send (the stub still refuses it)
+const viaRelay = async (items, sent = []) => {
   let first = true;
   const srv = http.createServer((req, res) => {
-    req.resume();
-    if (req.url === '/v1/poll') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ items: first ? items : [] })); first = false; }
-    else { res.statusCode = 500; res.end('{}'); }
+    let body = '';
+    req.on('data', (d) => { body += d; });
+    req.on('end', () => {
+      if (req.url === '/v1/poll') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ items: first ? items : [] })); first = false; return; }
+      if (req.url === '/v1/send') { try { sent.push(...JSON.parse(body).items); } catch {} }
+      res.statusCode = 500; res.end('{}');
+    });
   });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
   const cfg = readJSON(FILES.remote, {});
@@ -572,9 +577,9 @@ test('hook is silent for external forks', () => {
 
 // ---------------------------------------------------------------- asker side: ask, end, exactly-once delivery
 const me = () => localAgents()[0];
-const sharedWithMe = (mode = 'talk') => {
+const sharedWithMe = (mode = 'talk', extra = { talkRequests: true }) => {
   peer({ via: 'request', handle: 'bob' });
-  writeJSON(FILES.peerState, { m1: { name: 'Robert', seen: Date.now(), shares: [], agents: [{ id: 'x', name: 'api', kind: 'claude', status: 'idle', project: 'p', startedAt: 1 }] } });
+  writeJSON(FILES.peerState, { m1: { name: 'Robert', seen: Date.now(), shares: [], agents: [{ id: 'x', name: 'api', kind: 'claude', status: 'idle', project: 'p', startedAt: 1 }], ...extra } });
   writeJSON(FILES.edges, [{ id: 'mm', from: 'r-m1-x', to: me().id, mirrored: true, remote: 'm1', owner: 'Robert', ...(mode === 'talk' ? { mode } : {}) }]);
   writeJSON(FILES.messages, []);
   writeJSON(FILES.talks, {});
@@ -629,6 +634,14 @@ test('ask on a sync share of an invite-code friend still says talk is off', asyn
   peer({ handle: 'bob' }); // no via: 'request'
   await assert.rejects(ops.ask(me(), 'api@bob', 'why?', { waitMs: 0, sync: noSync }), /talk is off/);
   assert.equal(outbox().length, 0);
+});
+
+test('ask on a sync share of an owner on 0.4.0 says talk is off and sends nothing', async () => {
+  sharedWithMe('sync', {}); // a 0.4.0 state item: no talkRequests flag
+  await assert.rejects(ops.ask(me(), 'api@bob', 'why?', { waitMs: 0, sync: noSync }),
+    /^Error: talk is off: Robert shares api read-only, and their Synapse is too old to get your request\. Ask them to switch talk on\.$/);
+  assert.equal(outbox().length, 0);
+  assert.deepEqual(state().asked || [], []);
 });
 
 // ---------------------------------------------------------------- talk requests, owner side
@@ -724,6 +737,31 @@ test('the asker gets an inbox note once the owner allows', async () => {
   const inbox = ops.inbox(me());
   assert.equal(inbox.length, 1);
   assert.match(inbox[0].text, /Robert let you ask api\..*synapse_ask api@bob/s);
+});
+
+test('turning talk on any other way allows the pending request and tells the asker', () => {
+  const e = syncShare();
+  const unrelated = { id: 'se2', from: localAgents()[1].id, to: 'r-m1-x', fromName: localAgents()[1].name };
+  writeJSON(FILES.edges, [e, unrelated]);
+  talk.receiveTalkRequest('m1', treq(U('r1')));
+  talk.receiveTalkRequest('m1', treq(U('r2'), { target: unrelated.from }));
+  ops.setMode('se1', 'talk'); // the canvas toggle, synapse talk on and accept with talk all come here
+  const byId = Object.fromEntries(state().talkRequests.map((r) => [r.id, r.status]));
+  assert.deepEqual(byId, { [U('r1')]: 'allowed', [U('r2')]: 'pending' }, 'only the request for that share');
+  assert.deepEqual(state().outgoing, [{ to: 'm1', item: { type: 'talk-status', requestId: U('r1'), state: 'allowed' } }]);
+  ops.setMode('se1', 'sync'); ops.setMode('se1', 'talk');
+  assert.equal(state().outgoing.length, 1, 'told once');
+});
+
+test('the owner advertises talk requests in its state, and the asker keeps it', async () => {
+  syncShare();
+  fs.rmSync(path.join(home, 'remote', 'sent.json'), { force: true }); // so this push sends its state
+  const sent = [];
+  await viaRelay([{ type: 'state', from: 'm1', name: 'Bob', agents: [], shares: [], talkRequests: true }], sent);
+  assert.equal(readJSON(FILES.peerState, {}).m1.talkRequests, true);
+  assert.equal(sent.find((i) => i.type === 'state')?.talkRequests, true, 'my own state says so too');
+  await viaRelay([{ type: 'state', from: 'm1', name: 'Bob', agents: [], shares: [] }]); // a 0.4.0 state
+  assert.equal(readJSON(FILES.peerState, {}).m1.talkRequests, undefined);
 });
 
 test('a talk-request reaches the owner through the mailbox', async () => {

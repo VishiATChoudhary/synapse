@@ -381,7 +381,8 @@ async function pull(c, timeout) {
       const name = clean(it.name, 40) || c.peers[m].name;
       if (name !== c.peers[m].name) { c.peers[m].name = name; cfgChanged = true; }
       const shares = cleanShares(it.shares);
-      states[m] = { name, agents: cleanAgents(it.agents), shares, seen: Date.now() };
+      // talkRequests: their Synapse takes a talk-request (0.4.0 drops it without a word)
+      states[m] = { name, agents: cleanAgents(it.agents), shares, seen: Date.now(), ...(it.talkRequests === true ? { talkRequests: true } : {}) };
       mirror(m, shares, name);
     } else if (it.type === 'context' && typeof it.agent === 'string') {
       const n = appendLog(m, it.agent, it.messages);
@@ -500,10 +501,11 @@ async function push(c, timeout) {
       if (agents.some((a) => a.id === e.from)) continue;
       agents = [...agents, { id: e.from, name: e.snapshot.name, kind: e.snapshot.kind, status: 'closed', project: projectOf(e.snapshot.cwd).label, startedAt: null }];
     }
-    const sig = sha(JSON.stringify([c.name, agents.map((a) => [a.id, a.name, a.status, a.project]), shares]));
+    // 'tr' is in the signature so an update to this version tells friends at once that it takes talk requests
+    const sig = sha(JSON.stringify(['tr', c.name, agents.map((a) => [a.id, a.name, a.status, a.project]), shares]));
     const last = sent[`state:${m}`];
     if (!last || last.sig !== sig || now - last.t > HEARTBEAT) {
-      items.push({ type: 'state', name: c.name, agents, shares });
+      items.push({ type: 'state', name: c.name, agents, shares, talkRequests: true });
       marks[`state:${m}`] = { sig, t: now };
     }
 

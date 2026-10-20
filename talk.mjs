@@ -236,7 +236,8 @@ export function openRequests(s = load(), edges = readJSON(FILES.edges, [])) {
     && edges.some((e) => !e.mirrored && e.from === r.target && e.to === remoteId(r.peer, r.asker) && e.mode !== 'talk'));
 }
 
-// Allowed or dismissed ("not now"). Allowed tells the asker's machine. The share's mode is the caller's (ops.mjs).
+// Allowed or dismissed ("not now"). Allowed tells the asker's machine. The share's mode is the caller's (ops.mjs),
+// and ops.setMode already allows a request when the share goes to talk.
 export function decideRequest(id, status, now = Date.now()) {
   return update((s) => {
     const r = s.talkRequests.find((x) => x.id === id && x.status === 'pending');
@@ -245,6 +246,20 @@ export function decideRequest(id, status, now = Date.now()) {
     r.decidedAt = now;
     if (status === 'allowed') s.outgoing.push({ to: r.peer, item: { type: 'talk-status', requestId: r.id, state: 'allowed' } });
     return { ...r };
+  });
+}
+
+// A share went to talk, however that happened (Allow, the canvas, the CLI, an accept with talk): every pending
+// request it answers is allowed, and the asker's machine is told so its agent hears it in the inbox.
+export function resolveRequestsFor(peer, target, asker, now = Date.now()) {
+  return update((s) => {
+    const hit = s.talkRequests.filter((r) => r.status === 'pending' && r.peer === peer && r.target === target && r.asker === asker);
+    for (const r of hit) {
+      r.status = 'allowed';
+      r.decidedAt = now;
+      s.outgoing.push({ to: r.peer, item: { type: 'talk-status', requestId: r.id, state: 'allowed' } });
+    }
+    return hit.map((r) => r.id);
   });
 }
 
