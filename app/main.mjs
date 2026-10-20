@@ -15,6 +15,7 @@ import { openRequests, talkPerHour, talkModel, clampPerHour } from '../talk.mjs'
 import { isConnected } from '../remote.mjs';
 import { createUpdater, bundleOf, MANIFEST_URL } from './updater.mjs';
 import * as phone from './phone.mjs';
+import { collect as collectActivity } from './activity.mjs';
 
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
 const SHELL = process.env.SHELL || '/bin/zsh';
@@ -841,6 +842,8 @@ handle('project:rename', ({ key, name }) => {
 });
 const settingsOut = (c) => ({ openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, talkPerHour: talkPerHour(), talkModel: talkModel() });
 handle('settings:get', () => settingsOut(config()));
+// the activity view: GitHub, commits and prompts over the last year; the first count reads every transcript, so it reports progress
+handle('activity:get', () => collectActivity({ repos: config().workspaces, cacheFile: path.join(DATA, 'activity.json'), env: cleanEnv(), onProgress: (p) => win?.webContents.send('activity:progress', p) }));
 handle('talk:usage', () => talkHistory('api/talks/usage'));
 handle('settings:set', (patch) => {
   const c = config();

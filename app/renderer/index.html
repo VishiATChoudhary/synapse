@@ -28,6 +28,7 @@
       <button class="ghost sig" id="btn-update" hidden></button>
       <button class="icon" id="split-right" title="Split side by side  ⌘D" aria-label="Split side by side">◫</button>
       <button class="icon" id="split-down" title="Split top and bottom  ⇧⌘D" aria-label="Split top and bottom">⊟</button>
+      <button class="ghost" id="btn-activity" title="activity: your year in code and prompts"><span class="glyph" aria-hidden="true">▦</span>activity</button>
       <button class="ghost" id="btn-canvas" title="node view  ⌃Tab or ⌘G · ⌘-click a node opens its session"><span class="glyph" aria-hidden="true">◇</span><span id="syn-dot" hidden role="button" tabindex="0" aria-label="synapse requests"></span>synapse</button>
       <button class="ghost sig" id="btn-fork" title="⇧⌘F">⑂ fork</button>
     </div>
@@ -39,6 +40,7 @@
       <div class="empty-sub"><kbd>⌃1</kbd> claude &nbsp; <kbd>⌃2</kbd> codex &nbsp; <kbd>⌘T</kbd> shell &nbsp; <kbd>⌘N</kbd> pick &nbsp; <kbd>⇧⌘N</kbd> worktree</div>
     </div>
   </section>
+  <div class="activity" id="activity" hidden tabindex="-1"></div>
   <div class="canvas" id="canvas" hidden><iframe id="canvas-frame" title="Synapse canvas"></iframe></div>
   <footer class="bar" id="bar">
     <span class="bar-left" id="bar-left"></span>

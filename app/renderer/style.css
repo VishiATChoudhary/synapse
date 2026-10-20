@@ -285,7 +285,7 @@ body.sidebar-collapsed .main > .top { padding-left: 86px; }
 .canvas { position: absolute; left: 0; right: 0; top: var(--bar); bottom: 0; z-index: 20; background: var(--paper); border-top: 1px solid var(--rule); }
 .canvas iframe { width: 100%; height: 100%; border: 0; display: block; }
 .canvas.loading::after { content: 'starting synapse…'; position: absolute; inset: 0; display: grid; place-items: center; font: 10.5px var(--mono); text-transform: uppercase; color: var(--ink-3); }
-#btn-canvas.on { background: var(--ink); color: var(--paper); }
+#btn-canvas.on, #btn-activity.on { background: var(--ink); color: var(--paper); }
 
 /* Branch picker and PR status: distinct shapes as well as colors. */
 .git-icon { display: inline-flex; width: 16px; height: 16px; flex: none; vertical-align: middle; }
@@ -476,3 +476,51 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 [data-kind="settings"] .talk-row .c { font: 11.5px var(--mono); color: var(--ink-2); }
 [data-kind="settings"] .keys { gap: 4px 22px; padding: 8px 22px 14px; }
 [data-kind="settings"] .keys span { font-size: 11px; }
+
+/* ---------------------------------------------------------------- activity: the year as heatmaps, a level and badges */
+.activity { position: absolute; left: 0; right: 0; top: var(--bar); bottom: 0; z-index: 20; overflow: auto; background: var(--paper); border-top: 1px solid var(--rule); outline: 0; }
+.act-loading { position: absolute; inset: 0; display: grid; place-items: center; font: 11px var(--mono); text-transform: uppercase; color: var(--ink-2); }
+.act-page { width: 820px; max-width: calc(100% - 48px); margin: 0 auto; padding: 36px 0 48px; }
+.act-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding-bottom: 18px; border-bottom: 1px solid var(--ink); }
+.act-title { font: 300 64px/.85 var(--display); text-transform: uppercase; }
+.act-level { width: 280px; }
+.act-lvl { font: 400 26px/1 var(--display); text-transform: uppercase; color: var(--sig); }
+.act-xp { height: 8px; margin: 8px 0 6px; border: 1px solid var(--ink); }
+.act-xp span { display: block; height: 100%; background: var(--sig); }
+.act-cap { font: 11px var(--mono); color: var(--ink-2); }
+.act-tiles { display: grid; grid-template-columns: repeat(6, 1fr); border-bottom: 1px solid var(--rule); }
+.act-tile { padding: 16px 14px 14px 0; display: flex; flex-direction: column; gap: 4px; }
+.act-tile + .act-tile { padding-left: 14px; border-left: 1px solid var(--rule); }
+.act-tile b { font: 400 32px/1 var(--display); }
+.act-tile.hot b { color: var(--sig); }
+.act-tile span { font: 10.5px var(--mono); text-transform: uppercase; color: var(--ink-2); }
+.act-sec { padding-top: 26px; }
+.act-sec-head { display: flex; align-items: center; gap: 12px; padding-bottom: 12px; }
+.act-sec-t { display: flex; align-items: center; gap: 8px; font: 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.act-sec-t::before { content: ''; width: 6px; height: 6px; background: var(--sig); }
+.act-sec-s { font: 12.5px var(--sans); color: var(--ink-2); }
+.act-map { --cell: 12px; --gap: 3px; }
+.act-months, .act-grid { display: grid; grid-template-columns: repeat(53, var(--cell)); gap: var(--gap); }
+.act-months { height: 16px; font: 10px var(--mono); color: var(--ink-2); }
+.act-months span { white-space: nowrap; }
+.act-grid { grid-template-rows: repeat(7, var(--cell)); grid-auto-flow: column; }
+.act-map i, .act-legend i { width: var(--cell); height: var(--cell); display: block; }
+.act-map .l0, .act-legend .l0 { background: var(--wash); box-shadow: inset 0 0 0 1px var(--rule); }
+.act-map .l1, .act-legend .l1 { background: color-mix(in srgb, var(--sig) 28%, var(--paper)); }
+.act-map .l2, .act-legend .l2 { background: color-mix(in srgb, var(--sig) 52%, var(--paper)); }
+.act-map .l3, .act-legend .l3 { background: color-mix(in srgb, var(--sig) 76%, var(--paper)); }
+.act-map .l4, .act-legend .l4 { background: var(--sig); }
+.act-legend { display: flex; align-items: center; justify-content: flex-end; gap: 3px; margin-top: 8px; font: 10px var(--mono); color: var(--ink-2); }
+.act-legend span { margin: 0 4px; }
+.act-badges { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.act-badge { padding: 12px 14px; border: 1px dashed var(--rule); display: flex; flex-direction: column; gap: 4px; opacity: .55; }
+.act-badge b { font: 400 18px/1 var(--display); text-transform: uppercase; }
+.act-badge span { font: 12px/1.4 var(--sans); color: var(--ink-2); }
+.act-badge.got { opacity: 1; border: 1px solid var(--ink); box-shadow: inset 3px 0 0 var(--sig); }
+.act-foot { margin-top: 30px; font: 10.5px var(--mono); text-transform: uppercase; color: var(--ink-3); }
+.act-models { display: grid; gap: 6px; margin-top: 18px; }
+.act-model { display: grid; grid-template-columns: 200px 1fr 64px; align-items: center; gap: 12px; font: 11px var(--mono); }
+.act-model .name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-model .bar { height: 8px; background: var(--wash); box-shadow: inset 0 0 0 1px var(--rule); }
+.act-model .bar i { display: block; height: 100%; background: var(--sig); }
+.act-model .n { text-align: right; color: var(--ink-2); }

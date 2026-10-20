@@ -76,6 +76,7 @@ contextBridge.exposeInMainWorld('synapse', {
   links: () => call('links'),
   onLoginSuggest: (fn) => on('login:suggest', fn),
   talks: { list: () => call('talks:list'), onOpen: (fn) => on('talk:open', fn) },
+  activity: { get: () => call('activity:get'), onProgress: (fn) => on('activity:progress', fn) },
   talkRequests: { allow: (id) => call('talkreq:allow', { id }), dismiss: (id) => call('talkreq:dismiss', { id }) },
   cli: (args, as) => call('synapse', { args, as }),
   canvas: () => call('canvas'),
