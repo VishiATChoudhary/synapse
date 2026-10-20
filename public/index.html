@@ -536,7 +536,7 @@ function applyState(s) {
     if (!n) {
       const parent = a.forkOf && agents.get(a.forkOf);
       const p = layout[a.id] || (parent ? nearParent(parent) : spawnPoint(agents.size, a.frameKey));
-      n = { x: p.x, y: p.y, vx: 0, vy: 0, born: performance.now(), color: a.color, phase: Math.random() * 6.28, dying: 0 };
+      n = { x: p.x, y: p.y, born: performance.now(), color: a.color, phase: Math.random() * 6.28, dying: 0 };
       if (!layout[a.id] && !a.external) setTimeout(() => agents.has(a.id) && saveLayout(a.id), 1500);
       agents.set(a.id, n);
     }
@@ -767,11 +767,11 @@ addEventListener('pointermove', (ev) => {
     const n = agents.get(drag.id); if (!n) return;
     if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) > 3) drag.moved = true;
     const r = treeRoot(n), at = n.slot || n; // a node in a fork tree drags the whole tree by its root
-    r.x += w.x - drag.ox - at.x; r.y += w.y - drag.oy - at.y; r.vx = r.vy = 0;
+    r.x += w.x - drag.ox - at.x; r.y += w.y - drag.oy - at.y;
   } else if (drag?.mode === 'group') {
     if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) > 3) drag.moved = true;
     const g = groupRects().find((r) => r.key === drag.key);
-    if (g) for (const [, n] of g.nodes) { n.x += w.x - drag.wx; n.y += w.y - drag.wy; n.vx = n.vy = 0; delete n.goal; }
+    if (g) for (const [, n] of g.nodes) { n.x += w.x - drag.wx; n.y += w.y - drag.wy; delete n.goal; }
     drag.wx = w.x; drag.wy = w.y;
   } else if (drag?.mode === 'pan') {
     if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) > 3) drag.moved = true;
@@ -1739,36 +1739,8 @@ function arrange() {
   setTimeout(() => { for (const n of agents.values()) delete n.goal; }, 2000);
 }
 
-// frames never overlap: overlapping pairs are pushed apart along the shorter axis.
 // The frame you are dragging (or whose agent you are dragging) holds still and the other one yields.
 // A repo's outer frame moves as one against other projects; inside it its worktree frames keep apart.
-function separateFrames() {
-  if ([...agents.values()].some((n) => n.goal)) return;
-  const rs = groupRects();
-  const heldIds = new Set(drag?.mode === 'move' ? [drag.id] : drag?.mode === 'group' ? (rs.find((r) => r.key === drag.key)?.nodes || []).map(([id]) => id) : []);
-  const holds = (r) => r.nodes.some(([id]) => heldIds.has(id));
-  let moved = false;
-  const apart = (list, GAP) => {
-    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
-      const a = list[i], b = list[j];
-      const ox = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) + GAP, oy = Math.min(a.y1, b.y1) - Math.max(a.top, b.top) + GAP;
-      if (ox <= 0 || oy <= 0) continue;
-      const horiz = ox < oy, amt = Math.min(horiz ? ox : oy, 60) * 0.35;
-      const dir = horiz ? Math.sign((b.x0 + b.x1) - (a.x0 + a.x1)) || 1 : Math.sign((b.top + b.y1) - (a.top + a.y1)) || 1;
-      const ha = holds(a), hb = holds(b), sa = ha && !hb ? 0 : hb && !ha ? 1 : 0.5, sb = 1 - sa;
-      shiftGroup(a, horiz ? -dir * amt * sa : 0, horiz ? 0 : -dir * amt * sa);
-      shiftGroup(b, horiz ? dir * amt * sb : 0, horiz ? 0 : dir * amt * sb);
-      moved = true;
-    }
-  };
-  apart(rs.filter((r) => !r.parent), 28);
-  for (const o of rs.filter((r) => r.outer)) apart(rs.filter((r) => r.parent === o.key), 16);
-  if (moved) scheduleSave();
-}
-function shiftGroup(g, dx, dy) {
-  if (!dx && !dy) return;
-  for (const [id, n] of g.nodes) if (heldId() !== id && !n.slot) { n.x += dx; n.y += dy; }
-}
 let saveTimer = null;
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveAll, 900); }
 function saveAll() {
@@ -1817,47 +1789,21 @@ function layoutTrees() {
 const treeRoot = (n) => (n?.slot && agents.get(n.tree)) || n;
 const heldId = () => drag?.mode === 'move' ? (treeRoot(agents.get(drag.id))?.a?.id ?? drag.id) : null;
 
+// No physics: agents stay where they are put. They move only when dragged, when Arrange or a new
+// placement gives them a goal, and children follow their fork tree's slots.
 function physics() {
   layoutTrees();
   const held = heldId();
-  // soft separation so nodes never overlap; a node in a tree pushes its root, so the whole tree makes room
-  const list = [...agents.entries()].filter(([, n]) => !n.dying && !n.hidden);
-  for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
-    const [, a] = list[i], [, b] = list[j];
-    const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 0.01, min = 215;
-    if (a.a.frameKey !== b.a.frameKey) continue; // across projects the frames keep the distance
-    if (a.tree && a.tree === b.tree) continue; // a tree keeps its own spacing
-    if (d < min) {
-      const f = (min - d) * 0.04, ux = dx / d, uy = dy / d, ra = treeRoot(a), rb = treeRoot(b);
-      if (held !== ra.a.id) { ra.vx -= ux * f; ra.vy -= uy * f; }
-      if (held !== rb.a.id) { rb.vx += ux * f; rb.vy += uy * f; }
-    }
-  }
-  // pull each agent gently toward the middle of its project, so projects form clusters
-  const mid = new Map();
-  for (const [, n] of list) { const m = mid.get(n.a.frameKey) || { x: 0, y: 0, c: 0 }; m.x += n.x; m.y += n.y; m.c++; mid.set(n.a.frameKey, m); }
-  for (const [id, n] of list) {
-    const m = mid.get(n.a.frameKey);
-    if (m.c > 1 && held !== id && !n.slot) { n.vx += (m.x / m.c - n.x) * 0.0016; n.vy += (m.y / m.c - n.y) * 0.0016; }
-  }
-  // and, more gently, toward the middle of their repo, so a repo's worktree frames stay together
-  const repo = new Map();
-  for (const [, n] of list) { const m = repo.get(n.a.projectKey) || { x: 0, y: 0, c: 0, f: new Set() }; m.x += n.x; m.y += n.y; m.c++; m.f.add(n.a.frameKey); repo.set(n.a.projectKey, m); }
-  for (const [id, n] of list) {
-    const m = repo.get(n.a.projectKey);
-    if (m.f.size > 1 && drag?.id !== id) { n.vx += (m.x / m.c - n.x) * 0.0008; n.vy += (m.y / m.c - n.y) * 0.0008; }
-  }
-  for (const [id, n] of list) {
-    if (n.slot) { n.x = lerp(n.x, n.slot.x, 0.18); n.y = lerp(n.y, n.slot.y, 0.18); n.vx = n.vy = 0; delete n.goal; continue; }
+  for (const [id, n] of agents) {
+    if (n.dying || n.hidden) continue;
+    if (n.slot) { n.x = lerp(n.x, n.slot.x, 0.18); n.y = lerp(n.y, n.slot.y, 0.18); delete n.goal; continue; }
     if (held === id) continue;
-    if (n.goal) { n.x = lerp(n.x, n.goal.x, 0.12); n.y = lerp(n.y, n.goal.y, 0.12); n.vx = n.vy = 0; continue; }
-    n.x += n.vx; n.y += n.vy; n.vx *= 0.82; n.vy *= 0.82;
+    if (n.goal) { n.x = lerp(n.x, n.goal.x, 0.12); n.y = lerp(n.y, n.goal.y, 0.12); }
   }
 }
 
 function frame(t) {
   physics();
-  separateFrames();
   cam.x = lerp(cam.x, cam.tx, 0.16); cam.y = lerp(cam.y, cam.ty, 0.16); cam.k = lerp(cam.k, cam.tk, 0.16);
   const w = toWorld(mouse.x, mouse.y); mouse.wx = w.x; mouse.wy = w.y;
   for (const [id, v] of flows) { const nv = v * 0.985 - 0.002; nv <= 0 ? flows.delete(id) : flows.set(id, nv); }
