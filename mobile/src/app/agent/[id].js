@@ -5,19 +5,20 @@ import { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { withConsent } from '../../consent';
+import { MediaStrip } from '../../MediaStrip';
 import { source, useAgent } from '../../store';
 import { FONT, useTheme } from '../../theme';
 import { Button, Label, Mark, Markdown } from '../../ui';
 
 const tap = () => Platform.OS !== 'web' && Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-// consecutive tool lines fold into one row: "3 tool calls"
+// consecutive tool lines fold into one row: "3 tool calls", with the screenshots and videos they made
 function group(messages) {
   const out = [];
   for (const m of messages) {
     const prev = out.at(-1);
-    if (m.tool && prev?.tools) prev.tools.push(m.text);
-    else out.push(m.tool ? { tools: [m.text], ts: m.ts } : m);
+    if (m.tool && prev?.tools) { prev.tools.push(m.text); if (m.media) prev.media = [...(prev.media || []), ...m.media]; }
+    else out.push(m.tool ? { tools: [m.text], ts: m.ts, media: m.media } : m);
   }
   return out;
 }
@@ -35,13 +36,17 @@ function Tools({ tools }) {
 
 function Message({ m }) {
   const t = useTheme();
-  if (m.tools) return <Tools tools={m.tools} />;
+  const media = m.media?.length ? <MediaStrip media={m.media} /> : null;
+  if (m.tools) return <View style={{ gap: 10 }}><Tools tools={m.tools} />{media}</View>;
   if (m.role === 'user') return (
-    <View style={{ alignSelf: 'flex-end', maxWidth: '85%', backgroundColor: t.ink, paddingVertical: 10, paddingHorizontal: 14 }}>
-      <Markdown text={m.text} color={t.onInk} />
+    <View style={{ alignSelf: 'flex-end', maxWidth: '85%', gap: 10 }}>
+      <View style={{ backgroundColor: t.ink, paddingVertical: 10, paddingHorizontal: 14 }}>
+        <Markdown text={m.text} color={t.onInk} />
+      </View>
+      {media}
     </View>
   );
-  return <Markdown text={m.text} />;
+  return <View style={{ gap: 10 }}><Markdown text={m.text} />{media}</View>;
 }
 
 function Needs({ a }) {

@@ -1,9 +1,10 @@
 // Account, computer, privacy and contact. Kept reachable from the home screen (App Review 5.1.1(i), (v), 1.2).
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Linking, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Linking, Pressable, ScrollView, Switch, Text, TextInput, View } from 'react-native';
 import { DISCLOSURE, revokeConsent, useConsent } from '../consent';
 import { DEFAULT_CLOUD } from '../link';
+import { setMediaOn, supported as mediaSupported, useMediaOn } from '../media';
 import { choose, deleteAccount, leaveDemo, signOutPhone, useSynapse } from '../store';
 import { FONT, useTheme } from '../theme';
 import { Button, Label, Rule, ago } from '../ui';
@@ -22,6 +23,7 @@ function Section({ title, children }) {
 export default function Settings() {
   const t = useTheme();
   const { given } = useConsent();
+  const mediaOn = useMediaOn();
   const { mode, user, computers, computerId } = useSynapse();
   const [deleting, setDeleting] = useState(false);
   const [password, setPassword] = useState('');
@@ -57,6 +59,18 @@ export default function Settings() {
           <Text style={body}>These are sample agents, nothing leaves this phone. Sign in to see the agents on your own computer.</Text>
           <Button filled onPress={() => { leaveDemo(); router.replace('/login'); }}>sign in</Button>
         </Section>
+      )}
+      {mediaSupported && (
+        <>
+          <Rule />
+          <Section title="images and videos">
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <Text style={[body, { flex: 1 }]}>Show the screenshots and videos your agents make in their chats.</Text>
+              <Switch value={mediaOn} onValueChange={setMediaOn} trackColor={{ true: t.sig }} />
+            </View>
+            <Text style={[body, { color: t.ink2, fontSize: 13 }]}>Videos come as a small phone copy, at most 8 MB each.</Text>
+          </Section>
+        </>
       )}
       <Rule />
       <Section title="your prompts">
