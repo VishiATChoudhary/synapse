@@ -40,11 +40,16 @@ export async function signInApple(cloud, { identityToken, name }, phoneName) {
 export async function signInWith(cloud, provider, phoneName, open) {
   const state = util.encodeBase64(nacl.randomBytes(18)).replace(/[+/=]/g, (c) => ({ '+': '-', '/': '_', '=': '' })[c]);
   const back = await open(`${cloud}/auth/${encodeURIComponent(provider)}/start?next=${encodeURIComponent(`/app/done?state=${state}`)}`);
-  if (!back) throw new Error('cancelled');
-  const q = Object.fromEntries((back.split('?')[1] || '').split('&').filter(Boolean).map((kv) => kv.split('=').map(decodeURIComponent)));
-  if (q.state !== state || !q.code) throw new Error('That sign-in did not finish. Try again.');
-  const { token, user } = await api(cloud, 'POST', '/v1/auth/app-code', { body: { code: q.code, client: 'phone', label: phoneName } });
-  return registerPhone(cloud, token, user, phoneName);
+  const q = Object.fromEntries(String(back || '').replace(/^[^?]*\?/, '').split(/[&#]/).filter(Boolean).map((kv) => {
+    const i = kv.indexOf('=');
+    return i < 0 ? [kv, ''] : [decodeURIComponent(kv.slice(0, i)), decodeURIComponent(kv.slice(i + 1))];
+  }));
+  // the code from the return link, or else the sign-in the cloud kept under our state (if the link got lost)
+  const body = q.state === state && q.code ? { code: q.code } : { state };
+  let r;
+  try { r = await api(cloud, 'POST', '/v1/auth/app-code', { body: { ...body, client: 'phone', label: phoneName } }); }
+  catch (e) { if (e.status === 401) throw new Error(back ? 'That sign-in did not finish. Try again.' : 'cancelled'); throw e; }
+  return registerPhone(cloud, r.token, r.user, phoneName);
 }
 
 export const providers = (cloud) => api(cloud, 'GET', '/v1/auth/providers');
