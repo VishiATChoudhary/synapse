@@ -336,6 +336,15 @@ const routes = {
     }
     return signedIn(res, req, user, b);
   },
+  // Sign in with Apple from the phone app: Apple's identity token in, a session out
+  'POST /v1/auth/apple': async (req, res, b) => {
+    limitIp('apple', req, 30, 15 * 60_000);
+    let p;
+    try { p = await oauth.verifyApple(b.identityToken); }
+    catch (e) { fail(401, `Sign in with Apple did not work: ${e.message}.`); }
+    const user = userForIdentity('apple', p, clean(b.name, 60));
+    return signedIn(res, req, user, b);
+  },
   'POST /v1/auth/logout': async (req, res) => {
     const a = auth(req);
     if (a) run('DELETE FROM sessions WHERE id = ?', a.session.id);
@@ -640,6 +649,21 @@ async function oauthStart(req, res, provider, url) {
   return redirect(res, oauth.authorizeUrl(provider, { state, challenge, redirect: `${PUBLIC_URL}/auth/${provider}/callback` }));
 }
 
+// the account behind a provider identity: the one it is linked to, else the one with the same verified email
+// (the provider vouched for it), else a new one; the identity is linked to it either way
+function userForIdentity(provider, p, name) {
+  const email = p.emailVerified ? normEmail(p.email) : null;
+  const known = get('SELECT * FROM identities WHERE provider = ? AND provider_id = ?', provider, p.id);
+  let user;
+  if (known) user = get('SELECT * FROM users WHERE id = ?', known.user_id);
+  else if (email && (user = get('SELECT * FROM users WHERE email = ?', email))) {
+    if (!user.email_verified) run('UPDATE users SET email_verified = 1 WHERE id = ?', user.id);
+  } else user = createUser({ email, name: name || p.name, emailVerified: !!email, avatar: p.avatar, handle: p.username });
+  if (!known) run('INSERT INTO identities (provider, provider_id, user_id, email, username, created_at) VALUES (?, ?, ?, ?, ?, ?)', provider, p.id, user.id, email, p.username || null, now());
+  if (!user.avatar && p.avatar) run('UPDATE users SET avatar = ? WHERE id = ?', p.avatar, user.id);
+  return user;
+}
+
 async function oauthCallback(req, res, provider, url) {
   const st = get('SELECT * FROM oauth_states WHERE state = ? AND provider = ?', String(url.searchParams.get('state') || ''), provider);
   if (st) run('DELETE FROM oauth_states WHERE state = ?', st.state);
@@ -650,23 +674,16 @@ async function oauthCallback(req, res, provider, url) {
   try { p = await oauth.exchange(provider, { code: url.searchParams.get('code'), verifier: st.verifier, redirect: `${PUBLIC_URL}/auth/${provider}/callback` }); }
   catch (e) { console.error(e.message); return back(`${pages.providerLabel(provider)} sign-in failed. Try again.`); }
 
-  const email = p.emailVerified ? normEmail(p.email) : null;
-  const known = get('SELECT * FROM identities WHERE provider = ? AND provider_id = ?', provider, p.id);
   let user;
   if (st.link_user) {
     // linking to the signed-in account
+    const email = p.emailVerified ? normEmail(p.email) : null;
+    const known = get('SELECT * FROM identities WHERE provider = ? AND provider_id = ?', provider, p.id);
     if (known && known.user_id !== st.link_user) return redirect(res, `/settings?error=${encodeURIComponent(`That ${pages.providerLabel(provider)} account belongs to another Synapse account.`)}`);
     user = get('SELECT * FROM users WHERE id = ?', st.link_user);
-  } else if (known) {
-    user = get('SELECT * FROM users WHERE id = ?', known.user_id);
-  } else if (email && (user = get('SELECT * FROM users WHERE email = ?', email))) {
-    // same verified email: same person. The provider vouched for it, so mark it verified
-    if (!user.email_verified) run('UPDATE users SET email_verified = 1 WHERE id = ?', user.id);
-  } else {
-    user = createUser({ email, name: p.name, emailVerified: !!email, avatar: p.avatar, handle: p.username });
-  }
-  if (!known) run('INSERT INTO identities (provider, provider_id, user_id, email, username, created_at) VALUES (?, ?, ?, ?, ?, ?)', provider, p.id, user.id, email, p.username || null, now());
-  if (!user.avatar && p.avatar) run('UPDATE users SET avatar = ? WHERE id = ?', p.avatar, user.id);
+    if (!known) run('INSERT INTO identities (provider, provider_id, user_id, email, username, created_at) VALUES (?, ?, ?, ?, ?, ?)', provider, p.id, user.id, email, p.username || null, now());
+    if (!user.avatar && p.avatar) run('UPDATE users SET avatar = ? WHERE id = ?', p.avatar, user.id);
+  } else user = userForIdentity(provider, p);
   const token = createSession(user.id, 'web', clean(req.headers['user-agent'], 80), ipOf(req));
   return redirect(res, st.link_user ? '/settings?linked=1' : st.next || '/welcome', { 'set-cookie': cookie('syn_session', token, WEB_SESSION) });
 }

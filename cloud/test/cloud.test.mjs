@@ -3,6 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,12 +20,21 @@ const profiles = {
   google: { user: { sub: 'g-202', email: 'gina@example.com', email_verified: true, name: 'Gina G', picture: 'https://lh3.example/gina.png' } },
   x: { user: { data: { id: 'x-303', name: 'Xavier', username: 'xav', profile_image_url: 'https://pbs.example/xav_normal.png' } } },
 };
+// a fake Apple: its signing keys, so tests can mint identity tokens the cloud accepts
+const apple = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+const appleJwk = { ...apple.publicKey.export({ format: 'jwk' }), kid: 'test-kid', alg: 'RS256', use: 'sig' };
+function appleToken(claims, { key = apple.privateKey, kid = 'test-kid' } = {}) {
+  const enc = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const body = `${enc({ alg: 'RS256', kid })}.${enc({ iss: 'https://appleid.apple.com', aud: 'dev.synapse.mobile', exp: Math.floor(Date.now() / 1000) + 600, ...claims })}`;
+  return `${body}.${crypto.sign('RSA-SHA256', Buffer.from(body), key).toString('base64url')}`;
+}
 const seen = [];
 function startMock() {
   return new Promise((resolve) => {
     mock = http.createServer(async (req, res) => {
       const u = new URL(req.url, 'http://x');
       const [, p, step] = u.pathname.split('/');
+      if (p === 'apple' && step === 'keys') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ keys: [appleJwk] })); }
       let body = '';
       for await (const c of req) body += c;
       seen.push({ p, step, method: req.method, auth: req.headers.authorization, body });
@@ -48,7 +58,7 @@ before(async () => {
   proc = spawn(process.execPath, ['server.mjs'], {
     cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PORT: String(port), PUBLIC_URL: base, CLOUD_DATA: data, CLOUD_SECRET: 'test-secret', CLOUD_DEV_MAIL: '1', CLOUD_IP_LIMIT_SCALE: '50', OAUTH_MOCK_BASE: mockBase,
-      GITHUB_CLIENT_ID: 'gh', GITHUB_CLIENT_SECRET: 'ghs', GOOGLE_CLIENT_ID: 'go', GOOGLE_CLIENT_SECRET: 'gos', X_CLIENT_ID: 'xi', X_CLIENT_SECRET: 'xs' },
+      APPLE_KEYS_URL: `${mockBase}/apple/keys`, GITHUB_CLIENT_ID: 'gh', GITHUB_CLIENT_SECRET: 'ghs', GOOGLE_CLIENT_ID: 'go', GOOGLE_CLIENT_SECRET: 'gos', X_CLIENT_ID: 'xi', X_CLIENT_SECRET: 'xs' },
   });
   let err = '';
   proc.stderr.on('data', (d) => { err += d; });
@@ -502,4 +512,26 @@ test('an account\'s computer and phone find each other and talk without an invit
   assert.equal((await call(`/v1/machines/${phone.machineId}`, { token: me, method: 'DELETE' })).status, 200);
   assert.equal((await send(phone, mac)).status, 403);
   assert.equal((await call('/v1/machines', { token: me })).json.machines.length, 1);
+});
+
+test('Sign in with Apple from the phone: Apple-signed tokens only, same person signs in again, verified email joins its account', async () => {
+  const apple = (identityToken, name) => call('/v1/auth/apple', { body: { identityToken, name, client: 'phone', label: 'iPhone' } });
+  const first = await apple(appleToken({ sub: 'apple-1', email: 'x1@privaterelay.appleid.com', email_verified: true }), 'Appy Person');
+  assert.equal(first.status, 200);
+  assert.match(first.json.token, /^syn_/);
+  assert.equal(first.json.user.name, 'Appy Person');
+  assert.deepEqual(first.json.user.providers, ['apple']);
+  const again = await apple(appleToken({ sub: 'apple-1' }));
+  assert.equal(again.json.user.handle, first.json.user.handle, 'the same Apple ID is the same account');
+
+  await signup('mixed@example.com', 'Mixed');
+  const joined = await apple(appleToken({ sub: 'apple-2', email: 'mixed@example.com', email_verified: 'true' }));
+  assert.equal(joined.json.user.email, 'mixed@example.com', 'a verified email joins the existing account');
+
+  assert.equal((await apple(appleToken({ sub: 'apple-3', aud: 'com.someone.else' }))).status, 401, 'tokens for other apps are refused');
+  assert.equal((await apple(appleToken({ sub: 'apple-3', exp: Math.floor(Date.now() / 1000) - 10 }))).status, 401, 'expired tokens are refused');
+  assert.equal((await apple(appleToken({ sub: 'apple-3', iss: 'https://evil.example' }))).status, 401, 'only Apple issues them');
+  const forger = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  assert.equal((await apple(appleToken({ sub: 'apple-1' }, { key: forger.privateKey }))).status, 401, 'a token not signed by Apple is refused');
+  assert.equal((await apple('not.a.token')).status, 401);
 });

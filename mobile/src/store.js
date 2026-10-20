@@ -6,7 +6,7 @@ import * as SecureStore from 'expo-secure-store';
 import { useSyncExternalStore } from 'react';
 import { Platform } from 'react-native';
 import { createDemo } from './demo';
-import { DEFAULT_CLOUD, api, computers, setRandom, signIn, signOut } from './link';
+import { DEFAULT_CLOUD, api, computers, setRandom, signIn, signInApple, signInWith as signInVia, signOut } from './link';
 import { createRemote } from './remote';
 
 setRandom(getRandomBytes);
@@ -70,11 +70,14 @@ async function signOutNow() {
 
 ACCOUNT.get().then((v) => (v ? startAccount(JSON.parse(v)) : set({ mode: 'signed-out' }))).catch(() => set({ mode: 'signed-out' }));
 
-export async function signInWith(form, phoneName) {
-  const a = await signIn(DEFAULT_CLOUD, form, phoneName);
+async function signedIn(a) {
   await ACCOUNT.set(JSON.stringify(a));
   startAccount(a);
 }
+export const signInWith = async (form, phoneName) => signedIn(await signIn(DEFAULT_CLOUD, form, phoneName));
+export const signInWithApple = async (credential, phoneName) => signedIn(await signInApple(DEFAULT_CLOUD, credential, phoneName));
+// GitHub, Google or X: open(url) shows the cloud's sign-in page in a browser sheet
+export const signInWithProvider = async (provider, phoneName, open) => signedIn(await signInVia(DEFAULT_CLOUD, provider, phoneName, open));
 export const signOutPhone = signOutNow;
 export function tryDemo() { use((emit) => createDemo(emit), 'demo'); }
 export function leaveDemo() { current?.close?.(); current = null; set({ ...empty, mode: 'signed-out' }); }

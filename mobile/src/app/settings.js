@@ -76,8 +76,8 @@ export default function Settings() {
             {!deleting ? <Button onPress={() => setDeleting(true)}>delete my synapse account</Button> : (
               <View style={{ gap: 10 }}>
                 <Text style={body}>This deletes your Synapse account, your trusted people and every share, on all your devices. It cannot be undone.</Text>
-                <TextInput value={password} onChangeText={setPassword} secureTextEntry placeholder="your password" placeholderTextColor={t.ink3}
-                  style={{ fontFamily: FONT.sans, fontSize: 16, color: t.ink, borderWidth: 1, borderColor: t.rule, padding: 12 }} />
+                {user?.hasPassword !== false && <TextInput value={password} onChangeText={setPassword} secureTextEntry placeholder="your password" placeholderTextColor={t.ink3}
+                  style={{ fontFamily: FONT.sans, fontSize: 16, color: t.ink, borderWidth: 1, borderColor: t.rule, padding: 12 }} />}
                 {!!error && <Text style={[body, { color: t.sig }]}>{error}</Text>}
                 <Button filled onPress={remove}>delete forever</Button>
                 <Button onPress={() => { setDeleting(false); setPassword(''); setError(''); }}>keep my account</Button>

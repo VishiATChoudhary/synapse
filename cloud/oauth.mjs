@@ -80,3 +80,32 @@ export async function exchange(provider, { code, verifier, redirect }) {
   if (!r.ok || !out.access_token) throw new Error(`${provider} sign-in failed: ${out.error_description || out.error || r.status}`);
   return p.profile(out.access_token, p.urls);
 }
+
+// ---- Sign in with Apple, from the phone app: the app gets an identity token (a JWT signed by Apple) and
+// hands it here. We check Apple's signature, issuer, audience (our bundle id) and expiry; no client secret.
+const APPLE_ISSUER = 'https://appleid.apple.com';
+const appleKeysUrl = () => process.env.APPLE_KEYS_URL || 'https://appleid.apple.com/auth/keys';
+const appleAudiences = () => (process.env.APPLE_AUDIENCES || 'dev.synapse.mobile').split(',').map((s) => s.trim()).filter(Boolean);
+let appleKeys = { at: 0, keys: [] };
+
+export async function verifyApple(identityToken) {
+  const [h, p, sig] = String(identityToken || '').split('.');
+  if (!h || !p || !sig) throw new Error('not an Apple identity token');
+  const header = JSON.parse(Buffer.from(h, 'base64url').toString('utf8'));
+  if (header.alg !== 'RS256') throw new Error('unexpected token algorithm');
+  let jwk = appleKeys.keys.find((k) => k.kid === header.kid);
+  if (!jwk || Date.now() - appleKeys.at > 3600_000) {
+    appleKeys = { at: Date.now(), keys: (await getJSON(appleKeysUrl(), {})).keys || [] };
+    jwk = appleKeys.keys.find((k) => k.kid === header.kid);
+  }
+  if (!jwk) throw new Error('unknown Apple signing key');
+  const ok = crypto.verify('RSA-SHA256', Buffer.from(`${h}.${p}`), crypto.createPublicKey({ key: jwk, format: 'jwk' }), Buffer.from(sig, 'base64url'));
+  if (!ok) throw new Error('bad Apple signature');
+  const c = JSON.parse(Buffer.from(p, 'base64url').toString('utf8'));
+  if (c.iss !== APPLE_ISSUER) throw new Error('token not issued by Apple');
+  if (!appleAudiences().includes(c.aud)) throw new Error('token is for another app');
+  if (!c.exp || c.exp * 1000 < Date.now()) throw new Error('token expired');
+  if (!c.sub) throw new Error('token has no subject');
+  const verified = c.email_verified === true || c.email_verified === 'true';
+  return { id: String(c.sub), email: c.email || null, emailVerified: !!(c.email && verified), name: null, username: null, avatar: null };
+}

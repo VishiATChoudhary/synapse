@@ -22,7 +22,7 @@ Android ships through Google Play or a plain APK, with no Apple involvement.
 | Risk | Guideline | What the app does |
 | --- | --- | --- |
 | Reviewer has no Synapse computer | 2.1, 4.2.3 | A demo account for the review notes, plus "look around with sample agents" on the sign-in screen, which works with no computer. |
-| Login rules and account deletion | 4.8, 5.1.1(v) | Email and password only, no Google, GitHub or X buttons in the iOS app (those would require Sign in with Apple too). Accounts made in the app can be deleted in the app: settings, delete account. |
+| Login rules and account deletion | 4.8, 5.1.1(v) | GitHub, Google and X are offered, so Sign in with Apple is offered too, first and with Apple's own button (it keeps the email private if the user wants). Accounts made in the app can be deleted in the app: settings, delete account (no password needed for Apple or provider accounts). |
 | Prompts going to AI providers | 5.1.2(i) | A consent sheet before the first prompt names where data goes (your computer, then Anthropic, OpenAI or Google). It can be withdrawn in settings. |
 | Privacy policy reachable in the app | 5.1.1(i) | Settings, then "privacy policy" (https://app.heysynapse.dev/privacy). |
 | Downloading code | 2.5.2 | The phone only shows data and sends text. It never runs code or HTML from the computer. Keep agent output rendered as text, not in a WebView. |

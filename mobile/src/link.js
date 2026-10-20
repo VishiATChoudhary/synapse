@@ -21,10 +21,46 @@ export async function api(cloud, method, route, { body, token } = {}) {
   return j;
 }
 
-// sign in (or create the account), then register this phone: everything the app keeps in the keychain
+// sign in (or create the account) with email and password, then register this phone
 export async function signIn(cloud, { email, password, name, create }, phoneName) {
   const route = create ? '/v1/auth/signup' : '/v1/auth/login';
   const { token, user } = await api(cloud, 'POST', route, { body: { email, password, name, client: 'phone', label: phoneName } });
+  return registerPhone(cloud, token, user, phoneName);
+}
+
+// Sign in with Apple: the identity token Apple gave the app, checked by the cloud
+export async function signInApple(cloud, { identityToken, name }, phoneName) {
+  const { token, user } = await api(cloud, 'POST', '/v1/auth/apple', { body: { identityToken, name, client: 'phone', label: phoneName } });
+  return registerPhone(cloud, token, user, phoneName);
+}
+
+// GitHub, Google or X: the cloud's "connect the app" flow, the one Synapse on the computer uses. open(url) shows
+// the sign-in page; this polls until it is approved there and resolves with the account, or throws.
+export async function signInWith(cloud, provider, phoneName, open, { signal } = {}) {
+  const d = await api(cloud, 'POST', '/v1/device/start', { body: { label: phoneName } });
+  const url = `${d.url.startsWith('/') ? cloud + d.url : d.url}&via=${encodeURIComponent(provider)}`;
+  const closed = open(url);
+  const until = Date.now() + (d.expiresIn || 600) * 1000;
+  let gone = false;
+  closed?.then?.(() => { gone = true; });
+  while (Date.now() < until) {
+    await new Promise((r) => setTimeout(r, (d.interval || 2) * 1000));
+    if (signal?.aborted) throw new Error('cancelled');
+    const r = await api(cloud, 'POST', '/v1/device/poll', { body: { deviceCode: d.deviceCode } });
+    if (r.status === 'approved') return registerPhone(cloud, r.token, r.user, phoneName);
+    if (gone) { // the sheet was closed: one last look, then give up
+      const last = await api(cloud, 'POST', '/v1/device/poll', { body: { deviceCode: d.deviceCode } });
+      if (last.status === 'approved') return registerPhone(cloud, last.token, last.user, phoneName);
+      throw new Error('cancelled');
+    }
+  }
+  throw new Error('That sign-in took too long. Try again.');
+}
+
+export const providers = (cloud) => api(cloud, 'GET', '/v1/auth/providers');
+
+// this phone as a device of the account, with a fresh key pair: everything the app keeps in the keychain
+async function registerPhone(cloud, token, user, phoneName) {
   const keys = nacl.box.keyPair();
   const publicKey = util.encodeBase64(keys.publicKey);
   const m = await api(cloud, 'POST', '/v1/register', { token, body: { kind: 'phone', name: phoneName, publicKey } });

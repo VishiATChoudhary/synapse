@@ -127,7 +127,18 @@ const again = await link.signIn(cloud.base, { email: 'owner@example.com', passwo
 await link.signOut(again);
 await assert.rejects(link.connect(again, mac).send({ t: 'hello' }), (e) => e.status === 403);
 
-console.log('PASS phone link: account sign-in, the Mac asks first, state, chat, other accounts shut out, replay and forgery dropped, read-only agents, spawn rules, remove and sign out');
+// GitHub, Google or X on the phone: the cloud's connect-the-app flow; the "browser" here approves it as the owner
+const viaBrowser = await link.signInWith(cloud.base, 'github', 'Third iPhone', async (url) => {
+  const code = new URL(url).searchParams.get('code');
+  assert.equal(new URL(url).searchParams.get('via'), 'github');
+  await fetch(`${cloud.base}/v1/device/approve`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${owner.token}` }, body: JSON.stringify({ userCode: code }) });
+  await new Promise(() => {}); // the sheet stays open until the app closes it
+});
+assert.equal(viaBrowser.user.email, 'owner@example.com');
+assert.ok((await link.computers(viaBrowser)).some((m) => m.id === mac.id), 'signed in through the browser, it finds the Mac too');
+await assert.rejects(link.signInWith(cloud.base, 'github', 'Gave up', async () => {}), /cancelled/, 'closing the sheet cancels');
+
+console.log('PASS phone link: account sign-in, the Mac asks first, state, chat, other accounts shut out, replay and forgery dropped, read-only agents, spawn rules, remove and sign out, browser sign-in');
 cloud.stop();
 fs.rmSync(home, { recursive: true, force: true });
 process.exit(0);
