@@ -6,6 +6,7 @@ export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&a
 const LABELS = { github: 'GitHub', google: 'Google', x: 'X', apple: 'Apple' };
 export const providerLabel = (p) => LABELS[p] || p;
 const ICONS = {
+  apple: '<svg viewBox="0 0 17 20" aria-hidden="true"><path fill="currentColor" d="M14.1 10.6c0-2.6 2.1-3.8 2.2-3.9-1.2-1.8-3.1-2-3.7-2-1.6-.2-3.1.9-3.9.9-.8 0-2.1-.9-3.4-.9C3.5 4.8 1.9 5.8 1 7.4c-1.9 3.2-.5 8 1.3 10.6.9 1.3 1.9 2.7 3.3 2.6 1.3-.1 1.8-.8 3.4-.8 1.6 0 2 .8 3.4.8 1.4 0 2.3-1.3 3.2-2.6 1-1.5 1.4-2.9 1.4-3-.1 0-2.9-1.1-2.9-4.4M11.5 2.9c.7-.9 1.2-2.1 1.1-3.3-1 0-2.3.7-3 1.6-.7.8-1.3 2-1.1 3.2 1.1.1 2.3-.6 3-1.5"/></svg>',
   github: '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8"/></svg>',
   google: '<svg viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.83.86-3.04.86-2.34 0-4.33-1.58-5.04-3.7H.96v2.33A9 9 0 0 0 9 18"/><path fill="#FBBC05" d="M3.96 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58A9 9 0 0 0 .96 4.95l3 2.33C4.67 5.16 6.66 3.58 9 3.58"/></svg>',
   x: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18.24 2.25h3.31l-7.23 8.26 8.5 11.24h-6.65l-5.21-6.82-5.97 6.82H1.68l7.73-8.84L1.25 2.25h6.83l4.71 6.23zm-1.16 17.52h1.83L7.08 4.13H5.12z"/></svg>',
@@ -196,7 +197,7 @@ if ($('#settings')) {
     $('#p-verified').innerHTML = !user.email ? '' : user.emailVerified ? '<span class="pill ok">confirmed</span>' : '<span class="pill sig">not confirmed</span> <button class="btn small" data-act="/v1/auth/resend-verification" data-done="Sent. Check your inbox.">resend</button>';
     $('#pw-current-wrap').hidden = !user.hasPassword;
     $('#pw-title').textContent = user.hasPassword ? 'Change password' : 'Set a password';
-    for (const p of ['github', 'google', 'x']) {
+    for (const p of ['apple', 'github', 'google', 'x']) {
       const el = $('#prov-' + p); if (!el) continue;
       const on = user.providers.includes(p);
       el.innerHTML = on ? '<span class="pill ok">connected</span> <button class="btn small quiet" data-act="/v1/me/unlink" data-body=\\'{"provider":"' + p + '"}\\'>disconnect</button>' : '<a class="btn small" href="/auth/' + p + '/start?link=1">connect</a>';
@@ -357,7 +358,7 @@ export function welcome(ctx) {
 }
 
 export function settings(ctx) {
-  const prov = ['github', 'google', 'x'].filter((p) => ctx.providers[p] || ctx.user.providers.includes(p));
+  const prov = ['apple', 'github', 'google', 'x'].filter((p) => ctx.providers[p] || ctx.user.providers.includes(p));
   return layout(ctx, 'Settings', `<main class="page" id="settings"><h2>Settings</h2><p class="sub">@${esc(ctx.user.handle)} · <a href="/u/${esc(ctx.user.handle)}">public profile</a></p>
 ${ctx.q.error ? `<p class="note err">${esc(ctx.q.error)}</p>` : ''}${ctx.q.linked ? '<p class="note">Account connected.</p>' : ''}
 <section class="card"><h3>Profile</h3><p>How friends see you.</p><form id="profile-form">

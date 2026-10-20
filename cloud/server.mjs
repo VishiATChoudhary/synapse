@@ -671,6 +671,11 @@ function userForIdentity(provider, p, name) {
   return user;
 }
 
+// Apple sends the name only the first time, as JSON next to the code
+function appleName(raw) {
+  try { const n = JSON.parse(raw || '{}').name || {}; return clean([n.firstName, n.lastName].filter(Boolean).join(' '), 60) || undefined; } catch { return undefined; }
+}
+
 async function oauthCallback(req, res, provider, url) {
   const st = get('SELECT * FROM oauth_states WHERE state = ? AND provider = ?', String(url.searchParams.get('state') || ''), provider);
   if (st) run('DELETE FROM oauth_states WHERE state = ?', st.state);
@@ -690,7 +695,7 @@ async function oauthCallback(req, res, provider, url) {
     user = get('SELECT * FROM users WHERE id = ?', st.link_user);
     if (!known) run('INSERT INTO identities (provider, provider_id, user_id, email, username, created_at) VALUES (?, ?, ?, ?, ?, ?)', provider, p.id, user.id, email, p.username || null, now());
     if (!user.avatar && p.avatar) run('UPDATE users SET avatar = ? WHERE id = ?', p.avatar, user.id);
-  } else user = userForIdentity(provider, p);
+  } else user = userForIdentity(provider, p, provider === 'apple' ? appleName(url.searchParams.get('user')) : undefined);
   const token = createSession(user.id, 'web', clean(req.headers['user-agent'], 80), ipOf(req));
   return redirect(res, st.link_user ? '/settings?linked=1' : st.next || '/welcome', { 'set-cookie': cookie('syn_session', token, WEB_SESSION) });
 }
@@ -773,8 +778,15 @@ export const server = http.createServer(async (req, res) => {
     if (p === '/app.css') { res.writeHead(200, { 'content-type': 'text/css', 'cache-control': 'public, max-age=300' }); return res.end(pages.CSS); }
     if (p === '/app.js') { res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'public, max-age=300' }); return res.end(pages.JS); }
 
-    const op = p.match(/^\/auth\/(github|google|x)\/(start|callback)$/);
+    const op = p.match(/^\/auth\/(apple|github|google|x)\/(start|callback)$/);
     if (op && req.method === 'GET') return op[2] === 'start' ? await oauthStart(req, res, op[1], url) : await oauthCallback(req, res, op[1], url);
+    // Apple posts its answer from appleid.apple.com (form_post). Bounce it to a same-site GET of the same
+    // callback, so the session cookie is set on a request the browser treats as ours.
+    if (op && op[1] === 'apple' && op[2] === 'callback' && req.method === 'POST') {
+      const b = await readBody(req);
+      const q = new URLSearchParams(Object.entries(b).filter(([k]) => ['code', 'state', 'error', 'user'].includes(k)).map(([k, v]) => [k, String(v)]));
+      return html(res, 200, `<!doctype html><meta http-equiv="refresh" content="0;url=/auth/apple/callback?${pages.esc(q)}"><title>Signing in</title>`);
+    }
 
     if (p.startsWith('/v1/')) {
       if (req.method === 'OPTIONS') return json(res, 204, {});

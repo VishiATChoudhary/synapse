@@ -1,4 +1,4 @@
-// Sign in with GitHub, Google and X (OAuth 2.0 authorization code, PKCE where the provider takes it).
+// Sign in with Apple, GitHub, Google and X (OAuth 2.0 authorization code, PKCE where the provider takes it).
 // A provider is on when its client id and secret are set. OAUTH_MOCK_BASE points every endpoint at a fake
 // provider for tests.
 import crypto from 'node:crypto';
@@ -7,6 +7,15 @@ const MOCK = process.env.OAUTH_MOCK_BASE;
 const ep = (provider, real) => (MOCK ? Object.fromEntries(Object.keys(real).map((k) => [k, `${MOCK}/${provider}/${k}`])) : real);
 
 const PROVIDERS = {
+  // Apple on the web: a Services ID as client id, and a short-lived ES256 JWT (signed with the .p8 key) as
+  // secret. Apple posts the result back (form_post) and the identity is the id_token, checked like the app's.
+  apple: {
+    id: () => process.env.APPLE_SERVICES_ID,
+    secret: () => (process.env.APPLE_TEAM_ID && process.env.APPLE_KEY_ID && process.env.APPLE_PRIVATE_KEY ? appleSecret() : null),
+    urls: ep('apple', { authorize: 'https://appleid.apple.com/auth/authorize', token: 'https://appleid.apple.com/auth/token' }),
+    scope: 'name email', pkce: false, extra: { response_mode: 'form_post' },
+    profile: (token, u, out) => verifyApple(out.id_token),
+  },
   github: {
     id: () => process.env.GITHUB_CLIENT_ID, secret: () => process.env.GITHUB_CLIENT_SECRET,
     urls: ep('github', { authorize: 'https://github.com/login/oauth/authorize', token: 'https://github.com/login/oauth/access_token', user: 'https://api.github.com/user', emails: 'https://api.github.com/user/emails' }),
@@ -78,14 +87,23 @@ export async function exchange(provider, { code, verifier, redirect }) {
   const r = await fetch(p.urls.token, { method: 'POST', headers, body: form, signal: AbortSignal.timeout(10_000) });
   const out = await r.json().catch(() => ({}));
   if (!r.ok || !out.access_token) throw new Error(`${provider} sign-in failed: ${out.error_description || out.error || r.status}`);
-  return p.profile(out.access_token, p.urls);
+  return p.profile(out.access_token, p.urls, out);
 }
 
-// ---- Sign in with Apple, from the phone app: the app gets an identity token (a JWT signed by Apple) and
-// hands it here. We check Apple's signature, issuer, audience (our bundle id) and expiry; no client secret.
+function appleSecret() {
+  const enc = (o) => b64url(JSON.stringify(o));
+  const t = Math.floor(Date.now() / 1000);
+  const body = `${enc({ alg: 'ES256', kid: process.env.APPLE_KEY_ID })}.${enc({ iss: process.env.APPLE_TEAM_ID, iat: t, exp: t + 300, aud: 'https://appleid.apple.com', sub: process.env.APPLE_SERVICES_ID })}`;
+  const key = process.env.APPLE_PRIVATE_KEY.replace(/\\n/g, '\n');
+  return `${body}.${b64url(crypto.sign('sha256', Buffer.from(body), { key, dsaEncoding: 'ieee-p1363' }))}`;
+}
+
+// ---- Sign in with Apple: the phone app gets an identity token (a JWT signed by Apple) and hands it here, and
+// the web flow gets one from Apple's token endpoint. We check Apple's signature, issuer, audience (the app's
+// bundle id or the web's Services ID) and expiry.
 const APPLE_ISSUER = 'https://appleid.apple.com';
 const appleKeysUrl = () => process.env.APPLE_KEYS_URL || 'https://appleid.apple.com/auth/keys';
-const appleAudiences = () => (process.env.APPLE_AUDIENCES || 'dev.synapse.mobile').split(',').map((s) => s.trim()).filter(Boolean);
+const appleAudiences = () => [...(process.env.APPLE_AUDIENCES || 'dev.synapse.mobile').split(','), process.env.APPLE_SERVICES_ID || ''].map((s) => s.trim()).filter(Boolean);
 let appleKeys = { at: 0, keys: [] };
 
 export async function verifyApple(identityToken) {
