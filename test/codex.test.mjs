@@ -63,3 +63,30 @@ test('codex progress: commands from CommandExecution events show as clean lines,
     ['assistant', 'Two jobs are running.', false],
   ]);
 });
+
+test('the resume subcommand is read token by token', async () => {
+  const { codexResume } = await import('../lib.mjs');
+  const id = '01a1512b-5d3c-70f0-9624-d3acd71244ae';
+  assert.deepEqual(codexResume(`node /opt/homebrew/bin/codex --dangerously-bypass-approvals-and-sandbox resume ${id}`), { id });
+  assert.deepEqual(codexResume(`codex resume -m gpt-5 ${id}`), { id });
+  assert.deepEqual(codexResume('codex resume --last'), { last: true });
+  assert.deepEqual(codexResume('codex resume'), { last: true });
+  assert.equal(codexResume(`codex fork ${id}`), null);
+  assert.equal(codexResume(`codex "please resume ${id} later"`), null);
+  assert.equal(codexResume('node /opt/homebrew/bin/codex'), null);
+});
+
+test('codex resume --last reads the newest rollout for its folder written since it started', () => {
+  const start = Date.now() - 60_000;
+  rollout(new Date(start - 3 * 86400_000), '55555555-5555-4555-8555-555555555555', '/work/d', start - 3600_000); // not written since
+  const live = rollout(new Date(start - 2 * 86400_000), '66666666-6666-4666-8666-666666666666', '/work/d', Date.now());
+  rollout(new Date(start - 86400_000), '77777777-7777-4777-8777-777777777777', '/work/other', Date.now() + 1000); // another folder
+  assert.equal(codexTranscript('codex-4', '/work/d', start, 'codex resume --last'), live);
+});
+
+test('a CommandExecution with an unexpected command shape adds no line', async () => {
+  const { readAgentMessages } = await import('../lib.mjs');
+  const file = path.join(tmp, 'odd.jsonl');
+  fs.writeFileSync(file, `${JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'item_completed', item: { type: 'CommandExecution', command: { argv: ['ls'] } } } })}\n`);
+  assert.deepEqual(readAgentMessages({ transcript: file, format: 'codex' }).messages, []);
+});

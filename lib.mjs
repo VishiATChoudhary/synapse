@@ -100,7 +100,7 @@ function codexMessage(e) {
   // newer Codex logs each shell command as a CommandExecution item, often with no matching function_call
   if (e.type === 'event_msg' && p.type === 'item_completed' && p.item?.type === 'CommandExecution') {
     const c = p.item.command;
-    const cmd = Array.isArray(c) ? (c.length >= 3 && /^-l?c$/.test(c[c.length - 2]) ? c[c.length - 1] : c.join(' ')) : String(c || '');
+    const cmd = Array.isArray(c) ? (c.length >= 3 && /^-l?c$/.test(c[c.length - 2]) ? c[c.length - 1] : c.join(' ')) : typeof c === 'string' ? c : '';
     return cmd ? { role: 'assistant', text: toolLine('exec', { command: cmd }), ts: e.timestamp, tool: true } : null;
   }
   if (e.type !== 'response_item') return null;
@@ -370,29 +370,66 @@ function cwds(pids) {
 }
 
 const transcriptCache = new Map(); // agent id -> path
-// `codex resume <id>` (how the app brings agents back after a restart) keeps appending to the session's original
-// rollout, born long before this process: find that one by the id in its name instead of by time
-function codexRolloutById(homes, sessionId) {
-  const suffix = `-${sessionId}.jsonl`;
+const transcriptMiss = new Map();  // agent id -> when a search last came up empty, so it is not redone every second
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// The `resume` subcommand of a codex command line: { id } for `resume [flags] <id>`, { last: true } for
+// `resume --last` or the picker, null when this is not a resume. Read token by token, so a prompt that merely
+// mentions "resume <uuid>" does not count.
+export function codexResume(cmd) {
+  const argv = String(cmd || '').split(/\s+/).filter(Boolean);
+  const at = argv.findIndex((t, i) => t === 'resume' && argv.slice(0, i).every((x) => x.startsWith('-') || /(^|\/)(node|codex)$/.test(x)));
+  if (at < 0) return null;
+  for (let i = at + 1; i < argv.length; i++) {
+    if (UUID_RE.test(argv[i])) return { id: argv[i].toLowerCase() };
+    if (argv[i] === '--last') return { last: true };
+    if (!argv[i].startsWith('-')) break; // the prompt, or a flag's value
+    if (!argv[i].includes('=') && argv[i + 1] && !argv[i + 1].startsWith('-') && !UUID_RE.test(argv[i + 1])) i++; // skip a flag's value
+  }
+  return { last: true };
+}
+
+// every rollout under sessions/YYYY/MM/DD, newest day first
+function* codexRollouts(homes) {
   const kids = (d) => { try { return fs.readdirSync(d).sort().reverse(); } catch { return []; } };
   for (const home of homes) {
     const root = path.join(home, 'sessions');
     for (const y of kids(root)) for (const m of kids(path.join(root, y))) for (const d of kids(path.join(root, y, m))) {
-      const f = kids(path.join(root, y, m, d)).find((x) => x.startsWith('rollout-') && x.endsWith(suffix));
-      if (f) return path.join(root, y, m, d, f);
+      for (const f of kids(path.join(root, y, m, d))) if (f.startsWith('rollout-')) yield path.join(root, y, m, d, f);
     }
   }
-  return null;
+}
+
+// session_meta can be huge (it embeds instructions), so just pull cwd out of the head
+function codexCwd(p) {
+  try {
+    const fd = fs.openSync(p, 'r'); const buf = Buffer.alloc(65536); fs.readSync(fd, buf, 0, 65536, 0); fs.closeSync(fd);
+    const m = buf.toString('utf8').match(/"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    return m ? JSON.parse(`"${m[1]}"`) : null;
+  } catch { return null; }
 }
 
 export function codexTranscript(id, cwd, start, cmd = '') {
   if (transcriptCache.has(id)) return transcriptCache.get(id);
+  if (Date.now() - (transcriptMiss.get(id) || 0) < 60_000) return null;
   const homes = [process.env.CODEX_HOME, path.join(HOME, '.codex')].filter(Boolean);
-  const resumed = /\bresume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i.exec(cmd || '');
-  if (resumed) {
-    const p = codexRolloutById(homes, resumed[1].toLowerCase());
-    if (p) transcriptCache.set(id, p);
-    return p;
+  const found = (p) => { if (p) transcriptCache.set(id, p); else transcriptMiss.set(id, Date.now()); return p; };
+  // `codex resume` (how the app brings agents back after a restart) keeps appending to the session's original
+  // rollout, born long before this process: by the id in its name, or for --last the newest one written since
+  const resume = codexResume(cmd);
+  if (resume?.id) {
+    const suffix = `-${resume.id}.jsonl`;
+    for (const p of codexRollouts(homes)) if (p.endsWith(suffix)) return found(p);
+    return found(null);
+  }
+  if (resume?.last) {
+    let best = null;
+    for (const p of codexRollouts(homes)) {
+      let st; try { st = fs.statSync(p); } catch { continue; }
+      if (st.mtimeMs < start || (best && st.mtimeMs <= best.m) || codexCwd(p) !== cwd) continue;
+      best = { p, m: st.mtimeMs };
+    }
+    return found(best?.p || null);
   }
   let best = null;
   for (const home of homes) {
