@@ -2,6 +2,7 @@
 // while the app is in front, plus the actions the screens call. Same shape as the demo source.
 import { AppState } from 'react-native';
 import { connect } from './link';
+import * as media from './media';
 
 const FAST = 1500, PING = 30_000;
 
@@ -20,6 +21,10 @@ export function createRemote(emit, acc, computer) {
   };
   const fail = (e) => { state = { ...state, error: e.message }; emit(state); setTimeout(() => { state = { ...state, error: null }; emit(state); }, 5000); };
   const say = (msg) => conn.send(msg).catch(fail);
+  // hello says whether this phone shows images and videos (the settings switch)
+  const hello = () => ({ t: 'hello', ...(media.supported && media.mediaOn() ? { media: 1 } : {}) });
+  const ask = (msg) => conn.send(msg).catch(() => {});
+  media.attach(ask);
 
   function receive(m) {
     lastSeen = Date.now();
@@ -27,6 +32,7 @@ export function createRemote(emit, acc, computer) {
     else if (m.t !== 'error') state = { ...state, access: 'ok' };
     if (m.t === 'state') snap = { agents: m.agents || [], projects: m.projects || [], kinds: m.kinds || [] };
     else if (m.t === 'messages') messages = { ...messages, [m.id]: m.messages || [] };
+    else if (m.t === 'media' || m.t === 'piece') media.receive(m);
     else if (m.t === 'spawned') { waiting.get(m.req)?.(m.id); waiting.delete(m.req); }
     else if (m.t === 'error') { if (m.req && waiting.has(m.req)) { waiting.get(m.req)(null); waiting.delete(m.req); } fail(new Error(m.error)); }
   }
@@ -36,7 +42,7 @@ export function createRemote(emit, acc, computer) {
     try {
       // until the computer has allowed this phone, keep saying hello so it answers as soon as it is allowed
       const ok = state.access === 'ok';
-      if (Date.now() - lastPing > (ok ? PING : 4000)) { lastPing = Date.now(); await conn.send({ t: ok ? 'ping' : 'hello' }); }
+      if (Date.now() - lastPing > (ok ? PING : 4000)) { lastPing = Date.now(); await conn.send(ok ? { t: 'ping' } : hello()); }
       for (const m of await conn.poll()) receive(m);
       publish();
     } catch (e) {
@@ -45,14 +51,15 @@ export function createRemote(emit, acc, computer) {
     }
     if (AppState.currentState === 'active') timer = setTimeout(tick, state.access === 'waiting' ? 4000 : FAST);
   }
-  const wake = () => { clearTimeout(timer); lastPing = Date.now(); say({ t: 'hello' }).then(tick); if (watch) say({ t: 'watch', id: watch }); };
+  const wake = () => { clearTimeout(timer); lastPing = Date.now(); say(hello()).then(tick); if (watch) say({ t: 'watch', id: watch }); };
+  const offSwitch = media.onSwitch(() => wake()); // switched in settings: tell the computer
   const sub = AppState.addEventListener('change', (s) => { if (s === 'active') wake(); else clearTimeout(timer); });
   wake();
   emit(state);
 
   return {
     name: 'account',
-    close() { stopped = true; clearTimeout(timer); sub.remove(); conn.send({ t: 'bye' }).catch(() => {}); },
+    close() { stopped = true; clearTimeout(timer); offSwitch(); sub.remove(); media.detach(ask); conn.send({ t: 'bye' }).catch(() => {}); },
     watch(id) { watch = id; say({ t: 'watch', id }); },
     send(id, text) {
       messages = { ...messages, [id]: [...(messages[id] || []), { role: 'user', text, ts: new Date().toISOString(), tool: false }] };

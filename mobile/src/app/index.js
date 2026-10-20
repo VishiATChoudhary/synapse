@@ -1,48 +1,33 @@
-// Every agent on the laptop, grouped by project, the ones that need you on top.
+// Home: one room per project, a square per agent in it (outlined: needs you, orange: working). The first
+// question waiting for you sits on top. Tap a room for its agents, by worktree.
 import { Redirect, router } from 'expo-router';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Squares, rooms, summary } from '../rooms';
 import { byAttention, leaveDemo, useSynapse } from '../store';
 import { FONT, useTheme } from '../theme';
-import { Display, Label, Mark, Rule, ago } from '../ui';
+import { Display, Meta } from '../ui';
 
-function last(a) {
-  const m = [...a.messages].reverse().find((x) => !x.tool) || a.messages.at(-1) || a.preview;
-  return m ? `${m.role === 'user' ? 'you: ' : ''}${m.text.replace(/^>\s?|[#*`]/gm, '').replace(/\s+/g, ' ').trim()}` : 'no messages yet';
-}
-
-// agents grouped by their project: the computer's workspaces in its order, then folders it has no workspace for
-function groups(projects, agents) {
-  const out = projects.map((p) => ({ ...p }));
-  for (const a of agents) if (!out.some((p) => p.key === a.project.key)) out.push(a.project);
-  return out;
-}
-
-// what stands between the phone and the agents, in words: no computer yet, not allowed yet, removed
-function Notice({ title, children }) {
+function Notice({ children }) {
   const t = useTheme();
   return (
-    <View style={{ marginHorizontal: 20, marginBottom: 16, borderWidth: 1, borderColor: t.sig, padding: 16, gap: 8 }}>
-      <Label color={t.sig}>{title}</Label>
+    <View style={{ backgroundColor: t.wash, borderLeftWidth: 3, borderColor: t.sig, padding: 14, marginBottom: 16 }}>
       <Text style={{ fontFamily: FONT.sans, fontSize: 15, lineHeight: 22, color: t.ink }}>{children}</Text>
     </View>
   );
 }
 
-function AgentRow({ a }) {
+function Room({ r }) {
   const t = useTheme();
   return (
-    <Pressable onPress={() => router.push(`/agent/${a.id}`)} style={({ pressed }) => ({ paddingVertical: 14, paddingHorizontal: 20, backgroundColor: pressed ? t.wash : 'transparent' })}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-        <Mark color={a.project.color} status={a.status} needs={a.needs} />
-        <Text style={{ fontFamily: FONT.sansMedium, fontSize: 16, color: t.ink, flexShrink: 1 }} numberOfLines={1}>{a.name}</Text>
-        <Label>{a.kind}</Label>
-        <View style={{ flex: 1 }} />
-        <Label color={a.needs || a.status === 'busy' ? t.sig : t.ink3}>{a.needs ? 'needs you' : a.status === 'busy' ? 'working' : ago(a.updatedAt)}</Label>
+    <Pressable onPress={() => router.push(`/room/${encodeURIComponent(r.key)}`)} style={({ pressed }) => ({
+      width: '48.5%', minHeight: 132, backgroundColor: t.wash, padding: 14, justifyContent: 'space-between', opacity: pressed ? 0.7 : 1,
+    })}>
+      <Text style={{ fontFamily: FONT.display, fontSize: 22, lineHeight: 24, textTransform: 'uppercase', color: t.ink }} numberOfLines={2}>{r.label}</Text>
+      <View style={{ gap: 8, marginTop: 12 }}>
+        <Squares agents={r.agents} />
+        <Meta color={t.ink2}>{summary(r.agents)}</Meta>
       </View>
-      <Text style={{ fontFamily: FONT.sans, fontSize: 14, color: t.ink2, marginTop: 6, marginLeft: 20 }} numberOfLines={2}>
-        {a.needs ? a.needs.question.replace(/`/g, '') : last(a)}
-      </Text>
     </Pressable>
   );
 }
@@ -54,61 +39,77 @@ export default function Home() {
   if (mode === 'loading') return <View style={{ flex: 1, backgroundColor: t.paper }} />;
   if (mode === 'signed-out') return <Redirect href="/login" />;
   const account = mode === 'account';
-  const working = agents.filter((a) => a.status === 'busy').length;
-  const waiting = agents.filter((a) => a.needs).length;
+  const asking = byAttention(agents).find((a) => a.needs);
+  const list = rooms(projects, agents);
+  const recent = [...agents].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 3);
+  const connected = !account || (online && access === 'ok');
   return (
     <View style={{ flex: 1, backgroundColor: t.paper }}>
-      <ScrollView contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: insets.bottom + 96 }}>
-        <View style={{ paddingHorizontal: 20, paddingBottom: 16 }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-            {!account
-              ? <Pressable onPress={() => { leaveDemo(); router.replace('/login'); }} hitSlop={12}><Label color={t.sig}>sample agents · sign in</Label></Pressable>
-              : <Pressable onPress={() => router.push('/settings')} hitSlop={12} style={{ flexShrink: 1, marginRight: 12 }}><Label numberOfLines={1} color={online && access === 'ok' ? t.ink2 : t.ink3}>{computer || 'no computer'} · {!computer ? 'set up' : access === 'ok' && online ? 'connected' : access === 'waiting' ? 'not allowed yet' : 'connecting…'}</Label></Pressable>}
-            <Pressable onPress={() => router.push('/settings')} hitSlop={12}><Label color={t.ink}>settings</Label></Pressable>
-          </View>
-          <Display style={{ marginTop: 6 }}>Synapse</Display>
-          <Label style={{ marginTop: 6 }} color={t.ink2}>
-            {agents.length} agents · <Text style={{ color: working ? t.sig : t.ink2 }}>{working} working</Text>
-            {waiting ? <Text style={{ color: t.sig }}> · {waiting} need you</Text> : null}
-          </Label>
+      <ScrollView contentContainerStyle={{ paddingTop: insets.top + 12, paddingBottom: insets.bottom + 100, paddingHorizontal: 20 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: connected ? 18 : 4 }}>
+          <Display style={{ fontSize: 36, lineHeight: 38 }}>Synapse</Display>
+          <Pressable onPress={() => router.push('/settings')} hitSlop={12} accessibilityLabel="Settings"
+            style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: t.wash, alignItems: 'center', justifyContent: 'center' }}>
+            <Text style={{ fontSize: 16, color: t.ink2 }}>⚙</Text>
+          </Pressable>
         </View>
-        {!!error && <Text style={{ fontFamily: FONT.sans, fontSize: 14, color: t.sig, paddingHorizontal: 20, paddingBottom: 12 }}>{error}</Text>}
+        {!account && (
+          <Pressable onPress={() => { leaveDemo(); router.replace('/login'); }} hitSlop={8} style={{ marginBottom: 18 }}>
+            <Meta color={t.sig}>Sample agents. Sign in to see yours.</Meta>
+          </Pressable>
+        )}
+        {account && !connected && (
+          <Meta style={{ marginBottom: 18 }}>{!computer ? 'No computer yet' : access === 'waiting' ? `Waiting for ${computer} to allow this phone` : `Connecting to ${computer}…`}</Meta>
+        )}
+        {!!error && <Meta color={t.sig} style={{ marginBottom: 12 }}>{error}</Meta>}
         {account && !computers.length && (
-          <Notice title="connect your computer">Open Synapse on your computer and sign in there as {user?.email}. It shows up here by itself.</Notice>
+          <Notice>Open Synapse on your computer and sign in there as {user?.email}. It shows up here by itself.</Notice>
         )}
         {account && access === 'waiting' && (
-          <Notice title={`allow this phone on ${computer}`}>Synapse on {computer} is asking whether this phone may see, start and message its agents. Click allow there (Synapse settings, phone).</Notice>
+          <Notice>Synapse on {computer} is asking whether this phone may see, start and message its agents. Click allow there, in Synapse settings under phone.</Notice>
         )}
         {account && access === 'removed' && (
-          <Notice title={`removed on ${computer}`}>This phone was removed in Synapse on {computer}. Sign out and in again to ask once more.</Notice>
-        )}
-        {account && !!computers.length && access === 'unknown' && !agents.length && (
-          <Notice title="connecting">Waiting for {computer}. Synapse has to be open there.</Notice>
+          <Notice>This phone was removed in Synapse on {computer}. Sign out and in again to ask once more.</Notice>
         )}
         {account && access === 'ok' && !agents.length && (
-          <Text style={{ fontFamily: FONT.sans, fontSize: 15, lineHeight: 22, color: t.ink2, paddingHorizontal: 20 }}>No agents running on {computer}. Start one with + new agent.</Text>
+          <Text style={{ fontFamily: FONT.sans, fontSize: 15, lineHeight: 22, color: t.ink2 }}>No agents running on {computer}. Start one with New agent.</Text>
         )}
-        {groups(projects, agents).map((p) => {
-          const list = byAttention(agents.filter((a) => a.project.key === p.key));
-          if (!list.length) return null;
-          return (
-            <View key={p.key} style={{ marginTop: 8 }}>
-              <Rule />
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingTop: 12 }}>
-                <View style={{ width: 6, height: 6, backgroundColor: p.color }} />
-                <Label color={t.ink}>{p.label}</Label>
-              </View>
-              {list.map((a) => <AgentRow key={a.id} a={a} />)}
-            </View>
-          );
-        })}
+
+        {asking && (
+          <Pressable onPress={() => router.push(`/agent/${asking.id}`)} style={({ pressed }) => ({
+            flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: t.sig, padding: 14, marginBottom: 16, opacity: pressed ? 0.85 : 1,
+          })}>
+            <View style={{ width: 10, height: 10, borderWidth: 2, borderColor: t.paper }} />
+            <Text style={{ flex: 1, fontFamily: FONT.sans, fontSize: 15, lineHeight: 21, color: t.paper }} numberOfLines={2}>
+              <Text style={{ fontFamily: FONT.sansMedium }}>{asking.name}</Text> asks: {asking.needs.question.replace(/`/g, '')}
+            </Text>
+          </Pressable>
+        )}
+
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 10 }}>
+          {list.map((r) => <Room key={r.key} r={r} />)}
+        </View>
+
+        {recent.length > 0 && (
+          <View style={{ marginTop: 26, gap: 2 }}>
+            <Meta style={{ marginBottom: 6 }}>Recent</Meta>
+            {recent.map((a) => (
+              <Pressable key={a.id} onPress={() => router.push(`/agent/${a.id}`)} style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 9, opacity: pressed ? 0.6 : 1 })}>
+                <View style={{ width: 9, height: 9, backgroundColor: a.project.color }} />
+                <Text style={{ flex: 1, fontFamily: FONT.sans, fontSize: 15, color: t.ink2 }} numberOfLines={1}>{a.name}</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
       </ScrollView>
-      {(!account || access === 'ok') && <Pressable onPress={() => router.push('/new')} style={({ pressed }) => ({
-        position: 'absolute', right: 20, bottom: insets.bottom + 20, backgroundColor: t.ink,
-        paddingVertical: 14, paddingHorizontal: 20, opacity: pressed ? 0.7 : 1,
-      })}>
-        <Label color={t.onInk}>+ new agent</Label>
-      </Pressable>}
+      {(!account || access === 'ok') && (
+        <Pressable onPress={() => router.push('/new')} style={({ pressed }) => ({
+          position: 'absolute', right: 20, bottom: insets.bottom + 20, backgroundColor: t.ink, height: 48, paddingHorizontal: 20,
+          borderRadius: 24, justifyContent: 'center', opacity: pressed ? 0.75 : 1,
+        })}>
+          <Text style={{ fontFamily: FONT.sansMedium, fontSize: 15, color: t.onInk }}>+ New agent</Text>
+        </Pressable>
+      )}
     </View>
   );
 }

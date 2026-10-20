@@ -20,14 +20,16 @@ export default function Layout() {
       <Stack screenOptions={{
         headerStyle: { backgroundColor: t.paper },
         headerTintColor: t.ink,
-        headerTitleStyle: { fontFamily: FONT.mono, fontSize: 13 },
+        headerTitleStyle: { fontFamily: FONT.sansMedium, fontSize: 16 },
         headerShadowVisible: false,
+        headerBackButtonDisplayMode: 'minimal',
         contentStyle: { backgroundColor: t.paper },
       }}>
         <Stack.Screen name="index" options={{ headerShown: false }} />
+        <Stack.Screen name="room/[key]" options={{ title: '' }} />
         <Stack.Screen name="agent/[id]" options={{ title: '' }} />
-        <Stack.Screen name="new" options={{ presentation: 'modal', title: 'NEW AGENT' }} />
-        <Stack.Screen name="settings" options={{ title: 'SETTINGS' }} />
+        <Stack.Screen name="new" options={{ presentation: 'modal', title: 'New agent' }} />
+        <Stack.Screen name="settings" options={{ title: 'Settings' }} />
         <Stack.Screen name="login" options={{ headerShown: false, animation: 'fade' }} />
       </Stack>
       <ConsentSheet />

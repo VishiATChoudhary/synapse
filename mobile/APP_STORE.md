@@ -25,7 +25,7 @@ Android ships through Google Play or a plain APK, with no Apple involvement.
 | Login rules and account deletion | 4.8, 5.1.1(v) | GitHub, Google and X are offered, so Sign in with Apple is offered too, first and with Apple's own button (it keeps the email private if the user wants). Accounts made in the app can be deleted in the app: settings, delete account (no password needed for Apple or provider accounts). |
 | Prompts going to AI providers | 5.1.2(i) | A consent sheet before the first prompt names where data goes (your computer, then Anthropic, OpenAI or Google). It can be withdrawn in settings. |
 | Privacy policy reachable in the app | 5.1.1(i) | Settings, then "privacy policy" (https://app.heysynapse.dev/privacy). |
-| Downloading code | 2.5.2 | The phone only shows data and sends text. It never runs code or HTML from the computer. Keep agent output rendered as text, not in a WebView. |
+| Downloading code | 2.5.2 | The phone only shows data and sends text. It never runs code or HTML from the computer. Agent output is rendered as text, and screenshots and videos as native images and video (expo-image, expo-video), never in a WebView. |
 | Remote desktop rules (LAN only) | 4.2.7 | It isn't a screen mirror: it's a native app for your own computer's agents, like an SSH or Home Assistant client. Don't add screen streaming to the iOS build without reading 4.2.7 again. |
 | User-generated content between people | 1.2 | No multiplayer, friends or sharing in the iOS build. If added, it needs report and block. |
 | Payments | 3.1.1, 3.1.3(f) | The app is free. No prices, plans, upgrade buttons or links to pay anywhere in it. |

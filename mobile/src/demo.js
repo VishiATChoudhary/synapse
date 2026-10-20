@@ -2,7 +2,14 @@
 // Shapes match what the laptop sends: lib.mjs agents and readAgentMessages messages.
 const now = Date.now();
 const ago = (min) => new Date(now - min * 60_000).toISOString();
-const say = (...rows) => rows.map(([role, text, tool], i) => ({ role, text, tool: !!tool, ts: ago(rows.length - i) }));
+const say = (...rows) => rows.map(([role, text, tool, media], i) => ({ role, text, tool: !!tool, ts: ago(rows.length - i), ...(media ? { media } : {}) }));
+
+// what an agent's screenshot and screen recording look like in its chat (bundled, so nothing is fetched)
+const SHOT = { id: 'demo-shot', kind: 'image', asset: require('../assets/demo-checkout-shot.jpg') };
+const WALKTHROUGH = {
+  id: 'demo-walkthrough', kind: 'video', state: 'ready', name: 'checkout-walkthrough.mp4', duration: 6.1,
+  asset: require('../assets/demo-checkout.mp4'), posterAsset: require('../assets/demo-checkout-poster.jpg'),
+};
 
 const PROJECTS = [
   { key: '/dev/acme-api', label: 'acme-api', color: '#2F5BEA' },
@@ -27,7 +34,9 @@ const AGENTS = [
   )],
   ['checkout', 'claude', 1, null, say(
     ['user', 'Rebuild the checkout page on the new design system.'],
-    ['assistant', 'Checkout now uses `<Stepper>` and `<PriceRow>`. Waiting on the API for the new auth cookie.'],
+    ['assistant', 'Checkout now uses `<Stepper>` and `<PriceRow>`. Here it is after paying:', false, [SHOT]],
+    ['assistant', '[Bash: record the checkout flow → checkout-walkthrough.mp4]', true, [WALKTHROUGH]],
+    ['assistant', 'Recorded a walkthrough of the whole flow. Waiting on the API for the new auth cookie.'],
   )],
   ['e2e', 'gemini', 1, 'e2e', say(
     ['user', 'Write Playwright tests for checkout.'],

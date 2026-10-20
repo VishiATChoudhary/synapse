@@ -12,6 +12,12 @@ export function Display({ children, style }) {
   return <Text style={[{ fontFamily: FONT.display, fontSize: 40, lineHeight: 42, textTransform: 'uppercase', color: t.ink }, style]}>{children}</Text>;
 }
 
+// quiet sentence-case small text: counts, times, places (instead of uppercase labels)
+export function Meta({ children, style, color, numberOfLines }) {
+  const t = useTheme();
+  return <Text numberOfLines={numberOfLines} style={[{ fontFamily: FONT.sans, fontSize: 13, lineHeight: 18, color: color || t.ink3 }, style]}>{children}</Text>;
+}
+
 export const Rule = ({ style }) => <View style={[{ height: 1, backgroundColor: useTheme().rule }, style]} />;
 
 // Square project mark. Orange and blinking while the agent works, an outlined square when it needs you.
@@ -41,7 +47,7 @@ export function Button({ children, onPress, filled, disabled, style }) {
       borderWidth: 1, borderColor: t.ink, paddingVertical: 10, paddingHorizontal: 14, alignItems: 'center',
       backgroundColor: filled ? t.ink : 'transparent', opacity: disabled ? 0.35 : pressed ? 0.6 : 1,
     }, style]}>
-      <Label color={filled ? t.onInk : t.ink}>{children}</Label>
+      <Text style={{ fontFamily: FONT.sansMedium, fontSize: 15, color: filled ? t.onInk : t.ink }}>{typeof children === 'string' ? children.charAt(0).toUpperCase() + children.slice(1) : children}</Text>
     </Pressable>
   );
 }
@@ -64,7 +70,7 @@ export function Markdown({ text, color }) {
     <View style={{ gap: 6 }}>
       {text.split('\n').filter((l, i, all) => l.trim() || (i && all[i - 1].trim())).map((line, i) => {
         const h = line.match(/^#{1,3}\s+(.*)/);
-        if (h) return <Label key={i} color={t.ink2} style={{ marginTop: 4 }}>{h[1]}</Label>;
+        if (h) return <Text key={i} style={[base, { fontFamily: FONT.sansMedium, color: t.ink2, marginTop: 4 }]}>{inline(h[1], t, i)}</Text>;
         const li = line.match(/^\s*(?:[-*]|(\d+)\.)\s+(.*)/);
         if (li) return (
           <View key={i} style={{ flexDirection: 'row', gap: 8 }}>

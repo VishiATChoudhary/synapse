@@ -48,7 +48,9 @@
         }
       ],
       "expo-web-browser",
-      "expo-apple-authentication"
+      "expo-apple-authentication",
+      "expo-video",
+      "expo-image"
     ],
     "scheme": "synapse",
     "experiments": {

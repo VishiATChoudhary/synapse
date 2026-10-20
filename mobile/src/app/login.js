@@ -11,7 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DEFAULT_CLOUD, providers } from '../link';
 import { signInWith, signInWithApple, signInWithProvider, tryDemo } from '../store';
 import { FONT, useTheme } from '../theme';
-import { Button, Display, Label } from '../ui';
+import { Button, Display, Meta } from '../ui';
 
 export default function Login() {
   const t = useTheme();
@@ -79,29 +79,29 @@ export default function Login() {
         {offered.map((p) => <Button key={p} disabled={busy} onPress={() => withProvider(p)}>{`continue with ${LABEL[p]}`}</Button>)}
         {(apple || offered.length > 0) && (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <View style={{ flex: 1, height: 1, backgroundColor: t.rule }} /><Label>or with email</Label><View style={{ flex: 1, height: 1, backgroundColor: t.rule }} />
+            <View style={{ flex: 1, height: 1, backgroundColor: t.rule }} /><Meta>or with email</Meta><View style={{ flex: 1, height: 1, backgroundColor: t.rule }} />
           </View>
         )}
         <View style={{ flexDirection: 'row', borderWidth: 1, borderColor: t.rule }}>
           {[['sign in', false], ['create account', true]].map(([label, c]) => (
             <Pressable key={label} onPress={() => { setCreate(c); setError(''); }} style={{ flex: 1, paddingVertical: 12, alignItems: 'center', backgroundColor: create === c ? t.ink : 'transparent' }}>
-              <Label color={create === c ? t.onInk : t.ink2}>{label}</Label>
+              <Text style={{ fontFamily: FONT.sansMedium, fontSize: 14, color: create === c ? t.onInk : t.ink2 }}>{label.charAt(0).toUpperCase() + label.slice(1)}</Text>
             </Pressable>
           ))}
         </View>
-        {create && <TextInput value={name} onChangeText={setName} placeholder="your name" placeholderTextColor={t.ink3} autoComplete="name" textContentType="name" style={field} />}
-        <TextInput value={email} onChangeText={setEmail} placeholder="email" placeholderTextColor={t.ink3} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" autoComplete="email" textContentType="username" style={field} />
-        <TextInput value={password} onChangeText={setPassword} placeholder="password" placeholderTextColor={t.ink3} secureTextEntry autoComplete={create ? 'new-password' : 'current-password'} textContentType={create ? 'newPassword' : 'password'} onSubmitEditing={go} returnKeyType="go" style={field} />
+        {create && <TextInput value={name} onChangeText={setName} placeholder="Your name" placeholderTextColor={t.ink3} autoComplete="name" textContentType="name" style={field} />}
+        <TextInput value={email} onChangeText={setEmail} placeholder="Email" placeholderTextColor={t.ink3} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" autoComplete="email" textContentType="username" style={field} />
+        <TextInput value={password} onChangeText={setPassword} placeholder="Password" placeholderTextColor={t.ink3} secureTextEntry autoComplete={create ? 'new-password' : 'current-password'} textContentType={create ? 'newPassword' : 'password'} onSubmitEditing={go} returnKeyType="go" style={field} />
         {!!error && <Text style={[small, { color: t.sig, fontSize: 14 }]}>{error}</Text>}
         {busy
           ? <View style={{ padding: 12, alignItems: 'center' }}><ActivityIndicator color={t.ink} /></View>
           : <Button filled disabled={!ready} onPress={go}>{create ? 'create account' : 'sign in'}</Button>}
         {create
           ? <Text style={small}>By creating an account you agree to the <Text style={{ textDecorationLine: 'underline' }} onPress={() => Linking.openURL(`${DEFAULT_CLOUD}/terms`)}>terms</Text> and the <Text style={{ textDecorationLine: 'underline' }} onPress={() => Linking.openURL(`${DEFAULT_CLOUD}/privacy`)}>privacy policy</Text>.</Text>
-          : <Pressable onPress={() => Linking.openURL(`${DEFAULT_CLOUD}/forgot`)} hitSlop={8}><Label>forgot password?</Label></Pressable>}
+          : <Pressable onPress={() => Linking.openURL(`${DEFAULT_CLOUD}/forgot`)} hitSlop={8}><Meta>Forgot password?</Meta></Pressable>}
         <View style={{ flex: 1, minHeight: 40 }} />
         <Pressable onPress={() => { tryDemo(); router.replace('/'); }} hitSlop={8} style={{ alignSelf: 'center' }}>
-          <Label style={{ textAlign: 'center' }}>no computer yet? look around with sample agents</Label>
+          <Meta style={{ textAlign: 'center' }}>No computer yet? Look around with sample agents</Meta>
         </Pressable>
       </ScrollView>
     </KeyboardAvoidingView>

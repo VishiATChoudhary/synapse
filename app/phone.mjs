@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import nacl from 'tweetnacl';
 import { DATA, readJSON, writeJSON, listAgents, readAgentMessages, projectOf, colorOf } from '../lib.mjs';
+import * as media from './phone-media.mjs';
 
 const FILE = path.join(DATA, 'phones.json');
 const ACTIVE = 2 * 60_000;           // a phone that checked in this recently gets live updates
@@ -48,6 +49,14 @@ async function call(url, route, { body, bearer, method = 'POST' } = {}) {
 const seal = (s, theirKey, msg) => {
   const n = nacl.randomBytes(24);
   return { type: 'box', n: b64(n), c: b64(nacl.box(Buffer.from(JSON.stringify(msg)), n, unb64(theirKey), unb64(s.secretKey))) };
+};
+// a video piece: the bytes ride in the box as they are (not base64 inside JSON), after a JSON header
+// [4 bytes header length][header][bytes]
+const sealBin = (s, theirKey, msg, bytes) => {
+  const head = Buffer.from(JSON.stringify(msg)), len = Buffer.alloc(4);
+  len.writeUInt32BE(head.length);
+  const n = nacl.randomBytes(24);
+  return { type: 'box', bin: 1, n: b64(n), c: b64(nacl.box(Buffer.concat([len, head, bytes]), n, unb64(theirKey), unb64(s.secretKey))) };
 };
 function unseal(s, theirKey, item) {
   const m = nacl.box.open(unb64(item.c), unb64(item.n), unb64(theirKey), unb64(s.secretKey));
@@ -87,12 +96,13 @@ async function phonesOf(id, force = false) {
 
 let host = null;           // what the app lends us: projects, terminals, spawning
 let timer = null;
-const live = new Map();    // phone id -> { watch, sent: { state, messages } } (memory only)
+const live = new Map();    // phone id -> { watch, media, sent: { state, messages } } (memory only)
 const seen = new Map();    // message id -> time, against replays
 const spawns = new Map();  // request id -> { phone, at, pty }
 
 export function start(h) {
   host = h;
+  media.setOnChange(() => schedule(100)); // a video copy is ready: tell the phone now
   schedule(1000);
 }
 const schedule = (ms) => { clearTimeout(timer); timer = setTimeout(tick, ms); };
@@ -136,9 +146,21 @@ async function receive(id, it) {
 }
 
 async function handle(id, phone, m) {
-  const l = live.get(phone.id) || { watch: null, sent: {} };
+  const l = live.get(phone.id) || { watch: null, media: false, sent: {} };
   live.set(phone.id, l);
-  if (m.t === 'hello') { l.sent = {}; return send(id, phone, { t: 'hello', computer: hostName() }); }
+  // a phone that says media: 1 shows images and videos; older builds (and the switch off) get text only
+  if (m.t === 'hello') { l.sent = {}; l.media = m.media === 1; return send(id, phone, { t: 'hello', computer: hostName(), media: 1 }); }
+  if (m.t === 'media') {
+    const img = media.image(String(m.id || ''));
+    if (!img) return send(id, phone, { t: 'media', id: m.id, gone: true });
+    const small = await media.shrink(img);
+    return send(id, phone, { t: 'media', id: m.id, mime: small.mime, data: small.data });
+  }
+  if (m.t === 'piece') {
+    const p = media.piece(String(m.id || ''), Number(m.i));
+    if (!p) return send(id, phone, { t: 'piece', id: m.id, i: m.i, gone: true });
+    return sendBin(id, phone, { t: 'piece', id: m.id, i: p.i, n: p.n, size: p.size }, p.bytes);
+  }
   if (m.t === 'watch') { l.watch = typeof m.id === 'string' ? m.id : null; l.sent.messages = null; return; }
   if (m.t === 'bye') { live.delete(phone.id); return; }
   if (m.t === 'send' || m.t === 'stop') {
@@ -169,6 +191,10 @@ export function spawned(req, pty) {
 
 function send(id, phone, msg) {
   const sealed = seal(id.s, phone.publicKey, { ...msg, ts: Date.now(), mid: b64(nacl.randomBytes(12)) });
+  return call(id.s.cloud, '/v1/send', { bearer: id.s.token, body: { to: phone.id, items: [sealed] } });
+}
+function sendBin(id, phone, msg, bytes) {
+  const sealed = sealBin(id.s, phone.publicKey, { ...msg, ts: Date.now(), mid: b64(nacl.randomBytes(12)) }, bytes);
   return call(id.s.cloud, '/v1/send', { bearer: id.s.token, body: { to: phone.id, items: [sealed] } });
 }
 
@@ -216,18 +242,39 @@ export async function remove(phoneId) {
 
 // ---------------------------------------------------------------- what the phone sees
 
-const cache = new Map(); // transcript -> { stamp, messages }
-function messagesOf(a) {
+const cache = new Map(); // transcript (+ media) -> { stamp, messages }
+const MEDIA_PER_MESSAGE = 12;
+function messagesOf(a, withMedia = false) {
   if (!a.transcript) return [];
   let stamp = '';
   try { const st = fs.statSync(a.transcript); stamp = `${st.size}:${st.mtimeMs}`; } catch { if (a.format !== 'demo') return []; } // demo agents have no file
-  const hit = cache.get(a.transcript);
+  const key = `${a.transcript}${withMedia ? '#media' : ''}`;
+  const hit = cache.get(key);
   if (hit?.stamp === stamp) return hit.messages;
   let messages = [];
-  try { messages = (readAgentMessages(a).messages || []).filter((x) => x.text?.trim()).slice(-MSGS).map((x) => ({ role: x.role, text: x.text.slice(0, MSG_CHARS), ts: x.ts, tool: !!x.tool })); } catch {}
-  cache.set(a.transcript, { stamp, messages });
+  try {
+    const read = readAgentMessages(a, null, withMedia ? { media: true, tailBytes: 2_000_000, minMessages: 12 } : {}).messages || [];
+    for (const x of read) {
+      const refs = withMedia && x.media ? [
+        ...x.media.images.map((img) => media.addImage(img).id),
+        ...x.media.videos.map((p) => media.addVideo(p, a.cwd)).filter(Boolean),
+      ] : [];
+      const text = x.text?.trim() ? x.text.slice(0, MSG_CHARS) : '';
+      // a turn that is only media (a screenshot's tool result) belongs to the message before it
+      if (!text) {
+        const prev = messages.at(-1);
+        if (refs.length && prev) prev.media = [...new Set([...(prev.media || []), ...refs])].slice(-MEDIA_PER_MESSAGE);
+        continue;
+      }
+      messages.push({ role: x.role, text, ts: x.ts, tool: !!x.tool, ...(refs.length ? { media: [...new Set(refs)].slice(-MEDIA_PER_MESSAGE) } : {}) });
+    }
+    messages = messages.slice(-MSGS);
+  } catch {}
+  cache.set(key, { stamp, messages });
   return messages;
 }
+// media ids as the phone sees them, with how far each video is
+const withRefs = (messages) => messages.map((m) => (m.media ? { ...m, media: m.media.map((id) => (id.startsWith('v') ? media.videoRef(id) : { id, kind: 'image' })).filter(Boolean) } : m));
 
 function snapshot() {
   const projects = host.projects().map((p) => ({
@@ -238,7 +285,7 @@ function snapshot() {
     const pr = projectOf(a.cwd), msgs = messagesOf(a);
     const last = [...msgs].reverse().find((x) => !x.tool) || msgs.at(-1);
     return {
-      id: a.id, kind: a.kind, name: a.name, status: a.status,
+      id: a.id, kind: a.kind, name: a.name, status: a.status, forkOf: a.forkOf || null,
       project: { key: pr.key, label: pr.label, color: colorOf(pr.key) },
       worktree: pr.worktree?.name || null,
       inApp: !!host.ptyOf(a.pid),
@@ -269,7 +316,10 @@ async function push(id) {
     if (l.sent.state !== state) { await send(id, phone, { t: 'state', ...snap }); l.sent.state = state; }
     if (l.watch) {
       const a = listAgents().find((x) => x.id === l.watch);
-      const messages = a ? messagesOf(a) : [];
+      const raw = a ? messagesOf(a, l.media) : [];
+      // videos in what the phone is looking at get their phone copy made now, so they are ready when reached
+      if (l.media) for (const m of raw) for (const mid of m.media || []) if (mid.startsWith('v')) media.prepare(mid);
+      const messages = withRefs(raw);
       const body = JSON.stringify(messages);
       if (l.sent.messages !== body) { await send(id, phone, { t: 'messages', id: l.watch, messages }); l.sent.messages = body; }
     }

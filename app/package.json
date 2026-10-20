@@ -1,6 +1,6 @@
 {
   "name": "synapse-app",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "private": true,
   "description": "Synapse desktop: projects, worktrees, agent terminals and fork stacks",
   "main": "main.mjs",
@@ -16,7 +16,7 @@
     "test:drag": "node tests/drag.cjs",
     "rebuild": "electron-rebuild -f -w node-pty",
     "test:updater": "node tests/updater.mjs",
-    "test:phone": "node tests/phone.mjs && node tests/phone-ui.cjs"
+    "test:phone": "node tests/phone.mjs && node tests/phone-media.mjs && node tests/phone-ui.cjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
