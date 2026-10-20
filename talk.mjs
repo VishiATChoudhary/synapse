@@ -5,7 +5,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
-import { FILES, KINDS, CLAUDE, readJSON, writeJSON, withLock, localAgents, remoteId, readAgentMessages, formatMessages, postMessage } from './lib.mjs';
+import { FILES, KINDS, CLAUDE, readJSON, writeJSON, withLock, localAgents, remoteId, readAgentMessages, formatMessages, postMessage, transcriptFile } from './lib.mjs';
 import { config } from './remote.mjs';
 
 export const LIMITS = {
@@ -537,7 +537,8 @@ function sourceFor(c) {
 function readable(src, replay) {
   if (!src) return false;
   if (src.format === 'demo') return (src.demo || []).length > 0;
-  if (!src.transcript || !fs.existsSync(src.transcript)) return false;
+  const file = transcriptFile(src);
+  if (!file || !fs.existsSync(file)) return false;
   return !replay || readAgentMessages(src).messages.length > 0;
 }
 

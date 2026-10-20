@@ -7,7 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { exec, execFile } from 'node:child_process';
 import { pipeline } from 'node:stream';
-import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, projectOfAgent, colorOf, renameAgent, renameProject } from './lib.mjs';
+import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, transcriptFile, projectOfAgent, colorOf, renameAgent, renameProject } from './lib.mjs';
 import { createEdge, removeEdge, setMode, endTalk, allowTalkRequest, dismissTalkRequest } from './ops.mjs';
 import * as remote from './remote.mjs';
 import * as talk from './talk.mjs';
@@ -37,8 +37,9 @@ function agents() {
   return listAgents().map((a) => {
     let lastActivity = a.updatedAt || a.startedAt;
     let preview = '';
-    if (a.transcript && fs.existsSync(a.transcript)) {
-      const mtime = fs.statSync(a.transcript).mtimeMs;
+    const file = transcriptFile(a);
+    if (file && fs.existsSync(file)) {
+      const mtime = fs.statSync(file).mtimeMs;
       lastActivity = Math.max(lastActivity, mtime);
       const hit = previewCache.get(a.id);
       if (hit?.mtime === mtime) preview = hit.preview;

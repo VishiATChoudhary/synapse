@@ -1169,3 +1169,30 @@ test('replay answerCommand carries the OpenCode and Cursor conversation', () => 
     toolless(cmd.args);
   }
 });
+
+// a real ask takes the tick path: readable() must find the file behind "<db>#<session id>"
+test('a friend\'s ask to an OpenCode or a Cursor agent gets answered, not unavailable', async () => {
+  const cases = [
+    ['opencode', `${path.join(sessHome, 'opencode', 'opencode.db')}#${OC_SESSION}`, /backoff loop/],
+    ['cursor-agent', lib.cursorTranscript(SESS_CWD, Date.now() - 1000, sessHome), /Source maps are the cause/],
+  ];
+  for (const [kind, transcript, line] of cases) {
+    reset(); peer({ via: 'request', handle: 'bob' });
+    const target = `${kind}-gone`; // not running: the talk edge's snapshot answers
+    writeJSON(FILES.edges, [{ id: 'te1', from: target, to: 'r-m1-x', mode: 'talk', snapshot: { kind, name: 'app', cwd: '/nope', transcript, format: kind } }]);
+    await answerOnce(target);
+    assert.equal(conv0().status, 'open', `${kind}: ${conv0().endReason}`);
+    assert.equal(conv0().mode, 'replay');
+    assert.match(echoOf().stdin, line, kind);
+    toolless(echoOf().argv);
+  }
+});
+
+test('a claude transcript whose path has a # still reads', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-#hash-'));
+  const file = path.join(dir, 'a#b.jsonl');
+  fs.writeFileSync(file, `${JSON.stringify({ type: 'user', message: { content: 'hello there' }, timestamp: 't' })}\n`);
+  assert.equal(lib.transcriptFile({ transcript: file, format: 'claude' }), file);
+  assert.equal(lib.transcriptFile({ transcript: `${dir}/o.db#ses_1`, format: 'opencode' }), `${dir}/o.db`);
+  assert.deepEqual(lib.readAgentMessages({ transcript: file, format: 'claude' }).messages.map((m) => m.text), ['hello there']);
+});

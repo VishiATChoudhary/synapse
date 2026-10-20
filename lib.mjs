@@ -189,7 +189,8 @@ function windowFrom(all, from) {
 // OpenCode: one opencode.db for every session. The transcript is "<db>#<session id>"; messages are rows
 // (data.role) and their text and tool calls are rows of `part`.
 function readOpenCode(transcript, from) {
-  const [file, id] = transcript.split('#');
+  const file = transcriptFile({ transcript, format: 'opencode' });
+  const id = transcript.slice(file.length + 1);
   const db = openDb(file);
   if (!db || !id) return { messages: [], end: from };
   const all = [];
@@ -247,10 +248,21 @@ function readCursor(file, from) {
   return windowFrom(all, from);
 }
 
+// The file on disk behind a transcript. Only OpenCode adds "#<session id>"; every other path is taken whole,
+// so a claude or codex path with a '#' in it still reads.
+export function transcriptFile(src) {
+  const t = src?.transcript;
+  if (typeof t !== 'string' || !t) return null;
+  if (src.format !== 'opencode') return t;
+  const at = t.lastIndexOf('#');
+  return at > 0 ? t.slice(0, at) : t;
+}
+
 // Unified reader. `src` is { transcript, format }.
 export function readAgentMessages(src, cursor = null, opts = {}) {
   if (src?.format === 'demo') return { messages: cursor == null ? src.demo : src.demo.slice(cursor), end: src.demo.length };
-  if (!src?.transcript || !fs.existsSync(src.transcript.split('#')[0])) return { messages: [], end: cursor };
+  const file = transcriptFile(src);
+  if (!file || !fs.existsSync(file)) return { messages: [], end: cursor };
   if (src.format === 'opencode') return readOpenCode(src.transcript, cursor);
   if (src.format === 'cursor-agent') return readCursor(src.transcript, cursor);
   if (src.format === 'gemini') return readGemini(src.transcript, cursor);
