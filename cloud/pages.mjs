@@ -262,7 +262,7 @@ function layout(ctx, title, body, { bare = false } = {}) {
 <link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/app.css"></head><body>
 <header class="top"><a class="brand" href="${u ? '/welcome' : 'https://heysynapse.dev'}"><img class="logo" src="/icon.svg" alt=""><b>synapse</b></a><span class="sp"></span>
-${u ? `<a class="nav hide-s" href="/welcome">get started</a><a class="nav hide-s" href="/download">download</a><a class="nav me" href="/settings">${avatar(u)}<span class="hide-s">@${esc(u.handle)}</span></a><a class="nav" href="#" data-act="/v1/auth/logout" data-go="/login">sign out</a>`
+${u ? `${u.admin ? '<a class="nav hide-s" href="/admin">admin</a>' : ''}<a class="nav hide-s" href="/welcome">get started</a><a class="nav hide-s" href="/download">download</a><a class="nav me" href="/settings">${avatar(u)}<span class="hide-s">@${esc(u.handle)}</span></a><a class="nav" href="#" data-act="/v1/auth/logout" data-go="/login">sign out</a>`
     : `<a class="nav hide-s" href="/download">download</a><a class="nav" href="/login">sign in</a><a class="nav cta" href="/signup">sign up</a>`}
 </header>
 ${body}
@@ -371,7 +371,8 @@ export function welcome(ctx) {
       act: `<pre class="code">use synapse to get context from @friend's api agent</pre>` },
   ];
   const first = steps.findIndex((s) => !s.done);
-  return layout(ctx, 'Get started', `<main class="page"><h2>Get started</h2><p class="sub">Seven steps. You can come back to this page any time.</p>
+  const waiting = u.access === 'waiting' ? `<p class="note">You are on the waitlist: <b>#${u.waitlistPosition}</b>. Synapse works on your Mac right away. Sharing with friends opens once you are let in, and we email you when that happens.</p>` : '';
+  return layout(ctx, 'Get started', `<main class="page"><h2>Get started</h2><p class="sub">Seven steps. You can come back to this page any time.</p>${waiting}
 <ol class="steps">${steps.map((s, i) => `<li class="${s.done ? 'done' : i === first ? 'now' : ''}"><div><h3>${s.title}</h3><p>${s.body}</p>${s.act || ''}</div></li>`).join('')}</ol></main>`);
 }
 
@@ -413,6 +414,34 @@ ${ctx.self ? `<p>This is your public profile. Share the link so friends can add 
       : `<p>Add ${esc(p.name)} to your trusted people so they can ask your agents for context. You still accept each request and pick what to share.</p><button class="btn solid" data-act="/v1/trusted" data-body='${esc(JSON.stringify({ who: p.handle }))}'>Add to trusted people</button>`)
       : `<p>Sign up to share coding agents with ${esc(p.name)}.</p><a class="btn solid" href="/signup?from=${esc(p.handle)}">Create your account</a>`}
 <p class="msg" role="alert"></p></section></main>`);
+}
+
+const bytes = (n) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KB` : n < 1 << 30 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${(n / (1 << 30)).toFixed(2)} GB`);
+const since = (t) => { const s = (Date.now() - t) / 1000; return s < 90 ? 'just now' : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`; };
+
+export function admin(ctx) {
+  const s = ctx.stats;
+  const who = (u) => `<div class="grow"><b>${esc(u.name)}</b> <span class="meta">@${esc(u.handle)}${u.email ? ` · ${esc(u.email)}` : ''}</span></div>`;
+  const act = (route, u, label, quiet) => `<button class="btn small${quiet ? ' quiet' : ''}" data-act="${route}" data-body='{"who":"${esc(u.id)}"}'>${label}</button>`;
+  const empty = (text) => `<p class="item meta">${text}</p>`;
+  const tile = (label, value, hint) => `<div class="item"><span class="grow">${label}${hint ? ` <span class="meta">${hint}</span>` : ''}</span><b>${value}</b></div>`;
+  return layout(ctx, 'Admin', `<main class="page" id="admin"><h2>Admin</h2>
+<p class="sub">Waitlist is <b>${ctx.waitlist ? 'on' : 'off'}</b>: ${ctx.waitlist ? 'new accounts wait here until you approve them.' : 'new accounts can share right away. Set WAITLIST=1 on the cloud service to turn it on.'}</p>
+<section class="card"><h3>Waiting · ${ctx.waiting.length}</h3><p>Approving sends them a "You are in" email. Rejecting sends nothing: they keep the app, just not sharing.</p><p class="msg" role="alert"></p>
+<div class="list">${ctx.waiting.map((u, i) => `<div class="item"><span class="meta">#${i + 1}</span>${who(u)}<span class="meta">${since(u.created_at)}</span>${act('/v1/admin/approve', u, 'Approve')} ${act('/v1/admin/reject', u, 'Reject', true)}</div>`).join('') || empty('Nobody waiting.')}</div></section>
+<section class="card"><h3>Recently approved</h3><p class="msg" role="alert"></p><div class="list">${ctx.approved.map((u) => `<div class="item">${who(u)}<span class="meta">${since(u.approved_at)}</span>${act('/v1/admin/hold', u, 'To waitlist', true)} ${act('/v1/admin/reject', u, 'Revoke', true)}</div>`).join('') || empty('Nobody yet.')}</div></section>
+<section class="card"><h3>Put someone on the waitlist</h3><p>For accounts made before the waitlist: email or @handle. No email is sent.</p><div class="row"><input id="hold-who" type="text" placeholder="email or @handle" aria-label="Email or handle"><button class="btn" data-act="/v1/admin/hold" data-field="#hold-who" data-key="who">To waitlist</button></div><p class="msg" role="alert"></p></section>
+${ctx.rejected.length ? `<section class="card"><h3>Rejected · ${ctx.rejected.length}</h3><p class="msg" role="alert"></p><div class="list">${ctx.rejected.map((u) => `<div class="item">${who(u)}${act('/v1/admin/hold', u, 'To waitlist', true)} ${act('/v1/admin/approve', u, 'Approve')}</div>`).join('')}</div></section>` : ''}
+<section class="card"><h3>Load</h3><p>What to watch as Synapse grows. Costs and scaling steps: docs/operations.md in the repo.</p><div class="list">
+${tile('Accounts', s.users, `${s.active} active · ${s.signups24h} new today · ${s.signups7d} this week`)}
+${tile('Machines', s.machines, `${s.machinesSeen5m} online now · ${s.machinesSeen24h} seen today`)}
+${tile('Signed-in sessions', s.sessions)}
+${tile('Live shares', s.shares, `${s.pendingRequests} requests pending`)}
+${tile('Mailbox', bytes(s.mailboxBytes), `${s.mailboxItems} items waiting for pickup`)}
+${tile('Database', bytes(s.dbBytes), 'SQLite + WAL on the volume')}
+${tile('Memory', bytes(s.rssBytes), `this process · up ${since(Date.now() - s.uptimeMs).replace(' ago', '')}`)}
+${tile('Email', s.mail ? 'on' : 'off')}
+</div></section></main>`);
 }
 
 export function message(ctx) {

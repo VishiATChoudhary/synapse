@@ -108,6 +108,11 @@ export const emails = {
     text: `Hi ${name},\n\nSomeone (hopefully you) asked to reset your Synapse password:\n\n${link}\n\nThe link works for one hour. If it was not you, ignore this email: your password stays the same.`,
     html: wrap('Reset your password', `Hi ${esc(name)}, someone (hopefully you) asked to reset your Synapse password. The link works for one hour. If it was not you, ignore this email.`, link, 'Choose a new password'),
   }),
+  approved: (name, link) => ({
+    subject: 'You are in: Synapse multiplayer is open for you',
+    text: `Hi ${name},\n\nYou are off the waitlist. You can now add trusted people and share agents with friends:\n\n${link}`,
+    html: wrap('You are in', `Hi ${esc(name)}, you are off the waitlist. You can now add trusted people and share agents with friends.`, link, 'Get started'),
+  }),
   trustedInvite: (fromName, link) => ({
     subject: `${fromName} added you as a trusted person on Synapse`,
     text: `${fromName} wants to share coding agents with you on Synapse: their agents and yours can read each other's context once you both agree.\n\nCreate your account:\n\n${link}`,

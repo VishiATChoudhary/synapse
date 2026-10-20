@@ -5,7 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 const DIR = process.env.CLOUD_DATA || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(process.cwd(), 'data');
 fs.mkdirSync(DIR, { recursive: true });
-export const db = new DatabaseSync(path.join(DIR, 'synapse.db'));
+export const DB_FILE = path.join(DIR, 'synapse.db');
+export const db = new DatabaseSync(DB_FILE);
 db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
 
 // numbered migrations, each runs once
@@ -120,6 +121,9 @@ const MIGRATIONS = [
      at INTEGER NOT NULL,
      PRIMARY KEY (user_id, other_user)
    );`,
+  // the waitlist: accounts made before it stay active
+  `ALTER TABLE users ADD COLUMN access TEXT NOT NULL DEFAULT 'active';
+   ALTER TABLE users ADD COLUMN approved_at INTEGER;`,
 ];
 
 db.exec('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)');

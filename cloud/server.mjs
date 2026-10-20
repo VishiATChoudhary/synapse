@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { get, all, run, tx } from './db.mjs';
+import { get, all, run, tx, DB_FILE } from './db.mjs';
 import { sendMail, emails, devOutbox, mailConfigured } from './mail.mjs';
 import * as oauth from './oauth.mjs';
 import * as pages from './pages.mjs';
@@ -20,6 +20,12 @@ const SECURE = PUBLIC_URL.startsWith('https://');
 const OLD_HOST = new URL(PUBLIC_URL).host.endsWith('.up.railway.app') ? null : /\.up\.railway\.app$/;
 const SECRET = process.env.CLOUD_SECRET || process.env.RELAY_SECRET;
 if (!SECRET) throw new Error('CLOUD_SECRET is not set');
+// WAITLIST=1: new accounts wait until an admin approves them before they can share.
+// Admins are the verified emails in ADMIN_EMAILS (the /admin page), or anyone sending x-admin-secret: ADMIN_SECRET
+const WAITLIST = !!process.env.WAITLIST && process.env.WAITLIST !== '0';
+const ADMIN_SECRET = process.env.ADMIN_SECRET || '';
+const ADMIN_EMAILS = new Set(String(process.env.ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
+const STARTED = Date.now();
 export const DMG_URL = process.env.DMG_URL || 'https://github.com/VishiATChoudhary/synapse/releases/latest/download/Synapse-arm64.dmg';
 
 const HOUR = 3600_000, DAY = 24 * HOUR;
@@ -105,8 +111,8 @@ function createUser({ email, name, password, emailVerified = false, avatar = nul
   const id = `u_${rid(9)}`, t = now();
   email = email ? normEmail(email) : null;
   name = clean(name, 60) || (email ? email.split('@')[0] : handle) || 'Synapse user';
-  run(`INSERT INTO users (id, email, email_verified, handle, name, avatar, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    id, email, emailVerified ? 1 : 0, uniqueHandle(handle || email?.split('@')[0] || name), name, avatar, password ? hashPassword(password) : null, t, t);
+  run(`INSERT INTO users (id, email, email_verified, handle, name, avatar, password_hash, created_at, updated_at, access) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    id, email, emailVerified ? 1 : 0, uniqueHandle(handle || email?.split('@')[0] || name), name, avatar, password ? hashPassword(password) : null, t, t, WAITLIST ? 'waiting' : 'active');
   if (emailVerified) claimInvites(id, email);
   return get('SELECT * FROM users WHERE id = ?', id);
 }
@@ -114,6 +120,8 @@ function createUser({ email, name, password, emailVerified = false, avatar = nul
 // someone added this email to their trusted people before it had an account
 function claimInvites(userId, email) {
   if (!email) return;
+  // an admin's confirmed email never waits
+  if (ADMIN_EMAILS.has(email)) run("UPDATE users SET access = 'active' WHERE id = ? AND email = ? AND email_verified = 1", userId, email);
   for (const row of all('SELECT * FROM trusted WHERE email = ? AND trusted_user IS NULL', email)) {
     if (row.user_id === userId || get('SELECT 1 FROM trusted WHERE user_id = ? AND trusted_user = ?', row.user_id, userId)) { run('DELETE FROM trusted WHERE id = ?', row.id); continue; }
     run('UPDATE trusted SET trusted_user = ?, email = NULL WHERE id = ?', userId, row.id);
@@ -126,8 +134,11 @@ function meUser(u) {
     id: u.id, email: u.email, emailVerified: !!u.email_verified, handle: u.handle, name: u.name, avatar: u.avatar || null,
     providers: all('SELECT provider FROM identities WHERE user_id = ?', u.id).map((r) => r.provider),
     hasPassword: !!u.password_hash, createdAt: u.created_at,
+    access: u.access, waitlistPosition: u.access === 'waiting' ? waitlistPosition(u) : null, admin: isAdmin(u),
   };
 }
+const isAdmin = (u) => !!(u?.email && u.email_verified && ADMIN_EMAILS.has(u.email));
+const waitlistPosition = (u) => get("SELECT COUNT(*) AS n FROM users WHERE access = 'waiting' AND created_at <= ?", u.created_at).n;
 
 // ---------------------------------------------------------------- sessions
 
@@ -165,6 +176,55 @@ function must(req) {
   if (!a) fail(401, 'Sign in first.');
   return a;
 }
+// signed in and let in: what sharing with other people needs
+const WAITING = (n) => `You are on the Synapse waitlist (#${n}). You can share with friends once you are let in: we email you.`;
+const NOT_LET_IN = 'Your Synapse account is not let in to sharing with friends.';
+const shut = (u) => (u.access === 'waiting' ? WAITING(waitlistPosition(u)) : NOT_LET_IN);
+function member(req) {
+  const a = must(req);
+  if (a.user.access !== 'active') fail(403, shut(a.user));
+  return a;
+}
+// admin routes answer 404 to everyone else, so they do not show they exist
+function admin(req) {
+  if (isAdmin(auth(req)?.user)) return;
+  const got = Buffer.from(String(req.headers['x-admin-secret'] || '')), want = Buffer.from(ADMIN_SECRET);
+  if (!ADMIN_SECRET || got.length !== want.length || !crypto.timingSafeEqual(got, want)) fail(404, 'not found');
+}
+const fileSize = (f) => { try { return fs.statSync(f).size; } catch { return 0; } };
+// what the admin page shows: the waitlist, and the numbers that say when the cloud needs more
+function overview() {
+  const t = now();
+  const count = (sql, ...a) => get(sql, ...a).n;
+  const people = (where, order) => all(`SELECT id, email, handle, name, created_at, approved_at FROM users WHERE ${where} ORDER BY ${order} LIMIT 500`);
+  const mailbox = get('SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM mailbox');
+  return {
+    waitlist: WAITLIST,
+    waiting: people("access = 'waiting'", 'created_at'),
+    rejected: people("access = 'rejected'", 'updated_at DESC'),
+    approved: people("access = 'active' AND approved_at IS NOT NULL", 'approved_at DESC').slice(0, 20),
+    stats: {
+      users: count('SELECT COUNT(*) AS n FROM users'),
+      active: count("SELECT COUNT(*) AS n FROM users WHERE access = 'active'"),
+      signups24h: count('SELECT COUNT(*) AS n FROM users WHERE created_at > ?', t - DAY),
+      signups7d: count('SELECT COUNT(*) AS n FROM users WHERE created_at > ?', t - 7 * DAY),
+      machines: count('SELECT COUNT(*) AS n FROM machines'),
+      machinesSeen24h: count('SELECT COUNT(*) AS n FROM machines WHERE last_seen > ?', t - DAY),
+      machinesSeen5m: count('SELECT COUNT(*) AS n FROM machines WHERE last_seen > ?', t - 5 * 60_000),
+      sessions: count('SELECT COUNT(*) AS n FROM sessions WHERE expires_at > ?', t),
+      shares: count("SELECT COUNT(*) AS n FROM requests WHERE status = 'accepted'"),
+      pendingRequests: count("SELECT COUNT(*) AS n FROM requests WHERE status = 'pending'"),
+      mailboxItems: mailbox.n, mailboxBytes: mailbox.bytes,
+      dbBytes: fileSize(DB_FILE) + fileSize(`${DB_FILE}-wal`),
+      rssBytes: process.memoryUsage().rss, uptimeMs: t - STARTED,
+      mail: mailConfigured(),
+    },
+  };
+}
+const findUser = (who) => {
+  who = String(who || '').trim();
+  return get('SELECT * FROM users WHERE id = ? OR email = ? OR handle = ?', who, normEmail(who), who.replace(/^@/, '').toLowerCase());
+};
 
 // email links (verify, reset): random token, stored hashed, single use
 function emailToken(userId, purpose, ttl, email) {
@@ -481,7 +541,7 @@ const routes = {
   // ---- trusted people
   'GET /v1/trusted': async (req, res) => json(res, 200, { trusted: trustedList(must(req).user.id) }),
   'POST /v1/trusted': async (req, res, b) => {
-    const { user } = must(req);
+    const { user } = member(req);
     limit('trust', user.id, 60, HOUR);
     const who = String(b.who || '').trim();
     if (!who) fail(400, 'Type an email or @handle.');
@@ -525,7 +585,7 @@ const routes = {
 
   // ---- synapse requests
   'POST /v1/requests': async (req, res, b) => {
-    const { user } = must(req);
+    const { user } = member(req);
     limit('request', user.id, 60, HOUR);
     const mine = ownMachine(user.id, b.machineId);
     const agent = cleanAgent(b.agent);
@@ -555,7 +615,7 @@ const routes = {
     return json(res, 200, { incoming: pick('to_user'), outgoing: pick('from_user') });
   },
   'POST /v1/requests/:id/accept': async (req, res, b, params) => {
-    const { user } = must(req);
+    const { user } = member(req);
     const r = get('SELECT * FROM requests WHERE id = ? AND to_user = ?', params.id, user.id);
     if (!r) fail(404, 'No such request.');
     if (r.status !== 'pending') fail(409, `This request was already ${r.status}.`);
@@ -586,6 +646,41 @@ const routes = {
     if (!r) fail(404, 'No such request.');
     if (r.status === 'pending') run("UPDATE requests SET status = 'cancelled', decided_at = ? WHERE id = ?", now(), r.id);
     return json(res, 200, { request: requestJSON(get('SELECT * FROM requests WHERE id = ?', r.id)) });
+  },
+
+  // ---- waitlist admin (x-admin-secret: ADMIN_SECRET)
+  'GET /v1/admin/waitlist': async (req, res) => {
+    admin(req);
+    const waiting = overview().waiting.map((u, i) => ({ position: i + 1, id: u.id, email: u.email, handle: u.handle, name: u.name, createdAt: u.created_at }));
+    return json(res, 200, { waiting });
+  },
+  'GET /v1/admin/overview': async (req, res) => { admin(req); return json(res, 200, overview()); },
+  'POST /v1/admin/approve': async (req, res, b) => {
+    admin(req);
+    const u = findUser(b.who);
+    if (!u) fail(404, `Nobody on Synapse matches "${b.who}".`);
+    if (u.access === 'active') return json(res, 200, { ok: true, already: true });
+    run("UPDATE users SET access = 'active', approved_at = ?, updated_at = ? WHERE id = ?", now(), now(), u.id);
+    if (u.email) await mail(u.email, emails.approved(u.name, `${PUBLIC_URL}/welcome`));
+    return json(res, 200, { ok: true, user: meUser(get('SELECT * FROM users WHERE id = ?', u.id)) });
+  },
+  // back in line, e.g. an account made before the waitlist. No email
+  'POST /v1/admin/hold': async (req, res, b) => {
+    admin(req);
+    const u = findUser(b.who);
+    if (!u) fail(404, `Nobody on Synapse matches "${b.who}".`);
+    if (isAdmin(u)) fail(400, 'That is an admin.');
+    run("UPDATE users SET access = 'waiting', approved_at = NULL, updated_at = ? WHERE id = ?", now(), u.id);
+    return json(res, 200, { ok: true, user: meUser(get('SELECT * FROM users WHERE id = ?', u.id)) });
+  },
+  // no email: they keep their account and the app, just not sharing. Approve undoes it
+  'POST /v1/admin/reject': async (req, res, b) => {
+    admin(req);
+    const u = findUser(b.who);
+    if (!u) fail(404, `Nobody on Synapse matches "${b.who}".`);
+    if (isAdmin(u)) fail(400, 'That is an admin.');
+    run("UPDATE users SET access = 'rejected', approved_at = NULL, updated_at = ? WHERE id = ?", now(), u.id);
+    return json(res, 200, { ok: true, user: meUser(get('SELECT * FROM users WHERE id = ?', u.id)) });
   },
 
   // ---- machine mailbox (same protocol as relay/relay.mjs)
@@ -663,7 +758,7 @@ async function oauthCallback(req, res, provider, url) {
     user = get('SELECT * FROM users WHERE id = ?', known.user_id);
   } else if (email && (user = get('SELECT * FROM users WHERE email = ?', email))) {
     // same verified email: same person. The provider vouched for it, so mark it verified
-    if (!user.email_verified) run('UPDATE users SET email_verified = 1 WHERE id = ?', user.id);
+    if (!user.email_verified) { run('UPDATE users SET email_verified = 1 WHERE id = ?', user.id); claimInvites(user.id, email); }
   } else {
     user = createUser({ email, name: p.name, emailVerified: !!email, avatar: p.avatar, handle: p.username });
   }
@@ -701,6 +796,8 @@ function page(req, res, url) {
       hasApp: !!get("SELECT 1 FROM sessions WHERE user_id = ? AND kind IN ('app', 'cli')", a.user.id),
       trusted: trustedList(a.user.id) }));
     case '/settings': return needUser('/settings') || html(res, 200, pages.settings(ctx));
+    case '/admin': return ctx.user?.admin ? html(res, 200, pages.admin({ ...ctx, ...overview() }))
+      : html(res, 404, pages.message({ ...ctx, title: 'Not found', body: 'There is nothing at this address.', link: '/', cta: 'Home' }));
     case '/download': return redirect(res, DMG_URL);
     case '/privacy': return html(res, 200, pages.privacy(ctx));
     case '/terms': return html(res, 200, pages.terms(ctx));
@@ -754,6 +851,11 @@ export const server = http.createServer(async (req, res) => {
       if (mr) {
         const me = verify(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''), 'machine')?.m;
         if (!me) return json(res, 401, { error: 'unknown machine, register again' });
+        if (WAITLIST && (p === '/v1/invite' || p === '/v1/join')) {
+          const owner = get('SELECT u.* FROM machines m JOIN users u ON u.id = m.user_id WHERE m.id = ?', me);
+          if (!owner) return json(res, 403, { error: 'Sign in to Synapse to add friends.' });
+          if (owner.access !== 'active') return json(res, 403, { error: shut(owner) });
+        }
         return json(res, 200, mr(me, b));
       }
       let handler = routes[`${req.method} ${p}`], params = {};
