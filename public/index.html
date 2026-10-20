@@ -1773,6 +1773,8 @@ function separateFrames(rate = 0.35) {
   const rs = groupRects();
   const heldIds = new Set(drag?.mode === 'move' ? [heldId()] : drag?.mode === 'group' ? (rs.find((r) => r.key === drag.key)?.nodes || []).map(([id]) => id) : []);
   const holds = (r) => r.nodes.some(([id]) => heldIds.has(id));
+  // the agents a shift really moves: the frame with more of them gives way less
+  const mass = (r) => r.nodes.filter(([id, n]) => heldId() !== id && !n.slot).length;
   let moved = false;
   const apart = (list, GAP) => {
     for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
@@ -1781,9 +1783,9 @@ function separateFrames(rate = 0.35) {
       if (ox <= 0 || oy <= 0) continue;
       const horiz = ox < oy, amt = Math.min(horiz ? ox : oy, 60) * rate + 0.5;
       const dir = horiz ? Math.sign((b.x0 + b.x1) - (a.x0 + a.x1)) || 1 : Math.sign((b.top + b.y1) - (a.top + a.y1)) || 1;
-      const ha = holds(a), hb = holds(b);
+      const ha = holds(a), hb = holds(b), ma = mass(a), mb = mass(b);
       if (ha && hb) continue;
-      const sa = ha ? 0 : hb ? 1 : 0.5, sb = 1 - sa;
+      const sa = ha ? 0 : hb ? 1 : ma + mb ? mb / (ma + mb) : 0.5, sb = 1 - sa;
       shiftGroup(a, horiz ? -dir * amt * sa : 0, horiz ? 0 : -dir * amt * sa, heldIds);
       shiftGroup(b, horiz ? dir * amt * sb : 0, horiz ? 0 : dir * amt * sb, heldIds);
       moved = true;
