@@ -3,6 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,12 +20,21 @@ const profiles = {
   google: { user: { sub: 'g-202', email: 'gina@example.com', email_verified: true, name: 'Gina G', picture: 'https://lh3.example/gina.png' } },
   x: { user: { data: { id: 'x-303', name: 'Xavier', username: 'xav', profile_image_url: 'https://pbs.example/xav_normal.png' } } },
 };
+// a fake Apple: its signing keys, so tests can mint identity tokens the cloud accepts
+const apple = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+const appleJwk = { ...apple.publicKey.export({ format: 'jwk' }), kid: 'test-kid', alg: 'RS256', use: 'sig' };
+function appleToken(claims, { key = apple.privateKey, kid = 'test-kid' } = {}) {
+  const enc = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const body = `${enc({ alg: 'RS256', kid })}.${enc({ iss: 'https://appleid.apple.com', aud: 'dev.synapse.mobile', exp: Math.floor(Date.now() / 1000) + 600, ...claims })}`;
+  return `${body}.${crypto.sign('RSA-SHA256', Buffer.from(body), key).toString('base64url')}`;
+}
 const seen = [];
 function startMock() {
   return new Promise((resolve) => {
     mock = http.createServer(async (req, res) => {
       const u = new URL(req.url, 'http://x');
       const [, p, step] = u.pathname.split('/');
+      if (p === 'apple' && step === 'keys') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ keys: [appleJwk] })); }
       let body = '';
       for await (const c of req) body += c;
       seen.push({ p, step, method: req.method, auth: req.headers.authorization, body });
@@ -48,7 +58,7 @@ before(async () => {
   proc = spawn(process.execPath, ['server.mjs'], {
     cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PORT: String(port), PUBLIC_URL: base, CLOUD_DATA: data, CLOUD_SECRET: 'test-secret', CLOUD_DEV_MAIL: '1', CLOUD_IP_LIMIT_SCALE: '50', OAUTH_MOCK_BASE: mockBase,
-      GITHUB_CLIENT_ID: 'gh', GITHUB_CLIENT_SECRET: 'ghs', GOOGLE_CLIENT_ID: 'go', GOOGLE_CLIENT_SECRET: 'gos', X_CLIENT_ID: 'xi', X_CLIENT_SECRET: 'xs' },
+      APPLE_KEYS_URL: `${mockBase}/apple/keys`, GITHUB_CLIENT_ID: 'gh', GITHUB_CLIENT_SECRET: 'ghs', GOOGLE_CLIENT_ID: 'go', GOOGLE_CLIENT_SECRET: 'gos', X_CLIENT_ID: 'xi', X_CLIENT_SECRET: 'xs' },
   });
   let err = '';
   proc.stderr.on('data', (d) => { err += d; });
@@ -533,4 +543,78 @@ test('trust back: the person you added hears about it once, sees you under incom
   const page = await call('/settings', { cookie });
   assert.equal(page.status, 200);
   assert.ok(page.text.includes('id="trust"') && page.text.includes('People who trust you'));
+});
+
+test('an account\'s computer and phone find each other and talk without an invite; nobody else can', async () => {
+  const me = (await signup('pho@example.com', 'Pho Owner')).json.token;
+  const other = (await signup('stranger@example.com', 'Stranger')).json.token;
+  const key = (c) => Buffer.alloc(32, c).toString('base64');
+  const reg = (token, kind, name, publicKey) => call('/v1/register', { token, body: { kind, name, publicKey } });
+
+  const mac = (await reg(me, 'computer', 'Mac', key(1))).json;
+  const phone = (await reg(me, 'phone', 'iPhone', key(2))).json;
+  const theirs = (await reg(other, 'phone', 'Their phone', key(3))).json;
+  const plain = (await call('/v1/register', { token: me, body: {} })).json; // multiplayer's identity: no kind
+  assert.equal((await reg(me, 'phone', 'Bad', 'nope')).status, 400, 'keys are checked');
+
+  const list = (await call('/v1/machines', { token: me })).json.machines;
+  assert.deepEqual(list.map((m) => m.kind).sort(), ['computer', 'phone']);
+  assert.equal(list.find((m) => m.kind === 'computer').publicKey, key(1));
+  assert.ok(!list.some((m) => m.id === theirs.machineId || m.id === plain.machineId));
+  assert.equal((await call('/v1/machines')).status, 401);
+
+  const send = (from, to) => call('/v1/send', { token: from.token, body: { to: to.machineId, items: [{ type: 'box', n: 'n', c: 'c' }] } });
+  assert.equal((await send(phone, mac)).status, 200, 'same account, no pair token');
+  const got = (await call('/v1/poll', { token: mac.token, body: {} })).json.items;
+  assert.equal(got.length, 1);
+  assert.equal(got[0].from, phone.machineId);
+  assert.equal((await send(theirs, mac)).status, 403, 'another account\'s phone cannot');
+  assert.equal((await send(plain, mac)).status, 403, 'a machine that is not a device of the account cannot');
+
+  // the computer removes the phone (or the phone signs out): it is gone and cannot send any more
+  assert.equal((await call(`/v1/machines/${phone.machineId}`, { token: other, method: 'DELETE' })).status, 404, 'only the owner removes it');
+  assert.equal((await call(`/v1/machines/${phone.machineId}`, { token: me, method: 'DELETE' })).status, 200);
+  assert.equal((await send(phone, mac)).status, 403);
+  assert.equal((await call('/v1/machines', { token: me })).json.machines.length, 1);
+});
+
+test('Sign in with Apple from the phone: Apple-signed tokens only, same person signs in again, verified email joins its account', async () => {
+  const apple = (identityToken, name) => call('/v1/auth/apple', { body: { identityToken, name, client: 'phone', label: 'iPhone' } });
+  const first = await apple(appleToken({ sub: 'apple-1', email: 'x1@privaterelay.appleid.com', email_verified: true }), 'Appy Person');
+  assert.equal(first.status, 200);
+  assert.match(first.json.token, /^syn_/);
+  assert.equal(first.json.user.name, 'Appy Person');
+  assert.deepEqual(first.json.user.providers, ['apple']);
+  const again = await apple(appleToken({ sub: 'apple-1' }));
+  assert.equal(again.json.user.handle, first.json.user.handle, 'the same Apple ID is the same account');
+
+  await signup('mixed@example.com', 'Mixed');
+  const joined = await apple(appleToken({ sub: 'apple-2', email: 'mixed@example.com', email_verified: 'true' }));
+  assert.equal(joined.json.user.email, 'mixed@example.com', 'a verified email joins the existing account');
+
+  assert.equal((await apple(appleToken({ sub: 'apple-3', aud: 'com.someone.else' }))).status, 401, 'tokens for other apps are refused');
+  assert.equal((await apple(appleToken({ sub: 'apple-3', exp: Math.floor(Date.now() / 1000) - 10 }))).status, 401, 'expired tokens are refused');
+  assert.equal((await apple(appleToken({ sub: 'apple-3', iss: 'https://evil.example' }))).status, 401, 'only Apple issues them');
+  const forger = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  assert.equal((await apple(appleToken({ sub: 'apple-1' }, { key: forger.privateKey }))).status, 401, 'a token not signed by Apple is refused');
+  assert.equal((await apple('not.a.token')).status, 401);
+});
+
+test('the phone app signs in with GitHub through its browser sheet: a one-time code back to the app, no code to compare', async () => {
+  const state = 'phone-state-1234567890';
+  const start = await call(`/auth/github/start?next=${encodeURIComponent(`/app/done?state=${state}`)}`);
+  const auth = await fetch(start.headers.get('location'), { redirect: 'manual' });
+  const cb = await call(new URL(auth.headers.get('location')).pathname + new URL(auth.headers.get('location')).search);
+  assert.equal(cb.headers.get('location'), `/app/done?state=${state}`);
+  const done = await call(`/app/done?state=${state}`, { cookie: cb.headers.get('set-cookie').split(';')[0] });
+  const back = new URL(done.headers.get('location'));
+  assert.equal(back.protocol, 'synapse:');
+  assert.equal(back.searchParams.get('state'), state);
+  const ex = await call('/v1/auth/app-code', { body: { code: back.searchParams.get('code'), client: 'phone', label: 'iPhone' } });
+  assert.equal(ex.status, 200);
+  assert.match(ex.json.token, /^syn_/);
+  assert.ok(ex.json.user.providers.includes('github'), 'signed in as the account the GitHub login belongs to');
+  assert.equal((await call('/v1/auth/app-code', { body: { code: back.searchParams.get('code') } })).status, 401, 'a code works once');
+  assert.match((await call(`/app/done?state=${state}`)).headers.get('location'), /^\/login\?next=/, 'signed out: sign in first');
+  assert.equal((await call('/app/done?state=x')).status, 400);
 });

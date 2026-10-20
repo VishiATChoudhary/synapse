@@ -121,9 +121,6 @@ const MIGRATIONS = [
      at INTEGER NOT NULL,
      PRIMARY KEY (user_id, other_user)
    );`,
-  // the waitlist: accounts made before it stay active
-  `ALTER TABLE users ADD COLUMN access TEXT NOT NULL DEFAULT 'active';
-   ALTER TABLE users ADD COLUMN approved_at INTEGER;`,
 ];
 
 db.exec('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)');
@@ -136,6 +133,27 @@ for (let i = version; i < MIGRATIONS.length; i++) {
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); throw e; }
 }
+
+// Columns added by branches that shipped at the same migration number (the phone app, the waitlist):
+// a deploy of either may have recorded the schema version without running the other, so add what is missing
+const has = (table, col) => db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col);
+for (const [table, col, def] of [
+  ['machines', 'kind', 'TEXT'], ['machines', 'name', 'TEXT'], ['machines', 'public_key', 'TEXT'],
+  // the waitlist: accounts made before it stay active
+  ['users', 'access', "TEXT NOT NULL DEFAULT 'active'"], ['users', 'approved_at', 'INTEGER'],
+]) if (!has(table, col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+db.exec(`CREATE TABLE IF NOT EXISTS trust_dismissed (
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     other_user TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     at INTEGER NOT NULL,
+     PRIMARY KEY (user_id, other_user)
+   );
+   CREATE TABLE IF NOT EXISTS trust_notified (
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     other_user TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     at INTEGER NOT NULL,
+     PRIMARY KEY (user_id, other_user)
+   );`);
 
 const cache = new Map();
 const stmt = (sql) => { let s = cache.get(sql); if (!s) { s = db.prepare(sql); cache.set(sql, s); } return s; };

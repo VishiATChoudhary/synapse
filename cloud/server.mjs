@@ -60,6 +60,11 @@ export function verify(token, kind) {
 }
 const pairOf = (a, b) => sign({ k: 'pair', m: [a, b].sort() });
 const CLOUD_ONLY = new Set(['request', 'revoked', 'trusted']);
+const DEVICE_KINDS = new Set(['computer', 'phone']);
+function sameAccount(a, b) {
+  const ma = get('SELECT user_id, kind FROM machines WHERE id = ?', a), mb = get('SELECT user_id, kind FROM machines WHERE id = ?', b);
+  return !!(ma?.user_id && ma.kind && mb?.kind && ma.user_id === mb.user_id && a !== b);
+}
 const pairCovers =(token, a, b) => { const p = verify(token, 'pair'); return !!p && p.m.includes(a) && p.m.includes(b) && a !== b; };
 
 // passwords: scrypt with a per-user salt
@@ -383,7 +388,7 @@ const safeNext = (n, fallback = '/welcome') => (typeof n === 'string' && /^\/(?!
 // ---------------------------------------------------------------- API routes
 
 function signedIn(res, req, user, b, status = 200) {
-  const client = ['app', 'cli'].includes(b.client) ? b.client : 'web';
+  const client = ['app', 'cli', 'phone'].includes(b.client) ? b.client : 'web';
   const token = createSession(user.id, client, b.label || (client === 'web' ? clean(req.headers['user-agent'], 80) : null), ipOf(req));
   const headers = client === 'web' ? { 'set-cookie': cookie('syn_session', token, WEB_SESSION) } : {};
   return json(res, status, { token, user: meUser(user) }, headers);
@@ -411,6 +416,22 @@ const routes = {
       fail(401, 'Wrong email or password.');
     }
     return signedIn(res, req, user, b);
+  },
+  // Sign in with Apple from the phone app: Apple's identity token in, a session out
+  'POST /v1/auth/apple': async (req, res, b) => {
+    limitIp('apple', req, 30, 15 * 60_000);
+    let p;
+    try { p = await oauth.verifyApple(b.identityToken); }
+    catch (e) { fail(401, `Sign in with Apple did not work: ${e.message}.`); }
+    const user = userForIdentity('apple', p, clean(b.name, 60));
+    return signedIn(res, req, user, b);
+  },
+  // the phone app trades the one-time code from /app/done for a session
+  'POST /v1/auth/app-code': async (req, res, b) => {
+    limitIp('app-code', req, 30, 15 * 60_000);
+    const row = useEmailToken(b.code, 'app');
+    if (!row) fail(401, 'That sign-in expired. Try again.');
+    return signedIn(res, req, get('SELECT * FROM users WHERE id = ?', row.user_id), b);
   },
   'POST /v1/auth/logout': async (req, res) => {
     const a = auth(req);
@@ -697,7 +718,27 @@ const routes = {
     machineId ||= crypto.randomBytes(6).toString('hex');
     run('INSERT INTO machines (id, user_id, created_at, last_seen) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET user_id = COALESCE(excluded.user_id, machines.user_id), last_seen = excluded.last_seen',
       machineId, a?.user.id || null, now(), now());
+    // a device of the account (Synapse on a computer, or the phone app): what it is and its public key
+    if (a && DEVICE_KINDS.has(b.kind)) {
+      if (!/^[A-Za-z0-9+/]{43}=$/.test(String(b.publicKey || ''))) fail(400, 'publicKey must be a base64 X25519 key');
+      run('UPDATE machines SET kind = ?, name = ?, public_key = ? WHERE id = ?', b.kind, clean(b.name, 40) || b.kind, b.publicKey, machineId);
+    }
     return json(res, 200, { machineId, token: sign({ k: 'machine', m: machineId }), user: a ? meUser(a.user) : null });
+  },
+  // the account's computers and phones, for the phone app to find its computer and Synapse to know its phones
+  'GET /v1/machines': async (req, res) => {
+    const { user } = must(req);
+    return json(res, 200, { machines: all('SELECT * FROM machines WHERE user_id = ? AND kind IS NOT NULL ORDER BY last_seen DESC', user.id)
+      .map((m) => ({ id: m.id, kind: m.kind, name: m.name, publicKey: m.public_key, lastSeen: m.last_seen })) });
+  },
+  // signing a phone out, or removing it in Synapse: it can no longer reach the account's computers
+  'DELETE /v1/machines/:id': async (req, res, b, params) => {
+    const { user } = must(req);
+    const m = get('SELECT * FROM machines WHERE id = ? AND user_id = ? AND kind IS NOT NULL', params.id, user.id);
+    if (!m) fail(404, 'No such device on your account.');
+    run('DELETE FROM machines WHERE id = ?', m.id);
+    run('DELETE FROM mailbox WHERE machine_id = ?', m.id);
+    return json(res, 200, { ok: true });
   },
 };
 
@@ -712,8 +753,11 @@ const machineRoutes = {
     return { peer: { machineId: inv.m, name: inv.name }, pair };
   },
   'POST /v1/send': (me, b) => {
-    if (!pairCovers(b.pair, me, b.to)) fail(403, 'not paired with that machine');
-    if (!pairStillTrusted(me, b.to)) fail(403, 'you no longer trust each other');
+    // the same account's devices (a phone and its computer) need no invite: the account pairs them
+    if (!sameAccount(me, b.to)) {
+      if (!pairCovers(b.pair, me, b.to)) fail(403, 'not paired with that machine');
+      if (!pairStillTrusted(me, b.to)) fail(403, 'you no longer trust each other');
+    }
     const items = Array.isArray(b.items) ? b.items : [];
     // request answers and revocations only ever come from the cloud itself
     for (const it of items) if (it && typeof it === 'object' && !CLOUD_ONLY.has(it.type)) deliver(b.to, { ...it, from: me, pair: b.pair });
@@ -737,6 +781,22 @@ async function oauthStart(req, res, provider, url) {
   return redirect(res, oauth.authorizeUrl(provider, { state, challenge, redirect: `${PUBLIC_URL}/auth/${provider}/callback` }));
 }
 
+// the account behind a provider identity: the one it is linked to, else the one with the same verified email
+// (the provider vouched for it), else a new one; the identity is linked to it either way
+function userForIdentity(provider, p, name) {
+  const email = p.emailVerified ? normEmail(p.email) : null;
+  const known = get('SELECT * FROM identities WHERE provider = ? AND provider_id = ?', provider, p.id);
+  let user;
+  if (known) user = get('SELECT * FROM users WHERE id = ?', known.user_id);
+  else if (email && (user = get('SELECT * FROM users WHERE email = ?', email))) {
+    // same verified email: same person. The provider vouched for it, so mark it verified
+    if (!user.email_verified) { run('UPDATE users SET email_verified = 1 WHERE id = ?', user.id); claimInvites(user.id, email); }
+  } else user = createUser({ email, name: name || p.name, emailVerified: !!email, avatar: p.avatar, handle: p.username });
+  if (!known) run('INSERT INTO identities (provider, provider_id, user_id, email, username, created_at) VALUES (?, ?, ?, ?, ?, ?)', provider, p.id, user.id, email, p.username || null, now());
+  if (!user.avatar && p.avatar) run('UPDATE users SET avatar = ? WHERE id = ?', p.avatar, user.id);
+  return user;
+}
+
 async function oauthCallback(req, res, provider, url) {
   const st = get('SELECT * FROM oauth_states WHERE state = ? AND provider = ?', String(url.searchParams.get('state') || ''), provider);
   if (st) run('DELETE FROM oauth_states WHERE state = ?', st.state);
@@ -747,23 +807,16 @@ async function oauthCallback(req, res, provider, url) {
   try { p = await oauth.exchange(provider, { code: url.searchParams.get('code'), verifier: st.verifier, redirect: `${PUBLIC_URL}/auth/${provider}/callback` }); }
   catch (e) { console.error(e.message); return back(`${pages.providerLabel(provider)} sign-in failed. Try again.`); }
 
-  const email = p.emailVerified ? normEmail(p.email) : null;
-  const known = get('SELECT * FROM identities WHERE provider = ? AND provider_id = ?', provider, p.id);
   let user;
   if (st.link_user) {
     // linking to the signed-in account
+    const email = p.emailVerified ? normEmail(p.email) : null;
+    const known = get('SELECT * FROM identities WHERE provider = ? AND provider_id = ?', provider, p.id);
     if (known && known.user_id !== st.link_user) return redirect(res, `/settings?error=${encodeURIComponent(`That ${pages.providerLabel(provider)} account belongs to another Synapse account.`)}`);
     user = get('SELECT * FROM users WHERE id = ?', st.link_user);
-  } else if (known) {
-    user = get('SELECT * FROM users WHERE id = ?', known.user_id);
-  } else if (email && (user = get('SELECT * FROM users WHERE email = ?', email))) {
-    // same verified email: same person. The provider vouched for it, so mark it verified
-    if (!user.email_verified) { run('UPDATE users SET email_verified = 1 WHERE id = ?', user.id); claimInvites(user.id, email); }
-  } else {
-    user = createUser({ email, name: p.name, emailVerified: !!email, avatar: p.avatar, handle: p.username });
-  }
-  if (!known) run('INSERT INTO identities (provider, provider_id, user_id, email, username, created_at) VALUES (?, ?, ?, ?, ?, ?)', provider, p.id, user.id, email, p.username || null, now());
-  if (!user.avatar && p.avatar) run('UPDATE users SET avatar = ? WHERE id = ?', p.avatar, user.id);
+    if (!known) run('INSERT INTO identities (provider, provider_id, user_id, email, username, created_at) VALUES (?, ?, ?, ?, ?, ?)', provider, p.id, user.id, email, p.username || null, now());
+    if (!user.avatar && p.avatar) run('UPDATE users SET avatar = ? WHERE id = ?', p.avatar, user.id);
+  } else user = userForIdentity(provider, p);
   const token = createSession(user.id, 'web', clean(req.headers['user-agent'], 80), ipOf(req));
   return redirect(res, st.link_user ? '/settings?linked=1' : st.next || '/welcome', { 'set-cookie': cookie('syn_session', token, WEB_SESSION) });
 }
@@ -791,6 +844,14 @@ function page(req, res, url) {
       }
       const d = get('SELECT * FROM devices WHERE user_code = ?', String(ctx.q.code || '').toUpperCase());
       return html(res, 200, pages.device({ ...ctx, device: d && d.expires_at > now() && d.status === 'pending' ? { code: d.user_code, label: d.label } : null }));
+    }
+    // the phone app's GitHub, Google or X sign-in ends here (in its browser sheet): hand the app a one-time
+    // code through its own redirect, which only the app that opened the sheet receives
+    case '/app/done': {
+      const state = String(ctx.q.state || '');
+      if (!/^[\w-]{16,64}$/.test(state)) return html(res, 400, pages.message({ title: 'Hold on', body: 'This sign-in link is not complete. Start again in the app.', link: '/', cta: 'Home' }));
+      if (!ctx.user) return needUser(`/app/done?state=${state}`);
+      return redirect(res, `synapse://signed-in?code=${emailToken(a.user.id, 'app', 2 * 60_000, null)}&state=${state}`);
     }
     case '/welcome': return needUser('/welcome') || html(res, 200, pages.welcome({ ...ctx,
       hasApp: !!get("SELECT 1 FROM sessions WHERE user_id = ? AND kind IN ('app', 'cli')", a.user.id),
