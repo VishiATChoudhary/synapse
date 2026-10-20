@@ -1,6 +1,6 @@
 {
   "name": "synapse",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "See every coding agent on your machine as a live node, link them, and let them share context and message each other",
   "type": "module",
   "license": "MIT",
