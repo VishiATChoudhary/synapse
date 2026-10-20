@@ -1,0 +1,298 @@
+<!doctype html>
+<!-- First-launch intro over the user's own desktop (the window is transparent). A faint field of neurons fades in,
+     four of them fire on the four ticks of the sound, signals race inward along the connections and all arrive in
+     the middle on the strike, where the name gathers out of a blur; then the signal ripples back out to the edge and
+     everything fades. The network is drawn once onto its own canvas and only faded by the compositor; per frame only
+     the small signal sprites are redrawn. The sound is synthesized with Web Audio, so no audio file ships.
+     ?t=<ms> freezes the scene at that moment (screenshots). Plays once; main.mjs closes the window if it never ends. -->
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+<style>
+  @font-face { font-family: 'Big Shoulders Display'; src: url(../../public/fonts/big-shoulders-display.woff2) format('woff2'); font-weight: 200 500; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; cursor: default; }
+  #scene, #scene > * { position: fixed; inset: 0; pointer-events: none; }
+  #scene > * { will-change: transform, opacity; }
+  canvas { width: 100vw; height: 100vh; }
+
+  /* the desktop dims a little, most at the edges, so the light reads on any wallpaper */
+  #hush { opacity: 0; background: radial-gradient(ellipse 80% 75% at 50% 48%, rgba(14,16,40,.34) 0%, rgba(14,16,40,.4) 45%, rgba(10,12,32,.55) 80%, rgba(8,9,26,.7) 100%); }
+  #net, #hot, #bloom, #sig { opacity: 0; }
+
+  /* the name, in the app's display face */
+  #name { display: flex; align-items: center; justify-content: center;
+    font: 300 15vmin/1 'Big Shoulders Display', 'Arial Narrow', sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #fff8ee;
+    text-shadow: 0 0 .22em rgba(255,170,110,.55), 0 .02em .3em rgba(8,9,26,.4); }
+  #name span { display: inline-block; opacity: 0; will-change: transform, opacity, filter; }
+</style>
+</head>
+<body>
+<div id="scene">
+  <div id="hush"></div>
+  <canvas id="net"></canvas>
+  <canvas id="hot"></canvas>
+  <div id="bloom"></div>
+  <canvas id="sig"></canvas>
+  <div id="name"></div>
+</div>
+<script>
+const END = 3500; // ms; the sound's strike lands at HIT
+const HIT = 1180;
+const TICKS = [250, 410, 570, 730];
+const $ = (id) => document.getElementById(id);
+const W = innerWidth, H = innerHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
+const CX = W / 2, CY = H / 2;
+const M = Math.min(W, H);
+const expoOut = 'cubic-bezier(.16,1,.3,1)', sine = 'cubic-bezier(.37,0,.63,1)';
+
+// ---------------------------------------------------------------- the network (seeded, so every run looks the same)
+let seed = 11;
+const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+
+// neurons spread over the screen with a minimum gap, kept out of the name's space; hubs ring the name
+const nodes = [];
+const gap = M * 0.085;
+const clearOfName = (x, y) => ((x - CX) / (W * 0.27)) ** 2 + ((y - CY) / (H * 0.19)) ** 2 > 1;
+for (let tries = 0; tries < 4000 && nodes.length < 90; tries++) {
+  const x = -W * 0.03 + rand() * W * 1.06, y = -H * 0.03 + rand() * H * 1.06;
+  if (clearOfName(x, y) && nodes.every((n) => Math.hypot(n.x - x, n.y - y) > gap)) nodes.push({ x, y, r: 1.2 + rand() * 1.6 });
+}
+const HUBS = 8;
+for (let i = 0; i < HUBS; i++) {
+  const a = (i / HUBS) * Math.PI * 2 + 0.3;
+  nodes.push({ x: CX + Math.cos(a) * W * 0.24, y: CY + Math.sin(a) * H * 0.2, r: 2.2, hub: true });
+}
+const centre = nodes.push({ x: CX, y: CY, r: 0, centre: true }) - 1;
+
+// each neuron reaches its nearest few; hubs also reach the centre
+const edges = new Map(); // "a-b" -> curve
+const adj = nodes.map(() => []);
+function link(a, b) {
+  const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+  if (edges.has(key)) return;
+  const P = nodes[a], Q = nodes[b], dx = Q.x - P.x, dy = Q.y - P.y, len = Math.hypot(dx, dy);
+  const bend = (rand() - 0.5) * 0.35 * len; // a gentle curve, never straight, never loopy
+  const c = { x: (P.x + Q.x) / 2 - (dy / len) * bend, y: (P.y + Q.y) / 2 + (dx / len) * bend };
+  const pts = [];
+  for (let i = 0; i <= 20; i++) { const t = i / 20, u = 1 - t; pts.push([u * u * P.x + 2 * u * t * c.x + t * t * Q.x, u * u * P.y + 2 * u * t * c.y + t * t * Q.y]); }
+  edges.set(key, { a, b, c, pts });
+  adj[a].push(b); adj[b].push(a);
+}
+nodes.forEach((n, i) => {
+  if (n.centre) return;
+  const near = nodes.map((m, j) => [j, Math.hypot(m.x - n.x, m.y - n.y)]).filter(([j]) => j !== i && !nodes[j].centre).sort((p, q) => p[1] - q[1]);
+  near.slice(0, n.hub ? 3 : 2 + (rand() < 0.4 ? 1 : 0)).forEach(([j]) => link(i, j));
+  if (n.hub) link(i, centre);
+});
+
+// shortest routes to the centre (Dijkstra), so every signal has a path in
+const dist = nodes.map(() => Infinity), via = nodes.map(() => -1);
+dist[centre] = 0;
+for (const done = new Set(); done.size < nodes.length;) {
+  let u = -1;
+  nodes.forEach((_, i) => { if (!done.has(i) && (u < 0 || dist[i] < dist[u])) u = i; });
+  if (dist[u] === Infinity) break;
+  done.add(u);
+  for (const v of adj[u]) { const d = dist[u] + Math.hypot(nodes[u].x - nodes[v].x, nodes[u].y - nodes[v].y); if (d < dist[v]) { dist[v] = d; via[v] = u; } }
+}
+const edgePts = (a, b) => { const e = edges.get(a < b ? `${a}-${b}` : `${b}-${a}`); return e.a === a ? e.pts : [...e.pts].reverse(); };
+function route(from) { // polyline from a neuron to the centre, with cumulative lengths
+  const pts = [];
+  for (let u = from; via[u] >= 0; u = via[u]) pts.push(...edgePts(u, via[u]).slice(pts.length ? 1 : 0));
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  return { pts, cum, len: cum.at(-1) };
+}
+function at(r, d) { // point at distance d along a route
+  d = Math.max(0, Math.min(r.len, d));
+  let i = 1; while (i < r.cum.length - 1 && r.cum[i] < d) i++;
+  const f = (d - r.cum[i - 1]) / (r.cum[i] - r.cum[i - 1] || 1), p = r.pts[i - 1], q = r.pts[i];
+  return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f];
+}
+
+// ---------------------------------------------------------------- static layers: drawn once, faded by the compositor
+function canvas(id) { const c = $(id); c.width = W * dpr; c.height = H * dpr; const x = c.getContext('2d'); x.scale(dpr, dpr); return x; }
+function drawNet(ctx, line, lineA, dot, dotA) {
+  ctx.lineWidth = 1; ctx.lineCap = 'round';
+  for (const e of edges.values()) {
+    const P = nodes[e.a], Q = nodes[e.b];
+    if (P.centre || Q.centre) continue; // the last stretch into the name stays invisible; only signals cross it
+    const g = ctx.createLinearGradient(P.x, P.y, Q.x, Q.y); // fades at both ends, so no line ever ends hard
+    g.addColorStop(0, `rgba(${line},0)`); g.addColorStop(0.2, `rgba(${line},${lineA})`); g.addColorStop(0.8, `rgba(${line},${lineA})`); g.addColorStop(1, `rgba(${line},0)`);
+    ctx.strokeStyle = g;
+    ctx.beginPath(); ctx.moveTo(P.x, P.y); ctx.quadraticCurveTo(e.c.x, e.c.y, Q.x, Q.y); ctx.stroke();
+  }
+  for (const n of nodes) {
+    if (n.centre) continue;
+    const g = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, n.r * 4);
+    g.addColorStop(0, `rgba(${dot},${dotA})`); g.addColorStop(0.25, `rgba(${dot},${dotA * 0.6})`); g.addColorStop(1, `rgba(${dot},0)`);
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(n.x, n.y, n.r * 4, 0, Math.PI * 2); ctx.fill();
+  }
+}
+drawNet(canvas('net'), '255,244,228', 0.24, '255,244,228', 0.8);
+drawNet(canvas('hot'), '255,170,110', 0.5, '255,214,170', 1);
+
+// the soft bloom in the middle on the strike
+const FALLOFF = [[1, 0], [0.94, 8], [0.8, 18], [0.6, 30], [0.4, 42], [0.23, 55], [0.11, 68], [0.04, 82], [0, 100]];
+const light = (rgb) => `radial-gradient(closest-side, ${FALLOFF.map(([a, p]) => `rgba(${rgb},${a}) ${p}%`).join(', ')})`;
+Object.assign($('bloom').style, { inset: 'auto', left: `${CX - M * 0.45}px`, top: `${CY - M * 0.32}px`, width: `${M * 0.9}px`, height: `${M * 0.64}px`, background: light('255,170,110') });
+
+// ---------------------------------------------------------------- signals
+// a glow sprite rendered once; every signal and every firing neuron is a scaled copy of it
+const SPRITE = (() => {
+  const s = document.createElement('canvas'); s.width = s.height = 64;
+  const x = s.getContext('2d'), g = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(255,252,244,1)'); g.addColorStop(0.12, 'rgba(255,236,205,.9)'); g.addColorStop(0.3, 'rgba(255,170,110,.35)'); g.addColorStop(0.6, 'rgba(255,120,80,.08)'); g.addColorStop(1, 'rgba(255,120,80,0)');
+  x.fillStyle = g; x.fillRect(0, 0, 64, 64); return s;
+})();
+
+const reachable = nodes.map((_, i) => i).filter((i) => !nodes[i].centre && dist[i] < Infinity);
+const far = [...reachable].sort((a, b) => dist[b] - dist[a]);
+// four neurons near the corners fire on the ticks; a wider spread joins on the whoosh
+const corners = [[0, 0], [W, 0], [0, H], [W, H]].map(([x, y]) => reachable.reduce((b, i) => (Math.hypot(nodes[i].x - x, nodes[i].y - y) < Math.hypot(nodes[b].x - x, nodes[b].y - y) ? i : b)));
+const firing = [...corners.map((n, k) => ({ n, start: TICKS[[0, 3, 1, 2][k]] })),
+  ...far.filter((i) => !corners.includes(i)).filter((_, k) => k % 2 === 0).slice(0, 18).map((n) => ({ n, start: 760 + rand() * 200 }))];
+const inbound = firing.map((f) => ({ ...f, r: route(f.n) }));
+const outbound = far.filter((_, k) => k % 3 === 1).slice(0, 22).map((n) => ({ n, r: route(n), start: HIT + 60 + rand() * 180, dur: 950 + rand() * 450 }));
+
+const sig = canvas('sig');
+const clamp = (v) => Math.max(0, Math.min(1, v));
+const sprite = (x, y, size, alpha) => { if (alpha <= 0) return; sig.globalAlpha = Math.min(1, alpha); sig.drawImage(SPRITE, x - size / 2, y - size / 2, size, size); };
+const TAIL = 70; // px
+function comet(r, d, dir, size, alpha) { // a glowing head with a smooth tapered tail along the route behind it
+  const pts = [];
+  for (let k = 0; k <= TAIL; k += 3) pts.push(at(r, d - dir * k));
+  const [hx, hy] = pts[0], [tx, ty] = pts.at(-1);
+  const g = sig.createLinearGradient(hx, hy, tx, ty);
+  g.addColorStop(0, `rgba(255,236,205,${alpha})`); g.addColorStop(0.35, `rgba(255,170,110,${alpha * 0.45})`); g.addColorStop(1, 'rgba(255,140,90,0)');
+  sig.globalAlpha = 1; sig.strokeStyle = g; sig.lineWidth = size * 0.11; sig.lineCap = 'round';
+  sig.beginPath(); sig.moveTo(hx, hy); for (const [x, y] of pts) sig.lineTo(x, y); sig.stroke();
+  sprite(hx, hy, size, alpha);
+}
+function render(t) {
+  sig.clearRect(0, 0, W, H);
+  sig.globalCompositeOperation = 'lighter';
+  for (const f of inbound) {
+    const p = clamp((t - f.start) / (HIT - f.start));
+    const flash = clamp(1 - (t - f.start) / 380); // the neuron fires as the signal leaves
+    if (t >= f.start) sprite(nodes[f.n].x, nodes[f.n].y, 26 + 40 * (1 - flash), flash * 0.9);
+    if (p > 0 && p < 1) comet(f.r, p * p * p * f.r.len, 1, 18, 0.95); // accelerates all the way in
+  }
+  for (const o of outbound) {
+    const p = clamp((t - o.start) / o.dur);
+    if (p <= 0) continue;
+    const e = 1 - Math.pow(1 - p, 3);
+    if (p < 1) comet(o.r, (1 - e) * o.r.len, -1, 14, 0.8 * (1 - p * 0.6));
+    const land = clamp((t - o.start - o.dur) / 500); // the far neuron lights when the signal reaches it
+    if (p >= 1 && land < 1) sprite(nodes[o.n].x, nodes[o.n].y, 22 + 26 * land, 0.75 * (1 - land));
+  }
+  sig.globalAlpha = 1;
+}
+
+// ---------------------------------------------------------------- the name
+const letters = [...'Synapse'].map((ch) => { const sp = document.createElement('span'); sp.textContent = ch; $('name').append(sp); return sp; });
+
+// ---------------------------------------------------------------- timeline
+const anims = [];
+const A = (el, frames, delay, duration, easing = 'linear', fill = 'both') => anims.push(el.animate(frames, { delay, duration, easing, fill }));
+function timeline() {
+  A($('hush'), [{ opacity: 0 }, { opacity: 1, offset: 0.2 }, { opacity: 0.85, offset: 0.7 }, { opacity: 0 }], 0, END, sine);
+  A($('net'), [{ opacity: 0, transform: 'scale(1.04)' }, { opacity: 1, transform: 'scale(1.01)', offset: 0.3 }, { opacity: 1, transform: 'scale(1)', offset: 0.78 }, { opacity: 0, transform: 'scale(.995)' }], 0, END, sine);
+  // on the strike the whole network lights for a moment, then cools back
+  A($('hot'), [{ opacity: 0 }, { opacity: 0.85, offset: 0.12 }, { opacity: 0 }], HIT - 20, 1500, expoOut);
+  A($('bloom'), [{ opacity: 0, transform: 'scale(.3)' }, { opacity: 0.75, transform: 'scale(1)', offset: 0.18 }, { opacity: 0, transform: 'scale(1.5)' }], HIT - 30, 1600, expoOut);
+  const mid = (letters.length - 1) / 2;
+  letters.forEach((sp, i) => {
+    const off = i - mid, order = Math.abs(off);
+    A(sp, [
+      { opacity: 0, transform: `translate(${off * 0.2}em, .12em) scale(1.06)`, filter: 'blur(.12em)' },
+      { opacity: 1, transform: 'translate(0, 0) scale(1)', filter: 'blur(0)' },
+    ], HIT + 30 + order * 60, 1000, expoOut);
+    A(sp, [ // forwards only: a backward fill would show the letters before they gather
+      { opacity: 1, transform: 'translateY(0)', filter: 'blur(0)' },
+      { opacity: 0, transform: 'translateY(-.1em)', filter: 'blur(.08em)' },
+    ], END - 640 + order * 30, 520, 'cubic-bezier(.5,0,.75,0)', 'forwards');
+  });
+  A($('sig'), [{ opacity: 1 }, { opacity: 0 }], END - 500, 500, sine);
+}
+
+// ---------------------------------------------------------------- sound
+// A low swell under the hush, a soft tick as each corner neuron fires, a rising whoosh as the signals race in, then
+// the strike as they arrive: a sub thump, a bright bell and a short shimmer of echoing notes.
+function sound() {
+  const ac = new AudioContext();
+  const t0 = ac.currentTime + 0.05;
+  const master = ac.createGain(); master.gain.value = 0.32; master.connect(ac.destination);
+  const echo = ac.createDelay(); echo.delayTime.value = 0.19;
+  const fb = ac.createGain(); fb.gain.value = 0.38;
+  const wet = ac.createGain(); wet.gain.value = 0.5;
+  echo.connect(fb).connect(echo); echo.connect(wet).connect(master);
+
+  const tone = (freq, at, len, peak, type = 'sine', toEcho = false) => {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0, t0 + at);
+    g.gain.linearRampToValueAtTime(peak, t0 + at + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + at + len);
+    o.connect(g).connect(master); if (toEcho) g.connect(echo);
+    o.start(t0 + at); o.stop(t0 + at + len + 0.05);
+  };
+
+  // swell
+  for (const f of [110, 164.8]) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.frequency.value = f;
+    g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.09, t0 + 1.1); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 2.9);
+    o.connect(g).connect(master); o.start(t0); o.stop(t0 + 3);
+  }
+  // a soft tick as each corner neuron fires
+  for (const at of TICKS) tone(1760, at / 1000, 0.06, 0.05, 'triangle');
+  // whoosh: filtered noise rising into the strike
+  const noise = ac.createBuffer(1, ac.sampleRate * 1.2, ac.sampleRate);
+  const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const src = ac.createBufferSource(); src.buffer = noise;
+  const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 3;
+  bp.frequency.setValueAtTime(300, t0 + 0.85); bp.frequency.exponentialRampToValueAtTime(4000, t0 + 1.18);
+  const ng = ac.createGain(); ng.gain.setValueAtTime(0, t0 + 0.85); ng.gain.linearRampToValueAtTime(0.18, t0 + 1.15); ng.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.35);
+  src.connect(bp).connect(ng).connect(master); src.start(t0 + 0.85); src.stop(t0 + 1.4);
+  // strike
+  const hit = HIT / 1000;
+  const sub = ac.createOscillator(), sg = ac.createGain();
+  sub.frequency.setValueAtTime(140, t0 + hit); sub.frequency.exponentialRampToValueAtTime(45, t0 + hit + 0.35);
+  sg.gain.setValueAtTime(0.6, t0 + hit); sg.gain.exponentialRampToValueAtTime(0.0001, t0 + hit + 0.5);
+  sub.connect(sg).connect(master); sub.start(t0 + hit); sub.stop(t0 + hit + 0.55);
+  tone(880, hit, 1.6, 0.22, 'sine', true);
+  tone(1318.5, hit, 1.2, 0.1, 'sine', true);
+  tone(2637, hit, 0.5, 0.04, 'sine', true);
+  // shimmer as the signal ripples back out
+  [1318.5, 1661.2, 1975.5, 2637].forEach((f, i) => tone(f, hit + 0.12 + i * 0.07, 0.6, 0.05, 'sine', true));
+  setTimeout(() => ac.close(), END + 1500);
+}
+
+// ---------------------------------------------------------------- run
+const freeze = new URLSearchParams(location.search).get('t');
+// Warm up first: put every layer on screen at near-zero opacity and draw one invisible signal, so the GPU uploads
+// and canvas setup happen before the clock starts instead of as a hitch when the first neuron fires.
+const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
+async function warm() {
+  for (const id of ['net', 'hot', 'bloom', 'sig']) $(id).style.opacity = '0.002';
+  letters.forEach((sp) => { sp.style.opacity = '0.002'; });
+  sig.globalCompositeOperation = 'lighter';
+  comet(inbound[0].r, inbound[0].r.len / 2, 1, 18, 0.01);
+  await nextFrame(); await nextFrame();
+  sig.clearRect(0, 0, W, H);
+  for (const id of ['net', 'hot', 'bloom', 'sig']) $(id).style.opacity = '';
+  letters.forEach((sp) => { sp.style.opacity = ''; });
+}
+Promise.all([document.fonts.load("300 40px 'Big Shoulders Display'").catch(() => {}), warm()]).then(() => {
+  timeline();
+  if (freeze !== null) { const t = Number(freeze); for (const a of anims) { a.pause(); a.currentTime = t; } render(t); return; }
+  try { sound(); } catch {}
+  const start = window.__t0 = performance.now();
+  const frame = (now) => { const t = now - start; render(t); if (t < END) requestAnimationFrame(frame); else window.close(); };
+  requestAnimationFrame(frame);
+});
+</script>
+</body>
+</html>
