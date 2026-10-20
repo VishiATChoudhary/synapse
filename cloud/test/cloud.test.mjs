@@ -645,6 +645,14 @@ test('the phone app signs in with GitHub through its browser sheet: a one-time c
   assert.match(ex.json.token, /^syn_/);
   assert.ok(ex.json.user.providers.includes('github'), 'signed in as the account the GitHub login belongs to');
   assert.equal((await call('/v1/auth/app-code', { body: { code: back.searchParams.get('code') } })).status, 401, 'a code works once');
+  // the app can also collect the sign-in by its state, once
+  const cookie = cb.headers.get('set-cookie').split(';')[0];
+  await call(`/app/done?state=${state}`, { cookie });
+  const byState = await call('/v1/auth/app-code', { body: { state, client: 'phone', label: 'iPhone' } });
+  assert.equal(byState.status, 200);
+  assert.equal(byState.json.user.id, ex.json.user.id);
+  assert.equal((await call('/v1/auth/app-code', { body: { state } })).status, 401, 'a state works once');
+  assert.equal((await call('/v1/auth/app-code', { body: { state: 'never-signed-in-state-123' } })).status, 401);
   assert.match((await call(`/app/done?state=${state}`)).headers.get('location'), /^\/login\?next=/, 'signed out: sign in first');
   assert.equal((await call('/app/done?state=x')).status, 400);
 });

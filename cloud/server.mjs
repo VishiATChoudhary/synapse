@@ -426,11 +426,12 @@ const routes = {
     const user = userForIdentity('apple', p, clean(b.name, 60));
     return signedIn(res, req, user, b);
   },
-  // the phone app trades the one-time code from /app/done for a session
+  // the phone app trades the one-time code from /app/done for a session (or, if the return link got lost,
+  // the state it opened the sign-in with)
   'POST /v1/auth/app-code': async (req, res, b) => {
     limitIp('app-code', req, 30, 15 * 60_000);
-    const row = useEmailToken(b.code, 'app');
-    console.log(`app-code ${row ? 'ok' : 'refused'}`);
+    const row = b.state ? (/^[\w-]{16,64}$/.test(String(b.state)) ? useEmailToken(`state:${b.state}`, 'app-state') : null) : useEmailToken(b.code, 'app');
+    console.log(`app-code ${b.state ? 'by state' : 'by code'} ${row ? 'ok' : 'refused'}`);
     if (!row) fail(401, 'That sign-in expired. Try again.');
     return signedIn(res, req, get('SELECT * FROM users WHERE id = ?', row.user_id), b);
   },
@@ -859,6 +860,8 @@ function page(req, res, url) {
       if (!/^[\w-]{16,64}$/.test(state)) return html(res, 400, pages.message({ title: 'Hold on', body: 'This sign-in link is not complete. Start again in the app.', link: '/', cta: 'Home' }));
       console.log(`app/done state=${state.slice(0, 6)}… signed-in=${!!ctx.user} ua=${clean(req.headers['user-agent'], 60)}`);
       if (!ctx.user) return needUser(`/app/done?state=${state}`);
+      // also kept under the app's own state, so the app can collect it even if the return link gets lost
+      run('INSERT OR REPLACE INTO email_tokens (token_hash, user_id, purpose, email, expires_at) VALUES (?, ?, ?, ?, ?)', sha(`state:${state}`), a.user.id, 'app-state', null, now() + 2 * 60_000);
       return redirect(res, `synapse://signed-in?code=${emailToken(a.user.id, 'app', 2 * 60_000, null)}&state=${state}`);
     }
     case '/welcome': return needUser('/welcome') || html(res, 200, pages.welcome({ ...ctx,
