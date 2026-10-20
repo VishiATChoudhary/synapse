@@ -44,8 +44,8 @@ const saved = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'ut
 
   // settings toggle drives the stub
   await js(`document.querySelector('#settings').click()`);
-  await until(() => js(`[...document.querySelectorAll('#modal .opt')].some((r) => /open at login/.test(r.textContent))`), 'login row');
-  const row = `[...document.querySelectorAll('#modal .opt')].find((r) => /open at login/.test(r.textContent)).querySelector('input')`;
+  await until(() => js(`[...document.querySelectorAll('#modal .opt')].some((r) => /Open Synapse at login/.test(r.textContent))`), 'login row');
+  const row = `[...document.querySelectorAll('#modal .opt')].find((r) => /Open Synapse at login/.test(r.textContent)).querySelector('input')`;
   assert.equal(await js(`${row}.checked`), false, 'default off');
   await js(`${row}.click()`);
   await until(() => calls().length === 1, 'enable call');

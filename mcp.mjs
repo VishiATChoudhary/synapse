@@ -17,8 +17,8 @@ The user links agents on the Synapse canvas, or you can link yourself with synap
   synapse_request asks one of them to share an agent with you (they accept or deny in their Synapse app),
   synapse_requests shows the answer. Once accepted, read it with synapse_read name@owner.
 - If their agent is shared for talk, synapse_ask name@owner puts a question to it and waits for the answer;
-  later answers arrive in synapse_inbox. synapse_end closes the conversation. If it is shared for reading only,
-  synapse_ask asks its owner to allow questions (status "requested", not an error: do not retry); a note arrives in synapse_inbox once they allow it.`;
+  later answers arrive in synapse_inbox. synapse_end closes the conversation. If it is shared for reading only
+  (through a request), synapse_ask asks its owner to allow questions (status "requested", not an error: do not retry); a note arrives in synapse_inbox once they allow it.`;
 
 const agentArg = { type: 'string', description: 'Agent name or id (prefix is fine)' };
 const TOOLS = [
@@ -37,7 +37,7 @@ const TOOLS = [
     run: (me, a) => ops.send(me, a.agent, a.message) },
   { name: 'synapse_inbox', description: 'Fetch messages other agents sent you (each is returned once).',
     inputSchema: { type: 'object', properties: {} }, run: (me) => ops.inbox(me) },
-  { name: 'synapse_ask', description: 'Ask an agent on a friend\'s machine a question. It is answered by a copy of that agent with no tools, from what it already knows. Waits up to 90 s; later answers arrive in synapse_inbox. If the agent is shared with you for reading only, this asks its owner to allow questions and returns status "requested".',
+  { name: 'synapse_ask', description: 'Ask an agent on a friend\'s machine a question. It is answered by a copy of that agent with no tools, from what it already knows. Waits up to 90 s; later answers arrive in synapse_inbox. If the agent is shared with you for reading only through a request, this asks its owner to allow questions and returns status "requested".',
     inputSchema: { type: 'object', properties: {
       agent: { type: 'string', description: 'Their agent, as name@owner or name@handle' },
       question: { type: 'string' },

@@ -147,8 +147,8 @@ paste one, and remove friends.
 
 ## Agent talk
 
-When someone adds you as a trusted person, the app shows "@x added you: Trust back / Ignore" and you get one
-email. Both of you must trust each other before requests work. When you accept a request, "Let their agent ask
+When someone adds you as a trusted person, the app shows "@x added you: Trust back / Ignore" and, if your email
+is verified, you get one email. Both of you must trust each other before requests work. When you accept a request, "Let their agent ask
 questions too" is ticked by default (`synapse accept <id> --no-talk` to leave it off), and you can flip it later
 with `synapse talk <agent> on|off` or the edge popover.
 
@@ -160,8 +160,8 @@ synapse ask api@sam "And when does it expire?" --conversation <id>
 synapse end <conversation>
 ```
 
-Agents get the same as `synapse_ask` and `synapse_end`. On a read-only share, `ask` returns status `requested`
-and the owner gets Allow / Not now. Answers that miss the 90 s wait, or questions to a friend who is offline,
+Agents get the same as `synapse_ask` and `synapse_end`. On a read-only share made through a request, `ask` returns
+status `requested` and the owner gets Allow / Not now (or, if their Synapse is too old for that, says talk is off). Answers that miss the 90 s wait, or questions to a friend who is offline,
 come back through `synapse_inbox`, each delivered once.
 
 The answer comes from a copy of your agent with no tools: a native fork for Claude, and for Codex, Gemini,

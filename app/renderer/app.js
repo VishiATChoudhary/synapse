@@ -1474,7 +1474,7 @@ async function openSettings() {
     };
     const loginRow = el('label', 'opt set'), lcb = el('input');
     lcb.type = 'checkbox'; lcb.checked = !!s.openAtLogin;
-    loginRow.append(lcb, el('span', 'k', 'open at login'), el('span', 'c', 'open Synapse when you log in, so friends\' questions get answered while you work'));
+    loginRow.append(lcb, el('span', 'k', 'Open Synapse at login'), el('span', 'c', 'so friends\' questions get answered while you work'));
     lcb.onchange = async () => {
       try { lcb.checked = (await synapse.settings.set({ openAtLogin: lcb.checked })).openAtLogin; toast(lcb.checked ? 'Synapse opens at login' : 'Synapse no longer opens at login'); }
       catch (e) { lcb.checked = !lcb.checked; toast(e.message, true); }
