@@ -134,6 +134,36 @@ const remoteMessage = (e) => (e.role && typeof e.text === 'string' ? { role: e.r
 
 const PARSERS = { claude: claudeMessage, codex: codexMessage, remote: remoteMessage };
 
+// ---- media, for the phone: images an agent saw (screenshots, images it opened, images pasted in) and video
+// files it touched. Claude keeps images as base64 blocks (in tool results and user content), Codex as data
+// URLs (tool outputs, input_image); videos are only ever paths in what the agent ran or said.
+const IMAGE_MIME = /^image\/(png|jpe?g|gif|webp)$/;
+const VIDEO_PATH = /(?:^|[\s"'`(=,[])((?:~|\.{1,2})?\/?[\w@%+.\-/]*[\w-]\.(?:mp4|mov|m4v|webm|gif))(?=$|[\s"'`),\]:;!?\\]|\.(?:\s|$))/gi;
+function mediaOf(e, line, format) {
+  if (format === 'claude' ? !['user', 'assistant'].includes(e.type) || e.isMeta || e.isSidechain : e.type !== 'response_item') return null;
+  const images = [];
+  const walk = (o, depth) => {
+    if (!o || typeof o !== 'object' || depth > 8 || images.length >= 12) return;
+    if (Array.isArray(o)) { for (const x of o) walk(x, depth + 1); return; }
+    if (o.type === 'image' && o.source?.type === 'base64' && IMAGE_MIME.test(o.source.media_type || '') && o.source.data) images.push({ mime: o.source.media_type, data: o.source.data });
+    for (const v of Object.values(o)) {
+      if (typeof v === 'string' && v.startsWith('data:image/')) {
+        const m = v.match(/^data:(image\/[\w+.-]+);base64,(.+)$/s);
+        if (m && IMAGE_MIME.test(m[1])) images.push({ mime: m[1], data: m[2] });
+      } else if (v && typeof v === 'object') walk(v, depth + 1);
+    }
+  };
+  walk(format === 'claude' ? e.message?.content : e.payload, 0);
+  const videos = [...new Set([...line.matchAll(VIDEO_PATH)].map((m) => m[1]))].slice(0, 3);
+  return images.length || videos.length ? { images, videos } : null;
+}
+// a parser that also keeps the media of each entry; an entry that is only media becomes a media-only message
+const withMedia = (parse, format) => (e, line) => {
+  const m = parse(e), media = mediaOf(e, line, format);
+  if (!media) return m;
+  return m ? { ...m, media } : { role: 'assistant', text: '', ts: e.timestamp, tool: true, media };
+};
+
 // Read messages from a JSONL transcript starting at a byte offset (or the tail when offset is null).
 // Returns the messages plus the byte offset of the last complete line consumed.
 function readJsonl(file, fromByte, parse, tailBytes = 600_000, minMessages = 6) {
@@ -161,7 +191,7 @@ function readRange(file, size, start, isTail, parse) {
   const messages = [];
   for (const l of lines) {
     if (!l) continue;
-    try { const m = parse(JSON.parse(l)); if (m) messages.push(m); } catch {}
+    try { const m = parse(JSON.parse(l), l); if (m) messages.push(m); } catch {}
   }
   return { messages, end };
 }
@@ -277,7 +307,9 @@ export function readAgentMessages(src, cursor = null, opts = {}) {
   if (src.format === 'opencode') return readOpenCode(src.transcript, cursor);
   if (src.format === 'cursor-agent') return readCursor(src.transcript, cursor);
   if (src.format === 'gemini') return readGemini(src.transcript, cursor);
-  return readJsonl(src.transcript, cursor, PARSERS[src.format] || claudeMessage, opts.tailBytes, opts.minMessages);
+  const parse = PARSERS[src.format] || claudeMessage;
+  const media = opts.media && ['claude', 'codex'].includes(src.format || 'claude');
+  return readJsonl(src.transcript, cursor, media ? withMedia(parse, src.format || 'claude') : parse, opts.tailBytes, opts.minMessages);
 }
 
 // Newest-first packing of messages into a character budget, rendered oldest-first.

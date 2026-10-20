@@ -82,7 +82,11 @@ export function unseal(acc, theirKey, item) {
   if (item?.type !== 'box') return null;
   try {
     const m = nacl.box.open(util.decodeBase64(item.c), util.decodeBase64(item.n), util.decodeBase64(theirKey), util.decodeBase64(acc.secretKey));
-    return m ? JSON.parse(util.encodeUTF8(m)) : null;
+    if (!m) return null;
+    if (!item.bin) return JSON.parse(util.encodeUTF8(m));
+    // a video piece: [4 bytes header length][JSON header][the bytes as they are]
+    const len = ((m[0] << 24) | (m[1] << 16) | (m[2] << 8) | m[3]) >>> 0;
+    return { ...JSON.parse(util.encodeUTF8(m.subarray(4, 4 + len))), bytes: m.subarray(4 + len) };
   } catch { return null; }
 }
 

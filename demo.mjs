@@ -47,7 +47,10 @@ export function demoAgents() {
     status: (tick + i) % 4 === 0 ? 'busy' : 'idle',
     startedAt: now - i * 600_000, updatedAt: now,
     transcript: demo.length ? `demo:${name}` : null, format: 'demo',
-  }));
+  })).concat(process.env.SYNAPSE_DEMO_TRANSCRIPT ? [{ // tests: one agent with a real Claude transcript
+    id: 'demo-media', pid: 199, kind: 'claude', name: 'media', cwd: process.env.SYNAPSE_DEMO_CWD || '/tmp', status: 'idle',
+    startedAt: now, updatedAt: now, transcript: process.env.SYNAPSE_DEMO_TRANSCRIPT, format: 'claude',
+  }] : []);
 }
 
 export const DEMO_EDGES = [
