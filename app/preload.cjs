@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld('synapse', {
     openWeb: (path) => call('account:web', { path }),
     onChange: (fn) => on('account', fn),
   },
+  shares: { mode: (id, mode) => call('share:mode', { id, mode }), remove: (id) => call('share:remove', { id }) },
   people: { list: () => call('people:list'), add: (who) => call('people:add', { who }), remove: (id) => call('people:remove', { id }),
     trustBack: (id, handle) => call('trust:back', { id, handle }), ignore: (id) => call('trust:ignore', { id }) },
   requests: {

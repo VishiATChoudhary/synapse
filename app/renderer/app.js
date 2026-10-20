@@ -2304,19 +2304,62 @@ async function drawPeople(box) {
   // people who added me and wait for an answer, on top with the same buttons as the popover
   for (const p of pendingTrust()) box.append(trustRow(p, () => drawPeople(box)));
   if (!list.length) box.append(el('div', 'hint', 'nobody yet · your agents can only ask people on this list'));
+  if (list.length) box.append(el('div', 'hint access-key', 'read only: their agent reads yours · read and ask: it can also put questions to yours, answered by a copy with no tools · nobody can type instructions into your agents'));
   for (const p of list) {
-    const row = el('div', 'person');
+    const card = el('div', 'person-card'), row = el('div', 'person');
     const meta = el('span', 'c', p.handle ? `@${p.handle}` : p.email && p.name && p.name !== p.email ? p.email : '');
     row.append(avatar(p), el('span', 'k', p.name || p.handle || p.email || '?'), meta);
     if (p.pending) row.append(el('span', 'badge', 'invited'));
     if (p.trustsYou) row.append(el('span', 'badge ok', 'trusts you'));
     const x = el('button', 'tab-close', '×');
-    x.title = `remove ${p.name || p.email || p.handle}`;
+    x.title = `remove ${p.name || p.email || p.handle} · ends every share with them`;
     x.onclick = async () => { try { await synapse.people.remove(p.id); await drawPeople(box); } catch (e) { toast(e.message, true); } };
     row.append(x);
-    box.append(row);
+    card.append(row, accessOf(p, () => drawPeople(box)));
+    box.append(card);
   }
   box.append(add, err);
+}
+
+// What a trusted person can reach, the same words as the phone: each of my agents they see, read only or read and
+// ask (switchable, or stopped here), and each of theirs I see, which only they can change.
+const linksOf = (p) => (ACC.feed.links || []).filter((l) => (p.handle && l.handle === p.handle) || (!l.handle && l.owner && l.owner === p.name));
+function accessOf(p, redraw) {
+  const box = el('div', 'access'), links = linksOf(p);
+  const mine = links.filter((l) => l.direction === 'out'), theirs = links.filter((l) => l.direction === 'in');
+  const who = p.name || p.handle || 'they';
+  if (!links.length) { box.append(el('div', 'access-none', `nothing shared either way · draw a link to one of ${who}'s agents on the canvas, or ask for one of theirs with a synapse request`)); return box; }
+  if (mine.length) {
+    const asks = mine.filter((l) => l.mode === 'talk').length;
+    box.append(el('div', 'access-h', `${who} sees ${mine.length} of your agents${asks ? ` · can ask ${asks}` : ''}`));
+    for (const l of mine) {
+      const r = el('div', 'share'), seg = el('div', 'share-mode');
+      r.append(el('span', 'mine', `your ${l.local?.name || 'agent'}`), el('span', 'arr', '→'), el('span', 'ag', `their ${l.agent?.name || 'agent'}`), seg);
+      for (const [mode, label] of [['sync', 'read only'], ['talk', 'read and ask']]) {
+        const b = el('button', l.mode === mode ? 'on' : '', label);
+        b.onclick = async () => {
+          if (l.mode === mode) return;
+          try { ACC.feed.links = await synapse.shares.mode(l.edgeId, mode); toast(mode === 'talk' ? `${who}'s agent can now ask your ${l.local?.name}` : `${who}'s agent can only read your ${l.local?.name} now`); redraw(); }
+          catch (e) { toast(e.message, true); }
+        };
+        seg.appendChild(b);
+      }
+      const stop = el('button', 'tab-close', '×');
+      stop.title = `stop sharing your ${l.local?.name} with ${who}`;
+      stop.onclick = async () => { try { ACC.feed.links = await synapse.shares.remove(l.edgeId); toast(`${who} no longer sees your ${l.local?.name}`); redraw(); } catch (e) { toast(e.message, true); } };
+      r.appendChild(stop);
+      box.appendChild(r);
+    }
+  }
+  if (theirs.length) {
+    box.append(el('div', 'access-h', `you see ${theirs.length} of ${who}'s agents`));
+    for (const l of theirs) {
+      const r = el('div', 'share');
+      r.append(el('span', 'ag', `their ${l.agent?.name || 'agent'}`), el('span', 'arr', '→'), el('span', 'mine', `your ${l.local?.name || 'agent'}`), el('span', 'share-tag' + (l.mode === 'talk' ? ' on' : ''), l.mode === 'talk' ? 'read and ask' : 'read only'));
+      box.appendChild(r);
+    }
+  }
+  return box;
 }
 
 // ---- agent talk history (in settings): the last 30 days, grouped per person, newest first
