@@ -444,3 +444,35 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .talk-row .k { font-size: 12.5px; }
 .talk-row .c { flex: 1; text-align: right; font: 10.5px var(--mono); color: var(--ink-3); white-space: nowrap; }
 .talk-row.open .c { color: var(--sig); }
+
+/* ---------------------------------------------------------------- settings
+   every row on one grid: the name over a readable description, its control on the right */
+[data-theme="night"] { color-scheme: dark; }
+.modal-card[data-kind="settings"] { width: 680px; }
+.modal-card[data-kind="settings"]::-webkit-scrollbar { width: 6px; }
+.modal-card[data-kind="settings"]::-webkit-scrollbar-thumb { background: var(--rule); }
+[data-kind="settings"] .modal-body:focus { outline: 0; }
+[data-kind="settings"] .modal-body > .hint { padding: 12px 22px; color: var(--ink-2); }
+[data-kind="settings"] .opt.set { display: grid; grid-template-columns: 1fr auto; grid-template-areas: 'k ctl' 'c ctl'; column-gap: 28px; row-gap: 3px; padding: 13px 22px; cursor: default; }
+[data-kind="settings"] label.opt.set { cursor: pointer; }
+[data-kind="settings"] .opt.set:hover { background: var(--wash); color: inherit; }
+[data-kind="settings"] .opt.set .k { grid-area: k; width: auto; font-size: 14px; }
+[data-kind="settings"] .opt.set .c, [data-kind="settings"] .opt.set:hover .c { grid-area: c; font: 12.5px/1.45 var(--sans); color: var(--ink-2); opacity: 1; }
+[data-kind="settings"] .opt.set > :is(input, select, button) { grid-area: ctl; grid-row: 1 / 3; align-self: center; justify-self: end; margin: 0; }
+[data-kind="settings"] .opt.set .btn { padding: 7px 12px; border: 1px solid var(--rule); white-space: nowrap; }
+[data-kind="settings"] .opt.set input[type=checkbox] { width: 16px; height: 16px; }
+[data-kind="settings"] .opt.set input[type=number] { width: 84px; padding: 7px 10px; font: 13px var(--mono); text-align: right; border: 1px solid var(--rule); }
+[data-kind="settings"] .opt.set input[type=number]:focus { border-color: var(--ink); }
+[data-kind="settings"] .opt.set select { appearance: none; padding: 7px 30px 7px 10px; font: 12px var(--mono); color: var(--ink); background: transparent; border: 1px solid var(--rule); border-radius: 0; outline: 0; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-2) 50%), linear-gradient(135deg, var(--ink-2) 50%, transparent 50%);
+  background-position: right 14px center, right 10px center; background-size: 4px 4px; background-repeat: no-repeat; }
+[data-kind="settings"] .opt.set select:focus-visible { border-color: var(--ink); }
+[data-kind="settings"] .sub { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 18px 22px 8px; font: 11px var(--mono); letter-spacing: .08em; color: var(--ink); border-top: 1px solid var(--ink); }
+[data-kind="settings"] .sub::before { content: ''; width: 6px; height: 6px; background: var(--sig); }
+[data-kind="settings"] :is(.phones, .people, .talk-hist) .hint { padding: 12px 22px; font: 12.5px/1.45 var(--sans); text-transform: none; color: var(--ink-2); }
+[data-kind="settings"] .person { padding: 9px 22px; }
+[data-kind="settings"] .person .c { font-size: 11.5px; color: var(--ink-2); }
+[data-kind="settings"] .talk-row { padding: 6px 22px 8px 54px; }
+[data-kind="settings"] .talk-row .c { font: 11.5px var(--mono); color: var(--ink-2); }
+[data-kind="settings"] .keys { gap: 4px 22px; padding: 8px 22px 14px; }
+[data-kind="settings"] .keys span { font-size: 11px; }

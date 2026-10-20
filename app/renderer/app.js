@@ -985,6 +985,7 @@ $('#fan').addEventListener('click', (e) => { if (e.target === $('#fan') || e.tar
 function modal(title, build) {
   const m = $('#modal'), body = $('#modal-body');
   $('#modal-title').textContent = title;
+  m.querySelector('.modal-card').dataset.kind = title;
   body.replaceChildren();
   body.onkeydown = null;
   build(body, () => { m.hidden = true; top(focusedSlot())?.term.focus(); });
@@ -1454,10 +1455,10 @@ async function openSettings() {
   let s = {};
   try { s = await synapse.settings.get(); } catch {}
   modal('settings', (body, close) => {
-    const themeRow = el('div', 'opt set'), themeVal = el('span', 'c');
-    const showTheme = () => (themeVal.textContent = document.documentElement.dataset.theme === 'night' ? 'night' : 'signal');
-    themeRow.append(el('span', 'n', '◐'), el('span', 'k', 'theme'), themeVal); showTheme();
-    themeRow.onclick = () => { toggleTheme(); showTheme(); };
+    const themeRow = el('div', 'opt set'), themeBtn = el('button', 'btn');
+    const showTheme = () => (themeBtn.textContent = document.documentElement.dataset.theme === 'night' ? '◐ night' : '◐ signal');
+    themeRow.append(el('span', 'k', 'theme'), el('span', 'c', 'signal is light, night is dark'), themeBtn); showTheme();
+    themeBtn.onclick = () => { toggleTheme(); showTheme(); };
     const linkRow = el('label', 'opt set'), cb = el('input');
     cb.type = 'checkbox'; cb.checked = !!s.autoSymlink;
     linkRow.append(cb, el('span', 'k', 'link workspaces'), el('span', 'c', 'symlink workspaces added from elsewhere into ~/.synapse/workspaces, so the library can bring them back'));
@@ -1530,6 +1531,8 @@ async function openSettings() {
     }
     body.tabIndex = 0; body.onkeydown = (e) => { if (e.key === 'Escape') close(); };
   });
+  // not the hourly limit field: settings open to read, not to type
+  $('#modal-body').focus();
 }
 
 // One suggestion, the first time a link goes to talk: only the user's Turn on changes the login item.
