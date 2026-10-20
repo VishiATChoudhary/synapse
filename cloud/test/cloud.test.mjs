@@ -28,6 +28,8 @@ function appleToken(claims, { key = apple.privateKey, kid = 'test-kid' } = {}) {
   const body = `${enc({ alg: 'RS256', kid })}.${enc({ iss: 'https://appleid.apple.com', aud: 'dev.synapse.mobile', exp: Math.floor(Date.now() / 1000) + 600, ...claims })}`;
   return `${body}.${crypto.sign('RSA-SHA256', Buffer.from(body), key).toString('base64url')}`;
 }
+// Apple on the web signs its client secret with an EC key (the .p8)
+const appleWebKey = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
 const seen = [];
 function startMock() {
   return new Promise((resolve) => {
@@ -43,6 +45,7 @@ function startMock() {
         return res.end();
       }
       res.writeHead(200, { 'content-type': 'application/json' });
+      if (p === 'apple' && step === 'token') return res.end(JSON.stringify({ access_token: 'at-apple', id_token: appleToken({ aud: 'dev.synapse.web', sub: 'apple-web-1', email: 'webby@privaterelay.appleid.com', email_verified: 'true' }) }));
       if (step === 'token') return res.end(JSON.stringify({ access_token: `at-${p}`, token_type: 'bearer' }));
       if (step === 'user') return res.end(JSON.stringify(profiles[p].user));
       if (step === 'emails') return res.end(JSON.stringify(profiles[p].emails));
@@ -58,7 +61,8 @@ before(async () => {
   proc = spawn(process.execPath, ['server.mjs'], {
     cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PORT: String(port), PUBLIC_URL: base, CLOUD_DATA: data, CLOUD_SECRET: 'test-secret', CLOUD_DEV_MAIL: '1', CLOUD_IP_LIMIT_SCALE: '50', OAUTH_MOCK_BASE: mockBase,
-      APPLE_KEYS_URL: `${mockBase}/apple/keys`, GITHUB_CLIENT_ID: 'gh', GITHUB_CLIENT_SECRET: 'ghs', GOOGLE_CLIENT_ID: 'go', GOOGLE_CLIENT_SECRET: 'gos', X_CLIENT_ID: 'xi', X_CLIENT_SECRET: 'xs' },
+      APPLE_KEYS_URL: `${mockBase}/apple/keys`, APPLE_SERVICES_ID: 'dev.synapse.web', APPLE_TEAM_ID: 'TEAM123', APPLE_KEY_ID: 'KEY123',
+      APPLE_PRIVATE_KEY: appleWebKey.privateKey.export({ type: 'pkcs8', format: 'pem' }).replace(/\n/g, '\\n'), GITHUB_CLIENT_ID: 'gh', GITHUB_CLIENT_SECRET: 'ghs', GOOGLE_CLIENT_ID: 'go', GOOGLE_CLIENT_SECRET: 'gos', X_CLIENT_ID: 'xi', X_CLIENT_SECRET: 'xs' },
   });
   let err = '';
   proc.stderr.on('data', (d) => { err += d; });
@@ -176,7 +180,7 @@ async function oauth(provider, cookie) {
 }
 
 test('GitHub, Google and X sign-up and sign-in', async () => {
-  assert.deepEqual((await call('/v1/auth/providers')).json, { github: true, google: true, x: true, email: true, mail: true });
+  assert.deepEqual((await call('/v1/auth/providers')).json, { apple: true, github: true, google: true, x: true, email: true, mail: true });
 
   const gh = await oauth('github');
   assert.equal(gh.status, 302);
@@ -598,6 +602,32 @@ test('Sign in with Apple from the phone: Apple-signed tokens only, same person s
   const forger = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
   assert.equal((await apple(appleToken({ sub: 'apple-1' }, { key: forger.privateKey }))).status, 401, 'a token not signed by Apple is refused');
   assert.equal((await apple('not.a.token')).status, 401);
+});
+
+test('Sign in with Apple on the web: form_post bounced to a same-site GET, signed client secret, name from the first sign-in', async () => {
+  const start = await call('/auth/apple/start?next=/welcome');
+  const to = new URL(start.headers.get('location'));
+  assert.equal(to.searchParams.get('client_id'), 'dev.synapse.web');
+  assert.equal(to.searchParams.get('response_mode'), 'form_post');
+  const r = await fetch(`${base}/auth/apple/callback`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'https://appleid.apple.com' },
+    body: new URLSearchParams({ code: 'code-apple', state: to.searchParams.get('state'), user: JSON.stringify({ name: { firstName: 'Webby', lastName: 'Apple' } }) }) });
+  assert.equal(r.status, 200);
+  assert.ok(!r.headers.get('set-cookie'), 'no cookie on the cross-site post');
+  const next = (await r.text()).match(/url=([^"]+)"/)[1].replace(/&amp;/g, '&');
+  const cb = await call(next);
+  assert.equal(cb.headers.get('location'), '/welcome');
+  const me = (await call('/v1/me', { cookie: cb.headers.get('set-cookie').split(';')[0] })).json.user;
+  assert.equal(me.name, 'Webby Apple');
+  assert.deepEqual(me.providers, ['apple']);
+
+  const tk = seen.find((x) => x.p === 'apple' && x.step === 'token');
+  const secret = new URLSearchParams(tk.body).get('client_secret');
+  const [h, b, sig] = secret.split('.');
+  assert.deepEqual(JSON.parse(Buffer.from(h, 'base64url')), { alg: 'ES256', kid: 'KEY123' });
+  const c = JSON.parse(Buffer.from(b, 'base64url'));
+  assert.equal(c.iss, 'TEAM123'); assert.equal(c.sub, 'dev.synapse.web'); assert.equal(c.aud, 'https://appleid.apple.com');
+  assert.ok(crypto.verify('sha256', Buffer.from(`${h}.${b}`), { key: appleWebKey.publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(sig, 'base64url')), 'signed with the .p8 key');
+  assert.match((await call(next)).headers.get('location'), /^\/login\?error=/, 'the state works once');
 });
 
 test('the phone app signs in with GitHub through its browser sheet: a one-time code back to the app, no code to compare', async () => {
