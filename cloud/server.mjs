@@ -54,6 +54,11 @@ export function verify(token, kind) {
 }
 const pairOf = (a, b) => sign({ k: 'pair', m: [a, b].sort() });
 const CLOUD_ONLY = new Set(['request', 'revoked']);
+const DEVICE_KINDS = new Set(['computer', 'phone']);
+function sameAccount(a, b) {
+  const ma = get('SELECT user_id, kind FROM machines WHERE id = ?', a), mb = get('SELECT user_id, kind FROM machines WHERE id = ?', b);
+  return !!(ma?.user_id && ma.kind && mb?.kind && ma.user_id === mb.user_id && a !== b);
+}
 const pairCovers =(token, a, b) => { const p = verify(token, 'pair'); return !!p && p.m.includes(a) && p.m.includes(b) && a !== b; };
 
 // passwords: scrypt with a per-user salt
@@ -302,7 +307,7 @@ const safeNext = (n, fallback = '/welcome') => (typeof n === 'string' && /^\/(?!
 // ---------------------------------------------------------------- API routes
 
 function signedIn(res, req, user, b, status = 200) {
-  const client = ['app', 'cli'].includes(b.client) ? b.client : 'web';
+  const client = ['app', 'cli', 'phone'].includes(b.client) ? b.client : 'web';
   const token = createSession(user.id, client, b.label || (client === 'web' ? clean(req.headers['user-agent'], 80) : null), ipOf(req));
   const headers = client === 'web' ? { 'set-cookie': cookie('syn_session', token, WEB_SESSION) } : {};
   return json(res, status, { token, user: meUser(user) }, headers);
@@ -572,7 +577,27 @@ const routes = {
     machineId ||= crypto.randomBytes(6).toString('hex');
     run('INSERT INTO machines (id, user_id, created_at, last_seen) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET user_id = COALESCE(excluded.user_id, machines.user_id), last_seen = excluded.last_seen',
       machineId, a?.user.id || null, now(), now());
+    // a device of the account (Synapse on a computer, or the phone app): what it is and its public key
+    if (a && DEVICE_KINDS.has(b.kind)) {
+      if (!/^[A-Za-z0-9+/]{43}=$/.test(String(b.publicKey || ''))) fail(400, 'publicKey must be a base64 X25519 key');
+      run('UPDATE machines SET kind = ?, name = ?, public_key = ? WHERE id = ?', b.kind, clean(b.name, 40) || b.kind, b.publicKey, machineId);
+    }
     return json(res, 200, { machineId, token: sign({ k: 'machine', m: machineId }), user: a ? meUser(a.user) : null });
+  },
+  // the account's computers and phones, for the phone app to find its computer and Synapse to know its phones
+  'GET /v1/machines': async (req, res) => {
+    const { user } = must(req);
+    return json(res, 200, { machines: all('SELECT * FROM machines WHERE user_id = ? AND kind IS NOT NULL ORDER BY last_seen DESC', user.id)
+      .map((m) => ({ id: m.id, kind: m.kind, name: m.name, publicKey: m.public_key, lastSeen: m.last_seen })) });
+  },
+  // signing a phone out, or removing it in Synapse: it can no longer reach the account's computers
+  'DELETE /v1/machines/:id': async (req, res, b, params) => {
+    const { user } = must(req);
+    const m = get('SELECT * FROM machines WHERE id = ? AND user_id = ? AND kind IS NOT NULL', params.id, user.id);
+    if (!m) fail(404, 'No such device on your account.');
+    run('DELETE FROM machines WHERE id = ?', m.id);
+    run('DELETE FROM mailbox WHERE machine_id = ?', m.id);
+    return json(res, 200, { ok: true });
   },
 };
 
@@ -587,8 +612,11 @@ const machineRoutes = {
     return { peer: { machineId: inv.m, name: inv.name }, pair };
   },
   'POST /v1/send': (me, b) => {
-    if (!pairCovers(b.pair, me, b.to)) fail(403, 'not paired with that machine');
-    if (!pairStillTrusted(me, b.to)) fail(403, 'you no longer trust each other');
+    // the same account's devices (a phone and its computer) need no invite: the account pairs them
+    if (!sameAccount(me, b.to)) {
+      if (!pairCovers(b.pair, me, b.to)) fail(403, 'not paired with that machine');
+      if (!pairStillTrusted(me, b.to)) fail(403, 'you no longer trust each other');
+    }
     const items = Array.isArray(b.items) ? b.items : [];
     // request answers and revocations only ever come from the cloud itself
     for (const it of items) if (it && typeof it === 'object' && !CLOUD_ONLY.has(it.type)) deliver(b.to, { ...it, from: me, pair: b.pair });

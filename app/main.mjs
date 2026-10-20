@@ -476,7 +476,11 @@ function startPhone() {
     },
     changed: (e) => {
       win?.webContents.send('phone:changed', e);
-      if (e.paired && Notification.isSupported()) new Notification({ title: 'Phone paired', body: `${e.paired} can now see and start agents on this Mac.` }).show();
+      if (e.asking && Notification.isSupported()) {
+        const n = new Notification({ title: 'A phone wants to use this Mac', body: `${e.asking} signed in to your Synapse account. Allow it in Synapse settings.` });
+        n.on('click', () => { win?.show(); win?.webContents.send('phone:show'); });
+        n.show();
+      }
     },
   });
 }
@@ -631,7 +635,7 @@ async function pollRequests() {
   notified = new Set(pending.map((r) => r.id));
   win?.webContents.send('requests', feed);
 }
-const accountChanged = async () => { const a = await acct(); win?.webContents.send('account', a.account()?.user || null); pollRequests(); };
+const accountChanged = async () => { const a = await acct(); win?.webContents.send('account', a.account()?.user || null); pollRequests(); phone.wake(); };
 
 // device sign-in (GitHub, Google, X): the browser does the provider dance, we poll until it says yes
 let device = null;
@@ -677,9 +681,8 @@ handle('pty:spawn', (a) => {
   }
   return r;
 });
-handle('phone:pair', () => phone.pair());
-handle('phone:cancel', () => phone.cancelPair());
 handle('phone:devices', () => phone.devices());
+handle('phone:allow', ({ id }) => phone.allow(id));
 handle('phone:remove', ({ id }) => phone.remove(id));
 handle('pty:write', ({ id, data }) => { ptys.get(id)?.p.write(data); });
 handle('pty:resize', ({ id, cols, rows }) => { try { ptys.get(id)?.p.resize(cols, rows); } catch {} });

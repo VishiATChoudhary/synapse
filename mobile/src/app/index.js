@@ -1,8 +1,8 @@
 // Every agent on the laptop, grouped by project, the ones that need you on top.
-import { router } from 'expo-router';
+import { Redirect, router } from 'expo-router';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { byAttention, useSynapse } from '../store';
+import { byAttention, leaveDemo, useSynapse } from '../store';
 import { FONT, useTheme } from '../theme';
 import { Display, Label, Mark, Rule, ago } from '../ui';
 
@@ -16,6 +16,17 @@ function groups(projects, agents) {
   const out = projects.map((p) => ({ ...p }));
   for (const a of agents) if (!out.some((p) => p.key === a.project.key)) out.push(a.project);
   return out;
+}
+
+// what stands between the phone and the agents, in words: no computer yet, not allowed yet, removed
+function Notice({ title, children }) {
+  const t = useTheme();
+  return (
+    <View style={{ marginHorizontal: 20, marginBottom: 16, borderWidth: 1, borderColor: t.sig, padding: 16, gap: 8 }}>
+      <Label color={t.sig}>{title}</Label>
+      <Text style={{ fontFamily: FONT.sans, fontSize: 15, lineHeight: 22, color: t.ink }}>{children}</Text>
+    </View>
+  );
 }
 
 function AgentRow({ a }) {
@@ -39,7 +50,10 @@ function AgentRow({ a }) {
 export default function Home() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
-  const { agents, projects, mode, computer, online, error } = useSynapse();
+  const { agents, projects, mode, computer, computers, online, access, error, user } = useSynapse();
+  if (mode === 'loading') return <View style={{ flex: 1, backgroundColor: t.paper }} />;
+  if (mode === 'signed-out') return <Redirect href="/login" />;
+  const account = mode === 'account';
   const working = agents.filter((a) => a.status === 'busy').length;
   const waiting = agents.filter((a) => a.needs).length;
   return (
@@ -47,9 +61,9 @@ export default function Home() {
       <ScrollView contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: insets.bottom + 96 }}>
         <View style={{ paddingHorizontal: 20, paddingBottom: 16 }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-            {mode === 'demo'
-              ? <Pressable onPress={() => router.push('/pair')} hitSlop={12}><Label color={t.sig}>demo · pair with your computer</Label></Pressable>
-              : <Label color={online ? t.ink2 : t.ink3}>{computer} · {online ? 'connected' : 'waiting for synapse…'}</Label>}
+            {!account
+              ? <Pressable onPress={() => { leaveDemo(); router.replace('/login'); }} hitSlop={12}><Label color={t.sig}>sample agents · sign in</Label></Pressable>
+              : <Pressable onPress={() => router.push('/settings')} hitSlop={12} style={{ flexShrink: 1, marginRight: 12 }}><Label numberOfLines={1} color={online && access === 'ok' ? t.ink2 : t.ink3}>{computer || 'no computer'} · {!computer ? 'set up' : access === 'ok' && online ? 'connected' : access === 'waiting' ? 'not allowed yet' : 'connecting…'}</Label></Pressable>}
             <Pressable onPress={() => router.push('/settings')} hitSlop={12}><Label color={t.ink}>settings</Label></Pressable>
           </View>
           <Display style={{ marginTop: 6 }}>Synapse</Display>
@@ -59,10 +73,20 @@ export default function Home() {
           </Label>
         </View>
         {!!error && <Text style={{ fontFamily: FONT.sans, fontSize: 14, color: t.sig, paddingHorizontal: 20, paddingBottom: 12 }}>{error}</Text>}
-        {mode === 'paired' && !agents.length && (
-          <Text style={{ fontFamily: FONT.sans, fontSize: 15, lineHeight: 22, color: t.ink2, paddingHorizontal: 20 }}>
-            {online ? 'No agents running on your computer. Start one with + new agent.' : 'Open Synapse on your computer. Your agents show up here once it is running.'}
-          </Text>
+        {account && !computers.length && (
+          <Notice title="connect your computer">Open Synapse on your computer and sign in there as {user?.email}. It shows up here by itself.</Notice>
+        )}
+        {account && access === 'waiting' && (
+          <Notice title={`allow this phone on ${computer}`}>Synapse on {computer} is asking whether this phone may see, start and message its agents. Click allow there (Synapse settings, phone).</Notice>
+        )}
+        {account && access === 'removed' && (
+          <Notice title={`removed on ${computer}`}>This phone was removed in Synapse on {computer}. Sign out and in again to ask once more.</Notice>
+        )}
+        {account && !!computers.length && access === 'unknown' && !agents.length && (
+          <Notice title="connecting">Waiting for {computer}. Synapse has to be open there.</Notice>
+        )}
+        {account && access === 'ok' && !agents.length && (
+          <Text style={{ fontFamily: FONT.sans, fontSize: 15, lineHeight: 22, color: t.ink2, paddingHorizontal: 20 }}>No agents running on {computer}. Start one with + new agent.</Text>
         )}
         {groups(projects, agents).map((p) => {
           const list = byAttention(agents.filter((a) => a.project.key === p.key));
@@ -79,12 +103,12 @@ export default function Home() {
           );
         })}
       </ScrollView>
-      <Pressable onPress={() => router.push('/new')} style={({ pressed }) => ({
+      {(!account || access === 'ok') && <Pressable onPress={() => router.push('/new')} style={({ pressed }) => ({
         position: 'absolute', right: 20, bottom: insets.bottom + 20, backgroundColor: t.ink,
         paddingVertical: 14, paddingHorizontal: 20, opacity: pressed ? 0.7 : 1,
       })}>
         <Label color={t.onInk}>+ new agent</Label>
-      </Pressable>
+      </Pressable>}
     </View>
   );
 }

@@ -1,12 +1,13 @@
-// Connection, privacy and contact. Kept reachable from the home screen (App Review 5.1.1(i), 1.2).
-import { Linking, ScrollView, Text, View } from 'react-native';
-import { DISCLOSURE, revokeConsent, useConsent } from '../consent';
+// Account, computer, privacy and contact. Kept reachable from the home screen (App Review 5.1.1(i), (v), 1.2).
 import { router } from 'expo-router';
-import { source, unpair, useSynapse } from '../store';
+import { useState } from 'react';
+import { Linking, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { DISCLOSURE, revokeConsent, useConsent } from '../consent';
+import { DEFAULT_CLOUD } from '../link';
+import { choose, deleteAccount, leaveDemo, signOutPhone, useSynapse } from '../store';
 import { FONT, useTheme } from '../theme';
-import { Button, Label, Rule } from '../ui';
+import { Button, Label, Rule, ago } from '../ui';
 
-const PRIVACY_URL = 'https://app.heysynapse.dev/privacy';
 const SUPPORT_URL = 'https://github.com/VishiATChoudhary/synapse/issues';
 
 function Section({ title, children }) {
@@ -21,18 +22,42 @@ function Section({ title, children }) {
 export default function Settings() {
   const t = useTheme();
   const { given } = useConsent();
-  const { computer } = useSynapse();
+  const { mode, user, computers, computerId } = useSynapse();
+  const [deleting, setDeleting] = useState(false);
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
   const body = { fontFamily: FONT.sans, fontSize: 15, lineHeight: 22, color: t.ink };
+  const out = async () => { await signOutPhone(); router.replace('/login'); };
+  const remove = async () => {
+    setError('');
+    try { await deleteAccount(password); router.replace('/login'); } catch (e) { setError(e.message); }
+  };
   return (
-    <ScrollView style={{ backgroundColor: t.paper }} contentContainerStyle={{ padding: 20, gap: 22 }}>
-      <Section title="connection">
-        <Text style={body}>{source.name === 'demo'
-          ? 'Demo mode: sample agents, nothing leaves this phone. Pair with Synapse on your computer to see your own agents.'
-          : `Paired with ${computer}. Agents run there, this phone only shows them and sends your messages, sealed with a key only the two of you have.`}</Text>
-        {source.name === 'demo'
-          ? <Button filled onPress={() => router.push('/pair')}>pair with your computer</Button>
-          : <Button onPress={unpair}>unpair this phone</Button>}
-      </Section>
+    <ScrollView style={{ backgroundColor: t.paper }} contentContainerStyle={{ padding: 20, gap: 22 }} keyboardShouldPersistTaps="handled">
+      {mode === 'account' ? (
+        <>
+          <Section title="account">
+            <Text style={body}>{user?.name}{user?.email ? ` · ${user.email}` : ''}</Text>
+            <Button onPress={out}>sign out</Button>
+          </Section>
+          <Rule />
+          <Section title="computer">
+            {!computers.length && <Text style={[body, { color: t.ink2 }]}>None yet. Sign in to Synapse on your computer with this account.</Text>}
+            {computers.map((c) => (
+              <Pressable key={c.id} onPress={() => choose(c)} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: c.id === computerId ? t.ink : t.rule, padding: 12 }}>
+                <View style={{ width: 8, height: 8, backgroundColor: c.id === computerId ? t.sig : t.rule }} />
+                <Text style={[body, { flex: 1 }]}>{c.name}</Text>
+                <Label>{c.lastSeen ? `seen ${ago(c.lastSeen)}` : ''}</Label>
+              </Pressable>
+            ))}
+          </Section>
+        </>
+      ) : (
+        <Section title="sample agents">
+          <Text style={body}>These are sample agents, nothing leaves this phone. Sign in to see the agents on your own computer.</Text>
+          <Button filled onPress={() => { leaveDemo(); router.replace('/login'); }}>sign in</Button>
+        </Section>
+      )}
       <Rule />
       <Section title="your prompts">
         <Text style={body}>{DISCLOSURE}</Text>
@@ -41,9 +66,26 @@ export default function Settings() {
       </Section>
       <Rule />
       <Section title="privacy and help">
-        <Button onPress={() => Linking.openURL(PRIVACY_URL)}>privacy policy</Button>
+        <Button onPress={() => Linking.openURL(`${DEFAULT_CLOUD}/privacy`)}>privacy policy</Button>
         <Button onPress={() => Linking.openURL(SUPPORT_URL)}>contact and support</Button>
       </Section>
+      {mode === 'account' && (
+        <>
+          <Rule />
+          <Section title="delete account">
+            {!deleting ? <Button onPress={() => setDeleting(true)}>delete my synapse account</Button> : (
+              <View style={{ gap: 10 }}>
+                <Text style={body}>This deletes your Synapse account, your trusted people and every share, on all your devices. It cannot be undone.</Text>
+                <TextInput value={password} onChangeText={setPassword} secureTextEntry placeholder="your password" placeholderTextColor={t.ink3}
+                  style={{ fontFamily: FONT.sans, fontSize: 16, color: t.ink, borderWidth: 1, borderColor: t.rule, padding: 12 }} />
+                {!!error && <Text style={[body, { color: t.sig }]}>{error}</Text>}
+                <Button filled onPress={remove}>delete forever</Button>
+                <Button onPress={() => { setDeleting(false); setPassword(''); setError(''); }}>keep my account</Button>
+              </View>
+            )}
+          </Section>
+        </>
+      )}
     </ScrollView>
   );
 }

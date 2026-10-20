@@ -1,13 +1,14 @@
-// The paired computer as a source: its agents and workspaces, kept fresh by polling the relay while the app
-// is in front, plus the actions the screens call. Same shape as the demo source.
+// One of the account's computers as a source: its agents and workspaces, kept fresh by polling Synapse Cloud
+// while the app is in front, plus the actions the screens call. Same shape as the demo source.
 import { AppState } from 'react-native';
 import { connect } from './link';
 
 const FAST = 1500, PING = 30_000;
 
-export function createRemote(emit, link) {
-  const conn = connect(link);
-  let state = { agents: [], projects: [], kinds: [], computer: link.computer, online: false, error: null };
+export function createRemote(emit, acc, computer) {
+  const conn = connect(acc, computer);
+  // access: 'unknown' until the computer answers, 'waiting' until it is allowed there, then 'ok'
+  let state = { agents: [], projects: [], kinds: [], computer: computer.name, online: false, access: 'unknown', error: null };
   let snap = { agents: [], projects: [], kinds: [] };
   let watch = null, messages = {}, lastSeen = 0, lastPing = 0, timer = null, stopped = false;
   const waiting = new Map(); // spawn request -> resolve
@@ -22,6 +23,8 @@ export function createRemote(emit, link) {
 
   function receive(m) {
     lastSeen = Date.now();
+    if (m.t === 'waiting') state = { ...state, access: 'waiting' };
+    else if (m.t !== 'error') state = { ...state, access: 'ok' };
     if (m.t === 'state') snap = { agents: m.agents || [], projects: m.projects || [], kinds: m.kinds || [] };
     else if (m.t === 'messages') messages = { ...messages, [m.id]: m.messages || [] };
     else if (m.t === 'spawned') { waiting.get(m.req)?.(m.id); waiting.delete(m.req); }
@@ -31,11 +34,16 @@ export function createRemote(emit, link) {
   async function tick() {
     if (stopped) return;
     try {
-      if (Date.now() - lastPing > PING) { lastPing = Date.now(); await conn.send({ t: 'ping' }); }
+      // until the computer has allowed this phone, keep saying hello so it answers as soon as it is allowed
+      const ok = state.access === 'ok';
+      if (Date.now() - lastPing > (ok ? PING : 4000)) { lastPing = Date.now(); await conn.send({ t: ok ? 'ping' : 'hello' }); }
       for (const m of await conn.poll()) receive(m);
       publish();
-    } catch (e) { if (e.status === 401) fail(new Error('the relay no longer knows this phone: pair again')); }
-    if (AppState.currentState === 'active') timer = setTimeout(tick, FAST);
+    } catch (e) {
+      if (e.status === 403) state = { ...state, access: 'removed' }; // the computer removed this phone, or it signed out elsewhere
+      else if (e.status === 401) fail(new Error('Your sign-in expired. Sign in again.'));
+    }
+    if (AppState.currentState === 'active') timer = setTimeout(tick, state.access === 'waiting' ? 4000 : FAST);
   }
   const wake = () => { clearTimeout(timer); lastPing = Date.now(); say({ t: 'hello' }).then(tick); if (watch) say({ t: 'watch', id: watch }); };
   const sub = AppState.addEventListener('change', (s) => { if (s === 'active') wake(); else clearTimeout(timer); });
@@ -43,9 +51,8 @@ export function createRemote(emit, link) {
   emit(state);
 
   return {
-    name: 'paired',
+    name: 'account',
     close() { stopped = true; clearTimeout(timer); sub.remove(); conn.send({ t: 'bye' }).catch(() => {}); },
-    forget: () => conn.send({ t: 'unpair' }).catch(() => {}),
     watch(id) { watch = id; say({ t: 'watch', id }); },
     send(id, text) {
       messages = { ...messages, [id]: [...(messages[id] || []), { role: 'user', text, ts: new Date().toISOString(), tool: false }] };

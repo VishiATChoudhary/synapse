@@ -19,12 +19,12 @@ contextBridge.exposeInMainWorld('synapse', {
   },
   sessions: { load: () => call('sessions:load'), save: (data) => call('sessions:save', data) },
   phone: {
-    pair: () => call('phone:pair'),
-    cancel: () => call('phone:cancel'),
     devices: () => call('phone:devices'),
+    allow: (id) => call('phone:allow', { id }),
     remove: (id) => call('phone:remove', { id }),
     onSpawn: (fn) => on('phone:spawn', fn),
     onChanged: (fn) => on('phone:changed', fn),
+    onShow: (fn) => on('phone:show', fn),
   },
   fork: { spawn: (a) => call('fork:spawn', a), link: (child, parent) => call('fork:link', { child, parent }), onRequest: (fn) => on('fork:request', fn) },
   project: {

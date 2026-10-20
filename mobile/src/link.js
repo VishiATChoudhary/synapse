@@ -1,65 +1,67 @@
-// The phone's end of app/phone.mjs: pair through the relay with the code from the QR, then talk to the
-// computer in sealed boxes. Plain JS with fetch and tweetnacl only, so it runs in the app and in Node tests.
+// The phone's end of app/phone.mjs, through Synapse Cloud: sign in, register this phone as a device of the
+// account with a public key, find the account's computers, and talk to one in sealed boxes (NaCl box).
+// Plain JS with fetch and tweetnacl only, so it runs in the app and in Node tests.
 import nacl from 'tweetnacl';
 import util from 'tweetnacl-util';
 
+export const DEFAULT_CLOUD = process.env.EXPO_PUBLIC_SYNAPSE_CLOUD || 'https://app.heysynapse.dev'; // a local cloud while developing
 export const setRandom = (fn) => nacl.setPRNG((x, n) => x.set(fn(n)));
 
-const fromUrl64 = (s) => util.decodeBase64(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4));
-
-// synapse://pair?r=<relay>&c=<invite>&k=<key>&n=<computer name>
-export function parsePairing(text) {
-  const m = /^synapse:\/\/pair\?(.+)$/.exec(String(text || '').trim());
-  if (!m) return null;
-  const dec = (v) => decodeURIComponent(v.replace(/\+/g, ' '));
-  const q = Object.fromEntries(m[1].split('&').map((kv) => { const i = kv.indexOf('='); return [dec(kv.slice(0, i)), dec(kv.slice(i + 1))]; }));
-  if (!q.r || !q.c || !q.k || !/^(https:\/\/|http:\/\/(localhost|127\.0\.0\.1)[:/])/.test(q.r)) return null; // a local relay only for tests
-  const key = fromUrl64(q.k);
-  if (key.length !== 32) return null;
-  return { relay: q.r.replace(/\/+$/, ''), code: q.c, key: util.encodeBase64(key), name: q.n || 'computer' };
-}
-
-async function call(relay, route, body, token) {
-  const r = await fetch(relay + route, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
-    body: JSON.stringify(body || {}),
-  });
+export async function api(cloud, method, route, { body, token } = {}) {
+  let r;
+  try {
+    r = await fetch(cloud + route, {
+      method,
+      headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch { throw new Error('Could not reach Synapse. Check your connection.'); }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error(j.error || `relay answered ${r.status}`), { status: r.status });
+  if (!r.ok) throw Object.assign(new Error(j.error || `Synapse answered ${r.status}`), { status: r.status });
   return j;
 }
 
-// register this phone with the relay and join the computer's invite: returns everything needed later
-export async function pair(p, phoneName) {
-  const { machineId, token } = await call(p.relay, '/v1/register', { name: phoneName });
-  const { peer, pair: pairToken } = await call(p.relay, '/v1/join', { code: p.code, name: phoneName }, token);
-  return { relay: p.relay, key: p.key, computer: p.name, me: machineId, token, peer: peer.machineId, pair: pairToken };
+// sign in (or create the account), then register this phone: everything the app keeps in the keychain
+export async function signIn(cloud, { email, password, name, create }, phoneName) {
+  const route = create ? '/v1/auth/signup' : '/v1/auth/login';
+  const { token, user } = await api(cloud, 'POST', route, { body: { email, password, name, client: 'phone', label: phoneName } });
+  const keys = nacl.box.keyPair();
+  const publicKey = util.encodeBase64(keys.publicKey);
+  const m = await api(cloud, 'POST', '/v1/register', { token, body: { kind: 'phone', name: phoneName, publicKey } });
+  return { cloud, session: token, user, me: m.machineId, machine: m.token, publicKey, secretKey: util.encodeBase64(keys.secretKey) };
 }
+
+// signing out takes this phone off the account's devices, so no computer accepts it any more
+export async function signOut(acc) {
+  await api(acc.cloud, 'DELETE', `/v1/machines/${acc.me}`, { token: acc.session }).catch(() => {});
+  await api(acc.cloud, 'POST', '/v1/auth/logout', { body: {}, token: acc.session }).catch(() => {});
+}
+
+export const computers = async (acc) => (await api(acc.cloud, 'GET', '/v1/machines', { token: acc.session })).machines.filter((m) => m.kind === 'computer');
 
 const mid = () => util.encodeBase64(nacl.randomBytes(12));
 
-export function seal(key, msg) {
+export function seal(acc, theirKey, msg) {
   const n = nacl.randomBytes(24);
   const body = util.decodeUTF8(JSON.stringify({ ...msg, ts: Date.now(), mid: mid() }));
-  return { type: 'box', n: util.encodeBase64(n), c: util.encodeBase64(nacl.secretbox(body, n, util.decodeBase64(key))) };
+  return { type: 'box', n: util.encodeBase64(n), c: util.encodeBase64(nacl.box(body, n, util.decodeBase64(theirKey), util.decodeBase64(acc.secretKey))) };
 }
 
-export function unseal(key, item) {
+export function unseal(acc, theirKey, item) {
   if (item?.type !== 'box') return null;
   try {
-    const m = nacl.secretbox.open(util.decodeBase64(item.c), util.decodeBase64(item.n), util.decodeBase64(key));
+    const m = nacl.box.open(util.decodeBase64(item.c), util.decodeBase64(item.n), util.decodeBase64(theirKey), util.decodeBase64(acc.secretKey));
     return m ? JSON.parse(util.encodeUTF8(m)) : null;
   } catch { return null; }
 }
 
-// one paired computer: send sealed messages, poll for the ones it sent (only from it, only ones that open)
-export function connect(link) {
+// one computer of the account: send sealed messages, poll for the ones it sent (only from it, only ones that open)
+export function connect(acc, computer) {
   return {
-    send: (msg) => call(link.relay, '/v1/send', { to: link.peer, pair: link.pair, items: [seal(link.key, msg)] }, link.token),
+    send: (msg) => api(acc.cloud, 'POST', '/v1/send', { token: acc.machine, body: { to: computer.id, items: [seal(acc, computer.publicKey, msg)] } }),
     async poll() {
-      const { items } = await call(link.relay, '/v1/poll', {}, link.token);
-      return items.filter((it) => it.from === link.peer).map((it) => unseal(link.key, it)).filter(Boolean);
+      const { items } = await api(acc.cloud, 'POST', '/v1/poll', { token: acc.machine, body: {} });
+      return items.filter((it) => it.from === computer.id).map((it) => unseal(acc, computer.publicKey, it)).filter(Boolean);
     },
   };
 }

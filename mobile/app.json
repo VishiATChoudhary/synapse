@@ -20,7 +20,10 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "package": "dev.synapse.mobile"
+      "package": "dev.synapse.mobile",
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -42,15 +45,6 @@
             "image": "./assets/splash-icon-dark.png"
           }
         }
-      ],
-      [
-        "expo-camera",
-        {
-          "cameraPermission": "Synapse uses the camera to scan the pairing code shown by Synapse on your computer.",
-          "microphonePermission": false,
-          "recordAudioAndroid": false,
-          "barcodeScannerEnabled": true
-        }
       ]
     ],
     "scheme": "synapse",
@@ -64,9 +58,9 @@
         }
       },
       "eas": {
-        "projectId": "4ebd962d-9e66-4984-848f-9e90aca8eeb6"
+        "projectId": "d4b406ee-75e9-4785-9904-63d2aba350bd"
       }
     },
-    "owner": "vishi2"
+    "owner": "vishi2s-team"
   }
 }

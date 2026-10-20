@@ -2035,42 +2035,48 @@ async function openAccount() {
   });
 }
 
-// ---- phone (in settings): pair the Synapse phone app with a QR code, see and remove paired phones
+// ---- phone (in settings): the Synapse phone app, signed in to the same account, asks once to use this Mac
 
-let phoneBox = null;
+let phoneBox = null, phoneDraws = 0;
 async function drawPhones(box) {
   phoneBox = box;
+  const draw = ++phoneDraws;
+  let info = { signedIn: false, list: [] }, failed = null;
+  try { info = await synapse.phone.devices(); } catch (e) { failed = e; }
+  if (draw !== phoneDraws) return; // a newer draw is on its way
   box.replaceChildren();
-  let list = [];
-  try { list = await synapse.phone.devices(); } catch (e) { box.append(el('div', 'hint err', e.message)); }
-  for (const d of list) {
+  if (failed) box.append(el('div', 'hint err', failed.message));
+  if (!info.signedIn) {
+    const row = el('div', 'opt set'), b = el('button', 'btn', 'sign in');
+    row.append(el('span', 'k', 'not signed in'), el('span', 'c', 'sign in here and in the Synapse phone app with the same account to see, start and message your agents from your phone'), b);
+    b.onclick = () => { $('#modal').hidden = true; showLogin(); };
+    return box.append(row);
+  }
+  for (const d of info.list) {
     const row = el('div', 'person');
-    const seen = d.seen ? `seen ${new Date(d.seen).toLocaleString()}` : 'not seen yet';
-    row.append(el('span', 'k', d.name), el('span', 'c', `paired ${new Date(d.pairedAt).toLocaleDateString()} · ${seen}`));
-    const x = el('button', 'tab-close', '×');
-    x.title = `unpair ${d.name}`;
-    x.onclick = async () => { try { await synapse.phone.remove(d.id); await drawPhones(box); toast(`${d.name} unpaired`); } catch (e) { toast(e.message, true); } };
-    row.append(x);
+    const when = d.state === 'asking' ? 'wants to use this Mac'
+      : `allowed ${new Date(d.at).toLocaleDateString()} · ${d.seen ? `seen ${new Date(d.seen).toLocaleString()}` : 'not seen yet'}`;
+    row.append(el('span', 'k', d.name), el('span', 'c', when));
+    if (d.state === 'asking') {
+      const yes = el('button', 'btn', 'allow'), no = el('button', 'btn', 'deny');
+      yes.onclick = async () => { try { await synapse.phone.allow(d.id); await drawPhones(box); toast(`${d.name} can use this Mac now`); } catch (e) { toast(e.message, true); } };
+      no.onclick = async () => { try { await synapse.phone.remove(d.id); await drawPhones(box); toast(`${d.name} was turned away and signed out`); } catch (e) { toast(e.message, true); } };
+      row.append(yes, no);
+    } else {
+      const x = el('button', 'tab-close', '×');
+      x.title = `remove ${d.name}: it is signed out and has to ask again`;
+      x.onclick = async () => { try { await synapse.phone.remove(d.id); await drawPhones(box); toast(`${d.name} removed`); } catch (e) { toast(e.message, true); } };
+      row.append(x);
+    }
     box.append(row);
   }
-  const row = el('div', 'opt set'), b = el('button', 'btn', 'pair a phone');
-  row.append(el('span', 'k', list.length ? 'another phone' : 'not paired'), el('span', 'c', 'see your agents, start new ones and message them from the Synapse phone app'), b);
-  b.onclick = async () => {
-    b.disabled = true;
-    try {
-      const { svg, exp } = await synapse.phone.pair();
-      const qr = el('div', 'phone-qr');
-      qr.innerHTML = svg; // our own QR code, drawn by the main process
-      const hint = el('div', 'hint', `in the Synapse app on your phone: pair with computer, then scan this · works once, until ${new Date(exp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
-      row.replaceWith(qr, hint);
-    } catch (e) { toast(e.message, true); b.disabled = false; }
-  };
-  box.append(row);
+  if (!info.list.length) box.append(el('div', 'hint', `sign in to the Synapse phone app as ${ACC.user?.email || 'this account'}: the phone shows up here to be allowed`));
 }
-synapse.phone.onChanged(({ paired }) => {
-  if (paired) toast(`${paired} is paired: it can see and start agents here`);
+synapse.phone.onChanged(({ asking }) => {
+  if (asking) toast(`${asking} wants to use this Mac · allow it in settings`);
   if (phoneBox?.isConnected) drawPhones(phoneBox);
 });
+synapse.phone.onShow(() => openSettings());
 // the phone asked for a new agent: open it like ⌃1 would, in the workspace it picked
 synapse.phone.onSpawn(({ req, cwd, kind }) => {
   const wt = worktreeOf(cwd);

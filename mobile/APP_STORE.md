@@ -21,8 +21,8 @@ Android ships through Google Play or a plain APK, with no Apple involvement.
 
 | Risk | Guideline | What the app does |
 | --- | --- | --- |
-| Reviewer has no Synapse computer to pair with | 2.1, 4.2.3 | A full demo mode with sample agents that works with no laptop. Mention it in the review notes. |
-| Login rules and account deletion | 4.8, 5.1.1(v) | No login on the phone. You pair by scanning a QR code shown by the desktop app, and the account stays on the computer. |
+| Reviewer has no Synapse computer | 2.1, 4.2.3 | A demo account for the review notes, plus "look around with sample agents" on the sign-in screen, which works with no computer. |
+| Login rules and account deletion | 4.8, 5.1.1(v) | Email and password only, no Google, GitHub or X buttons in the iOS app (those would require Sign in with Apple too). Accounts made in the app can be deleted in the app: settings, delete account. |
 | Prompts going to AI providers | 5.1.2(i) | A consent sheet before the first prompt names where data goes (your computer, then Anthropic, OpenAI or Google). It can be withdrawn in settings. |
 | Privacy policy reachable in the app | 5.1.1(i) | Settings, then "privacy policy" (https://app.heysynapse.dev/privacy). |
 | Downloading code | 2.5.2 | The phone only shows data and sends text. It never runs code or HTML from the computer. Keep agent output rendered as text, not in a WebView. |
@@ -30,7 +30,6 @@ Android ships through Google Play or a plain APK, with no Apple involvement.
 | User-generated content between people | 1.2 | No multiplayer, friends or sharing in the iOS build. If added, it needs report and block. |
 | Payments | 3.1.1, 3.1.3(f) | The app is free. No prices, plans, upgrade buttons or links to pay anywhere in it. |
 | Encryption export questions | export compliance | `ITSAppUsesNonExemptEncryption: false` in app.json (TLS only). |
-| Camera permission | 5.1.1(ii) | Asked only on the pair screen, after explaining why, with the purpose string "Synapse uses the camera to scan the pairing code…". No microphone permission. Pasting the link works without the camera. |
 | Push permission | 5.1.2 | Ask only when the user turns on notifications. The app must work fully without them. |
 | Name clash | 2.3.7 | "Synapse" is taken on the App Store. Use the store name "Synapse Agents" and keep "Synapse" as the home-screen name. |
 | Incomplete app | 2.1 | No placeholder screens or "coming soon" in a submitted build. |
@@ -61,6 +60,8 @@ The build asks for your Apple ID once, then reuses the credentials. Add yourself
 
 > Synapse Agents is the companion app for Synapse, a free desktop app that runs coding agents (Claude Code, Codex, Gemini CLI) on the user's own computer. The phone shows those agents, starts new ones and sends them messages. All work runs on the user's computer.
 >
-> To review without a computer: open the app and use the built-in demo (sample agents, open any agent, send a message, answer the "needs you" card, start a new agent with "+ new agent"). Nothing leaves the device in demo mode.
+> To review without a computer: on the sign-in screen tap "look around with sample agents" (open any agent, send a message, answer the "needs you" card, start a new agent with "+ new agent"). Nothing leaves the device there.
 >
-> There is no account or login in the app. Pairing with a computer is done by scanning a QR code shown in the desktop app.
+> Sign in with the demo account below, or tap "look around with sample agents" on the sign-in screen. A real computer appears once Synapse on it is signed in to the same account and allows the phone.
+>
+> Demo account: (fill in before submitting)

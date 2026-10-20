@@ -107,6 +107,11 @@ const MIGRATIONS = [
      item TEXT NOT NULL
    );
    CREATE INDEX mailbox_machine ON mailbox(machine_id, seq);`,
+  // the phone app: a signed-in machine says what it is (a computer running Synapse, or a phone) and the
+  // public key the account's other devices seal messages to it with
+  `ALTER TABLE machines ADD COLUMN kind TEXT;
+   ALTER TABLE machines ADD COLUMN name TEXT;
+   ALTER TABLE machines ADD COLUMN public_key TEXT;`,
 ];
 
 db.exec('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)');

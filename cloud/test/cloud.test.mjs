@@ -470,3 +470,36 @@ test('the database survives a restart', async () => {
     assert.equal((await r.json()).user.handle, 'kim');
   } finally { p2.kill(); }
 });
+
+test('an account\'s computer and phone find each other and talk without an invite; nobody else can', async () => {
+  const me = (await signup('pho@example.com', 'Pho Owner')).json.token;
+  const other = (await signup('stranger@example.com', 'Stranger')).json.token;
+  const key = (c) => Buffer.alloc(32, c).toString('base64');
+  const reg = (token, kind, name, publicKey) => call('/v1/register', { token, body: { kind, name, publicKey } });
+
+  const mac = (await reg(me, 'computer', 'Mac', key(1))).json;
+  const phone = (await reg(me, 'phone', 'iPhone', key(2))).json;
+  const theirs = (await reg(other, 'phone', 'Their phone', key(3))).json;
+  const plain = (await call('/v1/register', { token: me, body: {} })).json; // multiplayer's identity: no kind
+  assert.equal((await reg(me, 'phone', 'Bad', 'nope')).status, 400, 'keys are checked');
+
+  const list = (await call('/v1/machines', { token: me })).json.machines;
+  assert.deepEqual(list.map((m) => m.kind).sort(), ['computer', 'phone']);
+  assert.equal(list.find((m) => m.kind === 'computer').publicKey, key(1));
+  assert.ok(!list.some((m) => m.id === theirs.machineId || m.id === plain.machineId));
+  assert.equal((await call('/v1/machines')).status, 401);
+
+  const send = (from, to) => call('/v1/send', { token: from.token, body: { to: to.machineId, items: [{ type: 'box', n: 'n', c: 'c' }] } });
+  assert.equal((await send(phone, mac)).status, 200, 'same account, no pair token');
+  const got = (await call('/v1/poll', { token: mac.token, body: {} })).json.items;
+  assert.equal(got.length, 1);
+  assert.equal(got[0].from, phone.machineId);
+  assert.equal((await send(theirs, mac)).status, 403, 'another account\'s phone cannot');
+  assert.equal((await send(plain, mac)).status, 403, 'a machine that is not a device of the account cannot');
+
+  // the computer removes the phone (or the phone signs out): it is gone and cannot send any more
+  assert.equal((await call(`/v1/machines/${phone.machineId}`, { token: other, method: 'DELETE' })).status, 404, 'only the owner removes it');
+  assert.equal((await call(`/v1/machines/${phone.machineId}`, { token: me, method: 'DELETE' })).status, 200);
+  assert.equal((await send(phone, mac)).status, 403);
+  assert.equal((await call('/v1/machines', { token: me })).json.machines.length, 1);
+});

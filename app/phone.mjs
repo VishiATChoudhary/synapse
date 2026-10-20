@@ -1,62 +1,91 @@
-// Phone remote: the Synapse phone app pairs with this machine by scanning a QR code, then sees its agents,
+// Phone remote: the Synapse phone app, signed in to the same Synapse account, sees this machine's agents,
 // starts new ones and sends them messages while the app is open here.
 //
-// It rides on the relay's mailboxes (relay/relay.mjs) under an identity of its own, apart from multiplayer's,
-// so neither side collects the other's items. Pairing is a one-off relay invite shown as a QR code together
-// with a fresh 32-byte key. The phone joins the invite and from then on every item either way is sealed with
-// that key (NaCl secretbox), so the relay only ever carries noise and nobody without the code can steer
-// agents here. A code is good for one phone and ten minutes. Messages carry a time and an id, and old or
-// repeated ones are dropped, so a replayed item does nothing.
+// Both ends are devices of the account on Synapse Cloud: this machine registers a mailbox of its own there
+// as a "computer" (apart from multiplayer's identity, so neither collects the other's items), the phone as
+// a "phone", each with a public key. The cloud lets an account's devices drop items into each other's
+// mailbox. Every item is sealed end to end (NaCl box, X25519) to the receiver's key, so the cloud only
+// carries ciphertext. Messages carry a time and an id; old or repeated ones are dropped.
 //
-// The phone sees agents running anywhere on this machine; it can only type into the ones in this app's
-// terminals. It never gets to run anything else: new agents start in an added workspace, as a known kind.
+// Signing in is not enough to steer this machine: the first time a phone turns up, Synapse asks here
+// whether to allow it, and only allowed phones get anything but "waiting". The phone sees agents running
+// anywhere on this machine; it can only type into the ones in this app's terminals, and new agents start
+// in an added workspace, as a known kind.
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import nacl from 'tweetnacl';
-import QRCode from 'qrcode';
 import { DATA, readJSON, writeJSON, listAgents, readAgentMessages, projectOf, colorOf } from '../lib.mjs';
-import { DEFAULT_RELAY } from '../remote.mjs';
 
 const FILE = path.join(DATA, 'phones.json');
-const PAIR_TTL = 10 * 60_000;
 const ACTIVE = 2 * 60_000;           // a phone that checked in this recently gets live updates
-const FAST = 1500, SLOW = 10_000;    // poll while a phone is around or a code is showing, else now and then
+const FAST = 1500, SLOW = 10_000;    // poll while a phone is around, else now and then
 const MAX_AGE = 5 * 60_000;          // older messages are replays, or a phone with a very wrong clock
 const MSGS = 40, MSG_CHARS = 4000, TEXT_CHARS = 20_000;
 
 const b64 = (u) => Buffer.from(u).toString('base64');
 const unb64 = (s) => new Uint8Array(Buffer.from(String(s || ''), 'base64'));
 const clean = (s, n) => String(s ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, n);
+const hostName = () => os.hostname().replace(/\.local$/, '');
 
-const load = () => ({ relay: process.env.SYNAPSE_RELAY || DEFAULT_RELAY, machineId: null, token: null, devices: {}, ...readJSON(FILE, {}) });
+const load = () => ({ cloud: null, user: null, machineId: null, token: null, publicKey: null, secretKey: null, allowed: {}, asking: {}, ...readJSON(FILE, {}) });
 const save = (s) => { writeJSON(FILE, s); try { fs.chmodSync(FILE, 0o600); } catch {} };
 
-async function call(s, route, body, auth = true) {
-  const r = await fetch(s.relay + route, {
-    method: 'POST', signal: AbortSignal.timeout(10_000),
-    headers: { 'content-type': 'application/json', ...(auth ? { authorization: `Bearer ${s.token}` } : {}) },
-    body: JSON.stringify(body || {}),
+let account = null; // ../account.mjs, loaded on first use like the app does
+const acct = async () => (account ||= await import('../account.mjs'));
+
+async function call(url, route, { body, bearer, method = 'POST' } = {}) {
+  const r = await fetch(url + route, {
+    method, signal: AbortSignal.timeout(10_000),
+    headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(bearer ? { authorization: `Bearer ${bearer}` } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
   });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error(j.error || `relay answered ${r.status}`), { status: r.status });
+  if (!r.ok) throw Object.assign(new Error(j.error || `Synapse Cloud answered ${r.status}`), { status: r.status });
   return j;
 }
 
-function seal(key, msg) {
+const seal = (s, theirKey, msg) => {
   const n = nacl.randomBytes(24);
-  return { type: 'box', n: b64(n), c: b64(nacl.secretbox(Buffer.from(JSON.stringify(msg)), n, unb64(key))) };
-}
-function unseal(key, item) {
-  const m = nacl.secretbox.open(unb64(item.c), unb64(item.n), unb64(key));
+  return { type: 'box', n: b64(n), c: b64(nacl.box(Buffer.from(JSON.stringify(msg)), n, unb64(theirKey), unb64(s.secretKey))) };
+};
+function unseal(s, theirKey, item) {
+  const m = nacl.box.open(unb64(item.c), unb64(item.n), unb64(theirKey), unb64(s.secretKey));
   if (!m) return null;
   try { return JSON.parse(Buffer.from(m).toString('utf8')); } catch { return null; }
+}
+
+// ---------------------------------------------------------------- identity
+
+// this machine as a "computer" of the signed-in account; a new account (or a new cloud) starts over
+async function identity() {
+  const { account: signedIn, cloudUrl } = await acct();
+  const a = signedIn();
+  if (!a) return null;
+  let s = load();
+  const cloud = cloudUrl();
+  if (s.user !== a.user?.id || s.cloud !== cloud) s = { ...s, cloud, user: a.user?.id, machineId: null, token: null, allowed: {}, asking: {} };
+  if (!s.secretKey) { const k = nacl.box.keyPair(); Object.assign(s, { publicKey: b64(k.publicKey), secretKey: b64(k.secretKey) }); }
+  if (!s.token) {
+    const r = await call(cloud, '/v1/register', { bearer: a.token, body: { kind: 'computer', name: hostName(), publicKey: s.publicKey } });
+    Object.assign(s, { machineId: r.machineId, token: r.token });
+    save(s);
+  }
+  return { s, session: a.token };
+}
+
+// the account's phones, with their keys; asked again when an unknown one writes
+let phones = { at: 0, list: [] };
+async function phonesOf(id, force = false) {
+  if (force || Date.now() - phones.at > 30_000) {
+    try { phones = { at: Date.now(), list: (await call(id.s.cloud, '/v1/machines', { bearer: id.session, method: 'GET' })).machines.filter((m) => m.kind === 'phone') }; } catch {}
+  }
+  return phones.list;
 }
 
 // ---------------------------------------------------------------- the bridge
 
 let host = null;           // what the app lends us: projects, terminals, spawning
-let pending = null;        // the code on screen: { key, exp }
 let timer = null;
 const live = new Map();    // phone id -> { watch, sent: { state, messages } } (memory only)
 const seen = new Map();    // message id -> time, against replays
@@ -66,87 +95,52 @@ export function start(h) {
   host = h;
   schedule(1000);
 }
-
-function schedule(ms) { clearTimeout(timer); timer = setTimeout(tick, ms); }
-
-async function identity(s) {
-  if (s.token) return s;
-  const r = await call(s, '/v1/register', { name: os.hostname() }, false);
-  Object.assign(s, { machineId: r.machineId, token: r.token, devices: {} });
-  save(s);
-  return s;
-}
-
-const hostName = () => os.hostname().replace(/\.local$/, '');
-
-export async function pair() {
-  const s = await identity(load());
-  const { code } = await call(s, '/v1/invite', { name: hostName() });
-  const key = nacl.randomBytes(32);
-  pending = { key: b64(key), exp: Date.now() + PAIR_TTL };
-  const url = `synapse://pair?${new URLSearchParams({ r: s.relay, c: code, k: Buffer.from(key).toString('base64url'), n: hostName() })}`;
-  schedule(FAST);
-  return { url, svg: await QRCode.toString(url, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }), exp: pending.exp };
-}
-
-export function cancelPair() { pending = null; }
-
-export function devices() {
-  return Object.entries(load().devices).map(([id, d]) => ({ id, name: d.name, pairedAt: d.pairedAt, seen: d.seen || null }));
-}
-
-export function remove(id) {
-  const s = load();
-  delete s.devices[id];
-  live.delete(id);
-  save(s);
-}
+const schedule = (ms) => { clearTimeout(timer); timer = setTimeout(tick, ms); };
+export const wake = () => schedule(200); // signed in or out, a phone allowed: look again now
 
 async function tick() {
-  let s = load();
-  const phones = Object.keys(s.devices).length;
-  if (pending && pending.exp < Date.now()) pending = null;
-  if (!s.token || (!pending && !phones)) return; // nothing paired: pair() starts the loop again
+  let id = null, recent = false;
   try {
-    const { items } = await call(s, '/v1/poll', {});
-    for (const it of items) await receive(s, it);
-    await push(load());
+    id = await identity();
+    if (id) {
+      const { items } = await call(id.s.cloud, '/v1/poll', { bearer: id.s.token, body: {} });
+      for (const it of items) await receive(id, it);
+      await push(id);
+      recent = [...live.keys()].length > 0 || Object.keys(load().asking).length > 0;
+    }
   } catch (e) {
-    if (e.status === 401) { s.token = null; save(s); } // the relay forgot us: phones have to pair again
+    if (e.status === 401 && id) { const s = load(); s.token = null; save(s); } // the cloud forgot this mailbox: register again
   }
-  s = load();
-  const recent = Object.values(s.devices).some((d) => Date.now() - (d.seen || 0) < ACTIVE);
-  schedule(pending || recent ? FAST : SLOW);
+  schedule(recent ? FAST : SLOW);
 }
 
-async function receive(s, it) {
-  if (it.type === 'paired') {
-    if (!pending || pending.exp < Date.now()) return; // a code nobody is showing any more
-    s.devices[it.from] = { name: clean(it.name, 40) || 'phone', key: pending.key, pair: it.pair, pairedAt: Date.now(), seen: Date.now() };
-    pending = null;
-    save(s);
-    host.changed({ paired: s.devices[it.from].name });
-    return;
-  }
-  const d = s.devices[it.from];
-  if (it.type !== 'box' || !d) return;
-  const m = unseal(d.key, it);
+async function receive(id, it) {
+  if (it.type !== 'box' || !it.from) return;
+  let phone = (await phonesOf(id)).find((p) => p.id === it.from);
+  if (!phone) phone = (await phonesOf(id, true)).find((p) => p.id === it.from);
+  if (!phone?.publicKey) return; // not a phone of this account
+  const m = unseal(id.s, phone.publicKey, it);
   if (!m || typeof m.t !== 'string' || !m.mid || seen.has(m.mid) || Math.abs(Date.now() - Number(m.ts)) > MAX_AGE) return;
   seen.set(m.mid, Date.now());
   for (const [k, t] of seen) if (Date.now() - t > 2 * MAX_AGE) seen.delete(k);
-  d.seen = Date.now();
+  const s = load();
+  if (!s.allowed[phone.id]) {
+    if (!s.asking[phone.id]) { s.asking[phone.id] = { name: clean(phone.name, 40) || 'phone', at: Date.now() }; save(s); host.changed({ asking: s.asking[phone.id].name }); }
+    if (m.t === 'hello' || m.t === 'ping') await send(id, phone, { t: 'waiting', computer: hostName() });
+    return;
+  }
+  s.allowed[phone.id].seen = Date.now();
   save(s);
-  try { await handle(s, it.from, m); }
-  catch (e) { await send(s, it.from, { t: 'error', req: m.req, error: e.message }); }
+  try { await handle(id, phone, m); }
+  catch (e) { await send(id, phone, { t: 'error', req: m.req, error: e.message }); }
 }
 
-async function handle(s, phone, m) {
-  const l = live.get(phone) || { watch: null, sent: {} };
-  live.set(phone, l);
-  if (m.t === 'hello') { l.sent = {}; return send(s, phone, { t: 'hello', name: hostName() }); }
+async function handle(id, phone, m) {
+  const l = live.get(phone.id) || { watch: null, sent: {} };
+  live.set(phone.id, l);
+  if (m.t === 'hello') { l.sent = {}; return send(id, phone, { t: 'hello', computer: hostName() }); }
   if (m.t === 'watch') { l.watch = typeof m.id === 'string' ? m.id : null; l.sent.messages = null; return; }
-  if (m.t === 'bye') { live.delete(phone); return; }
-  if (m.t === 'unpair') { remove(phone); host.changed({}); return; }
+  if (m.t === 'bye') { live.delete(phone.id); return; }
   if (m.t === 'send' || m.t === 'stop') {
     const a = listAgents().find((x) => x.id === m.id && !x.remote);
     if (!a) throw new Error('that agent is no longer running');
@@ -162,7 +156,7 @@ async function handle(s, phone, m) {
     if (!host.projects().some((p) => p.worktrees.some((w) => w.path === cwd))) throw new Error('that folder is not a workspace in Synapse');
     if (!host.kinds().includes(kind)) throw new Error(`unknown agent ${kind}`);
     const req = clean(m.req, 40) || String(Date.now());
-    spawns.set(req, { phone, at: Date.now(), pty: null });
+    spawns.set(req, { phone: phone.id, at: Date.now(), pty: null });
     host.spawn({ req, cwd, kind, prompt: String(m.prompt || '').slice(0, TEXT_CHARS) });
   }
 }
@@ -173,11 +167,51 @@ export function spawned(req, pty) {
   if (r) r.pty = pty;
 }
 
-function send(s, phone, msg) {
-  const d = s.devices[phone];
-  if (!d) return;
-  const sealed = seal(d.key, { ...msg, ts: Date.now(), mid: b64(nacl.randomBytes(12)) });
-  return call(s, '/v1/send', { to: phone, pair: d.pair, items: [sealed] });
+function send(id, phone, msg) {
+  const sealed = seal(id.s, phone.publicKey, { ...msg, ts: Date.now(), mid: b64(nacl.randomBytes(12)) });
+  return call(id.s.cloud, '/v1/send', { bearer: id.s.token, body: { to: phone.id, items: [sealed] } });
+}
+
+// ---------------------------------------------------------------- settings: which phones may steer this machine
+
+export async function devices() {
+  const id = await identity().catch(() => null);
+  const s = load();
+  const signedIn = !!(await acct()).account();
+  // a phone that signed out (or was removed elsewhere) is no longer a device of the account: forget it
+  if (id) {
+    const known = new Set((await phonesOf(id, true)).map((p) => p.id));
+    let pruned = false;
+    for (const k of ['asking', 'allowed']) for (const p of Object.keys(s[k])) if (!known.has(p)) { delete s[k][p]; pruned = true; }
+    if (pruned) save(s);
+  }
+  const list = [
+    ...Object.entries(s.asking).map(([id, d]) => ({ id, name: d.name, state: 'asking', at: d.at })),
+    ...Object.entries(s.allowed).map(([id, d]) => ({ id, name: d.name, state: 'allowed', at: d.at, seen: d.seen || null })),
+  ];
+  return { signedIn, list };
+}
+
+export function allow(phoneId) {
+  const s = load();
+  const d = s.asking[phoneId];
+  if (!d) throw new Error('that phone is not asking any more');
+  s.allowed[phoneId] = { name: d.name, at: Date.now() };
+  delete s.asking[phoneId];
+  save(s);
+  wake();
+}
+
+// deny or remove: the phone loses this machine, and is signed out of the account's devices
+export async function remove(phoneId) {
+  const s = load();
+  delete s.asking[phoneId];
+  delete s.allowed[phoneId];
+  save(s);
+  live.delete(phoneId);
+  const id = await identity().catch(() => null);
+  if (id) await call(id.s.cloud, `/v1/machines/${encodeURIComponent(phoneId)}`, { bearer: id.session, method: 'DELETE' }).catch(() => {});
+  phones.at = 0;
 }
 
 // ---------------------------------------------------------------- what the phone sees
@@ -215,26 +249,29 @@ function snapshot() {
   return { projects, agents, kinds: host.kinds() };
 }
 
-async function push(s) {
-  const now = Date.now();
-  const phones = Object.keys(s.devices).filter((id) => now - (s.devices[id].seen || 0) < ACTIVE && live.has(id));
-  if (!phones.length) return;
+async function push(id) {
+  const s = load(), now = Date.now();
+  const active = Object.keys(s.allowed).filter((p) => now - (s.allowed[p].seen || 0) < ACTIVE && live.has(p));
+  if (!active.length) return;
+  const list = await phonesOf(id);
   const snap = snapshot();
   const state = JSON.stringify(snap);
   // a terminal the phone asked for has its agent now: hand over the id so the phone can open the chat
   for (const [req, r] of spawns) {
     if (now - r.at > 60_000) { spawns.delete(req); continue; }
     const a = r.pty && listAgents().find((x) => host.ptyOf(x.pid) === r.pty);
-    if (a) { spawns.delete(req); await send(s, r.phone, { t: 'spawned', req, id: a.id }); }
+    const phone = list.find((p) => p.id === r.phone);
+    if (a && phone) { spawns.delete(req); await send(id, phone, { t: 'spawned', req, id: a.id }); }
   }
-  for (const id of phones) {
-    const l = live.get(id);
-    if (l.sent.state !== state) { await send(s, id, { t: 'state', ...snap }); l.sent.state = state; }
+  for (const pid of active) {
+    const phone = list.find((p) => p.id === pid), l = live.get(pid);
+    if (!phone) continue;
+    if (l.sent.state !== state) { await send(id, phone, { t: 'state', ...snap }); l.sent.state = state; }
     if (l.watch) {
       const a = listAgents().find((x) => x.id === l.watch);
       const messages = a ? messagesOf(a) : [];
       const body = JSON.stringify(messages);
-      if (l.sent.messages !== body) { await send(s, id, { t: 'messages', id: l.watch, messages }); l.sent.messages = body; }
+      if (l.sent.messages !== body) { await send(id, phone, { t: 'messages', id: l.watch, messages }); l.sent.messages = body; }
     }
   }
 }
