@@ -17,7 +17,8 @@
     "app:build": "node scripts/build-app.mjs",
     "app:install": "node scripts/build-app.mjs --ad-hoc && rm -rf /Applications/Synapse.app && cp -R dist/mac-arm64/Synapse.app /Applications/ && open /Applications/Synapse.app",
     "test": "node --test test/*.test.mjs",
-    "release": "vault exec SYNAPSE_UPDATE_KEY -- node scripts/release.mjs"
+    "release": "vault exec SYNAPSE_UPDATE_KEY -- node scripts/release.mjs",
+    "mobile": "npm --prefix mobile start"
   },
   "keywords": [
     "claude-code",

@@ -177,7 +177,7 @@ function sforkFilter(get) {
   };
 }
 
-async function newSlot(worktreePath, kind, split = null) {
+async function newSlot(worktreePath, kind, split = null, phoneReq = null) {
   closeCanvas();
   const prof = M.profiles[kind] || { command: kind };
   const s = { id: nextId++, worktree: worktreePath, sessions: [], path: [] };
@@ -186,7 +186,7 @@ async function newSlot(worktreePath, kind, split = null) {
   M.focused = s.id;
   const home = worktreeOf(worktreePath); if (home) M.open.add(home.project.key); // a new session unfolds its project, once
   try {
-    await makeSession(s, { kind, title: kind, spawn: (cols, rows) => synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows }) });
+    await makeSession(s, { kind, title: kind, spawn: (cols, rows) => synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows, phoneReq }) });
     if (split && slot(split.target)) {
       const insert = (node) => typeof node === 'number'
         ? node === split.target ? { direction: split.direction, first: node, second: s.id } : node
@@ -1493,6 +1493,9 @@ async function openSettings() {
     synapse.update.get().then(showUpd, () => {});
     updBtn.onclick = async () => { updBtn.disabled = true; updVal.textContent = 'checking…'; try { showUpd(await synapse.update.check()); } catch (e) { toast(e.message, true); } updBtn.disabled = false; };
     body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow, loginRow, updRow);
+    const phones = el('div', 'phones');
+    body.append(el('div', 'sub', 'phone'), phones);
+    drawPhones(phones);
     const people = el('div', 'people');
     body.append(el('div', 'sub', 'trusted people'), people);
     drawPeople(people);
@@ -2127,6 +2130,55 @@ async function openAccount() {
     body.tabIndex = 0; body.onkeydown = (e) => { if (e.key === 'Escape') close(); };
   });
 }
+
+// ---- phone (in settings): the Synapse phone app, signed in to the same account, asks once to use this Mac
+
+let phoneBox = null, phoneDraws = 0;
+async function drawPhones(box) {
+  phoneBox = box;
+  const draw = ++phoneDraws;
+  let info = { signedIn: false, list: [] }, failed = null;
+  try { info = await synapse.phone.devices(); } catch (e) { failed = e; }
+  if (draw !== phoneDraws) return; // a newer draw is on its way
+  box.replaceChildren();
+  if (failed) box.append(el('div', 'hint err', failed.message));
+  if (!info.signedIn) {
+    const row = el('div', 'opt set'), b = el('button', 'btn', 'sign in');
+    row.append(el('span', 'k', 'not signed in'), el('span', 'c', 'sign in here and in the Synapse phone app with the same account to see, start and message your agents from your phone'), b);
+    b.onclick = () => { $('#modal').hidden = true; showLogin(); };
+    return box.append(row);
+  }
+  for (const d of info.list) {
+    const row = el('div', 'person');
+    const when = d.state === 'asking' ? 'wants to use this Mac'
+      : `allowed ${new Date(d.at).toLocaleDateString()} · ${d.seen ? `seen ${new Date(d.seen).toLocaleString()}` : 'not seen yet'}`;
+    row.append(el('span', 'k', d.name), el('span', 'c', when));
+    if (d.state === 'asking') {
+      const yes = el('button', 'btn', 'allow'), no = el('button', 'btn', 'deny');
+      yes.onclick = async () => { try { await synapse.phone.allow(d.id); await drawPhones(box); toast(`${d.name} can use this Mac now`); } catch (e) { toast(e.message, true); } };
+      no.onclick = async () => { try { await synapse.phone.remove(d.id); await drawPhones(box); toast(`${d.name} was turned away and signed out`); } catch (e) { toast(e.message, true); } };
+      row.append(yes, no);
+    } else {
+      const x = el('button', 'tab-close', '×');
+      x.title = `remove ${d.name}: it is signed out and has to ask again`;
+      x.onclick = async () => { try { await synapse.phone.remove(d.id); await drawPhones(box); toast(`${d.name} removed`); } catch (e) { toast(e.message, true); } };
+      row.append(x);
+    }
+    box.append(row);
+  }
+  if (!info.list.length) box.append(el('div', 'hint', `sign in to the Synapse phone app as ${ACC.user?.email || 'this account'}: the phone shows up here to be allowed`));
+}
+synapse.phone.onChanged(({ asking }) => {
+  if (asking) toast(`${asking} wants to use this Mac · allow it in settings`);
+  if (phoneBox?.isConnected) drawPhones(phoneBox);
+});
+synapse.phone.onShow(() => openSettings());
+// the phone asked for a new agent: open it like ⌃1 would, in the workspace it picked
+synapse.phone.onSpawn(({ req, cwd, kind }) => {
+  const wt = worktreeOf(cwd);
+  if (wt) M.open.add(wt.project.key);
+  newSlot(cwd, kind, null, req);
+});
 
 // ---- trusted people (in settings)
 

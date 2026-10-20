@@ -15,13 +15,15 @@
     "test:tabs": "node tests/tabs.cjs",
     "test:drag": "node tests/drag.cjs",
     "rebuild": "electron-rebuild -f -w node-pty",
-    "test:updater": "node tests/updater.mjs"
+    "test:updater": "node tests/updater.mjs",
+    "test:phone": "node tests/phone.mjs && node tests/phone-ui.cjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.1",
