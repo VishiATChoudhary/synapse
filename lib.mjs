@@ -29,6 +29,7 @@ export const FILES = {
   remote: path.join(DATA, 'remote.json'),           // multiplayer: this machine's relay identity and its friends
   peerState: path.join(DATA, 'remote', 'state.json'), // the agents each friend's machine last reported
   account: path.join(DATA, 'account.json'),         // Synapse Cloud sign-in: { cloud, token, user }
+  offers: path.join(DATA, 'offers.json'),           // my agents I offered to friends, by request id, to link once they accept
   requests: path.join(DATA, 'requests.json'),       // synapse requests last fetched from the cloud
   talks: path.join(DATA, 'talks.json'),             // agent talk: conversations with friends' agents
 };

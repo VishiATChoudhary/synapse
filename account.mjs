@@ -130,6 +130,36 @@ async function incoming(id) {
   return r;
 }
 
+// Share one of my agents with a trusted person, from my side: an offer they accept by picking which of their
+// agents receives it. Once they do, the cloud tells this machine, which links the two (remote.mjs).
+export async function sendOffer({ to, agent, mode = 'sync', note } = {}) {
+  if (!agent?.id) throw new Error('which agent to share? open one first');
+  if (!to) throw new Error('who to share it with?');
+  const c = await remote.cloudMachine(cloudUrl(), account()?.token);
+  const { request } = await api('POST', '/v1/requests', { to, machineId: c.machineId, agent: agentBrief(agent), kind: 'offer', mode: mode === 'talk' ? 'talk' : 'sync', note });
+  // the agent may be closed by the time they accept: keep what linking needs (its folder gives its project)
+  writeJSON(FILES.offers, { ...readJSON(FILES.offers, {}), [request.id]: { id: agent.id, name: agent.name, kind: agent.kind, cwd: agent.cwd || null, at: Date.now() } });
+  await requests().catch(() => {});
+  return request;
+}
+
+// Someone offered me one of their agents: it goes to the agent of mine I pick (it reads the shared one).
+export async function acceptOffer(id, receiverId) {
+  const req = await incoming(id);
+  if (req.kind !== 'offer') throw new Error('that is a request for one of your agents; accept it with accept');
+  if (req.status !== 'pending') throw new Error(`this offer is already ${req.status}`);
+  const mine = localAgents();
+  const receiver = mine.find((a) => a.id === receiverId) || (receiverId && findAgent(mine, receiverId));
+  if (!receiver) throw new Error(`pick which of your agents gets it: ${mine.map((a) => a.name).join(', ') || '(no agents running)'}`);
+  const c = await remote.cloudMachine(cloudUrl(), account()?.token);
+  const out = await api('POST', `/v1/requests/${encodeURIComponent(req.id)}/accept`, { machineId: c.machineId, receiver: agentBrief(receiver) });
+  const m = out.peer?.machineId || req.fromMachine;
+  remote.addPeer(m, { name: out.peer?.name || req.from?.name || req.from?.handle || 'friend', pair: out.pair, handle: req.from?.handle });
+  logEvent({ type: 'offer-accepted', id: req.id, from: req.from?.name, agent: req.agent?.name, into: receiver.name });
+  await requests().catch(() => {});
+  return out.request || req;
+}
+
 // Which of my agents to share: the ones asked for, else the best match for the requester's hint.
 function pickAgents(req, ids) {
   const mine = localAgents();
@@ -153,6 +183,7 @@ function pickAgents(req, ids) {
 // accept makes are switched, never another share with the same friend.
 export async function accept(id, agentIds = [], { talk = true } = {}) {
   const req = await incoming(id);
+  if (req.kind === 'offer') return acceptOffer(id, agentIds[0]);
   if (req.status !== 'pending') throw new Error(`this request is already ${req.status}`);
   const chosen = pickAgents(req, agentIds);
   const c = await remote.cloudMachine(cloudUrl(), account()?.token);

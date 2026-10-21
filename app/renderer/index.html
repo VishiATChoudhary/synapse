@@ -33,7 +33,13 @@
       <button class="ghost sig" id="btn-fork" title="⇧⌘F">⑂ fork</button>
     </div>
   </header>
-  <nav class="launch" id="launch"></nav>
+  <div class="launchbar">
+    <nav class="launch" id="launch"></nav>
+    <div class="share-bar">
+      <button class="share-btn" id="btn-friends" title="your trusted people, and what you share with each" aria-haspopup="true"><span class="glyph" aria-hidden="true">◎</span>friends<span class="share-count" id="friends-count" hidden></span></button>
+      <button class="share-btn sig" id="btn-share" title="share the open agent with a friend"><span class="glyph" aria-hidden="true">↗</span>share</button>
+    </div>
+  </div>
   <section class="stage" id="stage">
     <div class="empty" id="empty">
       <div class="empty-title">Nothing<br>running</div>
@@ -63,6 +69,7 @@
 </div>
 
 <div class="syn-pop" id="syn-pop" hidden></div>
+<div class="syn-pop friends-pop" id="friends-pop" hidden></div>
 
 <div class="login onboard" id="onboard" hidden tabindex="-1">
   <div class="login-card onboard-card" id="onboard-card"></div>

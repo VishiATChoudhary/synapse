@@ -750,7 +750,8 @@ async function pollRequests() {
   if (notified && Notification.isSupported() && !process.env.SYNAPSE_SHOT) {
     for (const r of pending) {
       if (notified.has(r.id)) continue;
-      const n = new Notification({ title: 'Synapse', body: `${r.from?.name || r.from?.handle || 'Someone'} wants to synapse with your agents` });
+      const who = r.from?.name || r.from?.handle || 'Someone';
+      const n = new Notification({ title: 'Synapse', body: r.kind === 'offer' ? `${who} shared ${r.agent?.name || 'an agent'} with you` : `${who} wants to synapse with your agents` });
       n.on('click', () => { if (!win) return; win.show(); win.focus(); win.webContents.send('requests:open'); });
       n.show();
     }
@@ -997,6 +998,28 @@ async function decide(id, fn, extra = {}) {
   await pollRequests();
 }
 // talk: let their agent ask the shared agents questions too (the accept popover's checkbox, ticked by default)
+// Share: the open agent goes to a trusted person as an offer; they pick which of their agents receives it
+handle('share:offer', async ({ to, agent, mode }) => {
+  const a = listAgents().find((x) => x.id === agent && !x.remote);
+  if (!a) throw new Error('open the agent you want to share first');
+  let out;
+  if (FAKE) {
+    const f = fake(), p = (f.people || []).find((x) => x.handle === to || x.id === to);
+    out = { id: `o-${Date.now()}`, kind: 'offer', mode: mode === 'talk' ? 'talk' : 'sync', status: 'pending', to: { handle: p?.handle || to, name: p?.name || to }, agent: { id: a.id, name: a.name, kind: a.kind } };
+    f.outgoing = [out, ...(f.outgoing || [])];
+    writeJSON(FAKE, f);
+  } else out = await (await acct()).sendOffer({ to, agent: a, mode });
+  await pollRequests();
+  return out;
+});
+// an offer to me: it goes into the agent of mine picked here
+handle('requests:acceptOffer', async ({ id, receiver }) => {
+  if (FAKE) {
+    const f = fake(), r = f.incoming.find((x) => x.id === id), mine = listAgents().find((x) => x.id === receiver);
+    if (r) { f.incoming = f.incoming.filter((x) => x !== r); f.links.push({ direction: 'in', owner: r.from?.name, handle: r.from?.handle, mode: r.mode || 'sync', agent: r.agent, local: { id: receiver, name: mine?.name || receiver }, edgeId: `fake-${id}` }); (f.accepted ||= []).push({ id, receiver }); writeJSON(FAKE, f); }
+  } else await (await acct()).acceptOffer(id, receiver);
+  await pollRequests();
+});
 handle('requests:accept', async ({ id, agents, talk = true }) => { const out = FAKE ? null : await (await acct()).accept(id, agents, { talk: !!talk }); await decide(id, 'accept', { agents, talk: !!talk }); return out; });
 // a friend's agent asked one of mine over a read-only share: Allow switches that share to talk, Not now waits a day
 handle('talkreq:allow', ({ id }) => { const out = allowTalkRequest(id); win?.webContents.send('state', state()); return out; });
