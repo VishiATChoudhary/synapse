@@ -19,6 +19,7 @@ const lib = await import('../../lib.mjs');
 // a ConPTY can take over this process's console, and with it stdout: every line also goes to a file the workflow checks
 const LOG = process.env.SYNAPSE_TEST_LOG;
 const log = (line) => { console.log(line); if (LOG) fs.appendFileSync(LOG, `${line}\n`); };
+if (LOG) process.on('exit', (code) => fs.appendFileSync(LOG, `exit ${code}\n`));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(check, label, ms = 30000) {
   const end = Date.now() + ms;
@@ -59,6 +60,8 @@ try {
 
   const sh = pty.spawn('powershell.exe', ['-NoLogo'], { name: 'xterm-256color', cols: 100, rows: 30, cwd: work, env, useConpty: true });
   terms.push(sh);
+  log(`PowerShell started, pid ${sh.pid}`);
+  sh.onExit((e) => log(`PowerShell exited ${JSON.stringify(e)}`));
   let shOut = '';
   sh.onData((d) => { shOut += d; });
   await sleep(1500);
