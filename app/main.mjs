@@ -20,6 +20,13 @@ import { collect as collectActivity, lastWeek } from './activity.mjs';
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
 const SHELL = process.env.SHELL || '/bin/zsh';
 const DEMO = process.argv.includes('--demo');
+// A new install has no app.json yet: only this app creates it, so its absence at launch means a first run.
+const FIRST_RUN = !fs.existsSync(FILES.app);
+// What the app showed once (the intro, the onboarding), in a file nothing else writes. In app.json a settings
+// write that read the file just before the intro marked itself could drop the mark, and the intro played again.
+const SEEN = path.join(DATA, 'seen.json');
+const seen = () => readJSON(SEEN, {});
+const markSeen = (key) => writeJSON(SEEN, { ...seen(), [key]: Date.now() });
 
 // Launch profiles, mirroring Superset's defaults. Editable in ~/.synapse/app.json.
 const DEFAULT_PROFILES = {
@@ -629,7 +636,7 @@ function wantsIntro() {
   if (FORCE_INTRO) return true;
   if (!app.isPackaged || startedHidden() || process.env.SYNAPSE_SHOT) return false;
   if (systemPreferences.getAnimationSettings?.().prefersReducedMotion) return false;
-  return !readJSON(FILES.app, {}).introPlayed;
+  return !seen().intro && !readJSON(FILES.app, {}).introPlayed;
 }
 function playIntro() {
   return new Promise((resolve) => {
@@ -647,8 +654,8 @@ function playIntro() {
     const guard = setTimeout(finish, 8000); // the page closes itself at the end; never leave it over the screen
     intro.on('closed', finish);
     intro.once('ready-to-show', () => intro.showInactive());
+    if (!FORCE_INTRO) markSeen('intro'); // before it plays: a crash or quit mid-intro still counts as seen
     intro.loadFile(path.join(ROOT, 'renderer', 'intro.html')).catch(finish);
-    if (!FORCE_INTRO) writeJSON(FILES.app, { ...readJSON(FILES.app, {}), introPlayed: true });
   });
 }
 
@@ -944,6 +951,10 @@ handle('synapse', ({ args, as }) => execFileSync(process.execPath, [path.join(RO
 handle('linked', ({ a, b }) => linked(readJSON(FILES.edges, []), a, b));
 handle('account:get', async () => { if (FAKE) return readJSON(FAKE, {}).account || null; const a = await acct().catch(() => null); return a?.account()?.user || null; });
 handle('account:skipped', () => !!config().skipLogin || !!process.env.SYNAPSE_DEMO);
+// the first-run onboarding: on a new install only (SYNAPSE_ONBOARDING=1 shows it every run, for trying it out);
+// settings can replay it at any time
+handle('onboarding:get', () => ({ show: process.env.SYNAPSE_ONBOARDING === '1' || (FIRST_RUN && !seen().onboarding && !process.env.SYNAPSE_SHOT) }));
+handle('onboarding:done', () => { markSeen('onboarding'); });
 handle('account:skip', () => { const c = config(); c.skipLogin = true; writeJSON(FILES.app, c); });
 handle('account:signup', async (b) => { const a = await acct(); const r = await a.signup({ ...b, label: DEVICE_LABEL }); await accountChanged(); return r?.user || a.account()?.user; });
 handle('account:login', async (b) => { const a = await acct(); const r = await a.login({ ...b, label: DEVICE_LABEL }); await accountChanged(); return r?.user || a.account()?.user; });

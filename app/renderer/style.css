@@ -568,3 +568,28 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .share-tag { grid-column: 4 / 6; justify-self: end; padding: 3px 8px; font: 10.5px var(--mono); text-transform: uppercase; color: var(--ink-2); border: 1px solid var(--rule); }
 .share-tag.on { color: var(--sig); border-color: currentColor; }
 [data-kind="settings"] .people .access-key { padding: 10px 22px 6px; font-size: 12px; }
+
+/* ---------------------------------------------------------------- onboarding: the first-run tour, on the sign-in screen's card */
+.onboard { z-index: 46; outline: 0; }
+.onboard-card { width: 560px; }
+.ob-head .wordmark { font-size: 28px; }
+.ob-body { padding: 26px 26px 8px; min-height: 318px; box-sizing: border-box; }
+.ob-title { font: 300 44px/.95 var(--display); text-transform: uppercase; }
+.ob-text { margin: 14px 0 0; font: 14.5px/1.55 var(--sans); color: var(--ink-2); max-width: 470px; }
+.ob-art { display: flex; align-items: center; flex-wrap: wrap; gap: 0; margin-top: 22px; padding: 18px; background: var(--wash); border: 1px solid var(--rule); }
+.ob-chip { display: inline-flex; flex-direction: column; gap: 2px; padding: 7px 10px; background: var(--paper); border: 1px solid var(--ink); }
+.ob-chip b { font: 400 9.5px var(--mono); text-transform: uppercase; color: var(--sig); letter-spacing: .06em; }
+.ob-chip span { font: 12px var(--mono); }
+.ob-wire { flex: 1; min-width: 34px; display: flex; flex-direction: column; align-items: center; gap: 5px; margin: 0 4px; font: 9.5px var(--mono); text-transform: uppercase; color: var(--ink-2); white-space: nowrap; }
+.ob-wire::after { content: ''; align-self: stretch; height: 1px; background: var(--ink-3); }
+.ob-wire:not(:empty) { min-width: 92px; margin-top: -14px; }
+.ob-gap { width: 22px; }
+.ob-keys { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 20px; }
+.ob-keys span { display: inline-flex; align-items: center; gap: 7px; font: 11px var(--mono); text-transform: uppercase; color: var(--ink-2); }
+.ob-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 22px; padding: 14px 26px 18px; border-top: 1px solid var(--rule); }
+.ob-dots { display: flex; gap: 6px; }
+.ob-dots button { width: 8px; height: 8px; padding: 0; border: 1px solid var(--ink-3); }
+.ob-dots button.on { background: var(--sig); border-color: var(--sig); }
+.ob-actions { display: flex; gap: 8px; }
+.ob-actions .btn { border: 1px solid var(--rule); padding: 9px 16px; }
+.ob-actions .btn.sig { border-color: var(--sig); }

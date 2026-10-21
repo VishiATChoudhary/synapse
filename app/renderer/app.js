@@ -1493,7 +1493,10 @@ async function openSettings() {
     updRow.append(el('span', 'k', 'updates'), updVal, updBtn);
     synapse.update.get().then(showUpd, () => {});
     updBtn.onclick = async () => { updBtn.disabled = true; updVal.textContent = 'checking…'; try { showUpd(await synapse.update.check()); } catch (e) { toast(e.message, true); } updBtn.disabled = false; };
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow, loginRow, updRow);
+    const tourRow = el('div', 'opt set'), tourBtn = el('button', 'btn', 'replay');
+    tourRow.append(el('span', 'k', 'tour'), el('span', 'c', 'the five steps a new install starts with'), tourBtn);
+    tourBtn.onclick = () => { close(); showOnboarding(false); };
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow, loginRow, updRow, tourRow);
     const phones = el('div', 'phones');
     body.append(el('div', 'sub', 'phone'), phones);
     drawPhones(phones);
@@ -2081,6 +2084,66 @@ function renderPop() {
 // ---- sign in
 
 let loginState = { mode: 'signin', startup: false, device: null };
+// ---------------------------------------------------------------- onboarding
+// Five short steps the first time the app opens: what Synapse is, starting agents, linking them, friends and the
+// phone, and the activity tab. Settings replays it. The art is the app's own pieces (agent chips, links, keys).
+const chip = (kind, name) => { const c = el('span', 'ob-chip'); c.append(el('b', '', kind), el('span', '', name)); return c; };
+const wire = (label = '') => el('span', 'ob-wire', label);
+const TOUR = [
+  { title: 'Your agents, connected', body: 'Synapse runs Claude, Codex, Gemini and the rest side by side, and lets them read each other and pass messages. Here is how, in five quick steps.',
+    art: () => [chip('claude', 'api'), wire(), chip('codex', 'web'), wire(), chip('gemini', 'tests')] },
+  { title: 'Start an agent', body: 'Add a workspace (a folder or a repo), then start agents in it. Each gets its own terminal tab, and you can split them side by side.',
+    keys: [['⌃1', 'Claude'], ['⌃2', 'Codex'], ['⌘N', 'any agent'], ['⌘T', 'shell'], ['⇧⌘N', 'new worktree'], ['⌘D', 'split']] },
+  { title: 'Link them', body: "The node view shows every agent on this Mac. Drag from one agent's ring to another to share its context; linked agents can message each other. Fork an agent to ask a side question without derailing it.",
+    art: () => [chip('claude', 'api'), wire('reads'), chip('codex', 'web')], keys: [['⌃Tab', 'node view'], ['drag ring', 'link'], ['⇧⌘F', 'fork']] },
+  { title: 'Friends and your phone', body: 'Sign in to share an agent with people you trust, read only or read and ask. The Synapse phone app sees your agents, chats with them, and opens the sites and files they make.',
+    art: () => [chip('you', 'api'), wire('read and ask'), chip('mara', 'web'), el('span', 'ob-gap'), chip('phone', 'live link')] },
+  { title: 'Keep score', body: 'The activity tab tracks your streak, prompts, tokens and badges, and ranks you against friends who join the board. You can replay this tour any time from Settings.',
+    keys: [['▦', 'activity'], ['⌘,', 'settings']] },
+];
+let tour = { step: 0, first: false };
+function showOnboarding(first = false) {
+  tour = { step: 0, first };
+  $('#onboard').hidden = false;
+  drawOnboarding();
+  $('#onboard').focus();
+}
+function endOnboarding(signIn = false) {
+  $('#onboard').hidden = true;
+  synapse.onboarding.done().catch(() => {});
+  if (signIn) showLogin({ startup: tour.first });
+  else if (tour.first && !ACC.user) synapse.account.skip().catch(() => {}); // chose not now: the sign-in screen does not come back each launch
+  else top(focusedSlot())?.term.focus();
+}
+function drawOnboarding() {
+  const card = $('#onboard-card'), s = TOUR[tour.step], last = tour.step === TOUR.length - 1;
+  card.replaceChildren();
+  const head = el('div', 'login-head ob-head');
+  head.append(el('div', 'wordmark', 'synapse'), el('div', 'login-tag', `${tour.step + 1} of ${TOUR.length}`));
+  const skip = el('button', 'login-x', '×'); skip.title = 'skip the tour'; skip.onclick = () => endOnboarding(false); head.append(skip);
+  const body = el('div', 'ob-body');
+  body.append(el('div', 'ob-title', s.title), el('p', 'ob-text', s.body));
+  if (s.art) { const art = el('div', 'ob-art'); art.append(...s.art()); body.appendChild(art); }
+  if (s.keys) { const keys = el('div', 'ob-keys'); for (const [k, what] of s.keys) { const r = el('span'); r.append(el('kbd', '', k), what); keys.appendChild(r); } body.appendChild(keys); }
+  const foot = el('div', 'ob-foot'), dots = el('div', 'ob-dots');
+  TOUR.forEach((_, i) => { const d = el('button', i === tour.step ? 'on' : ''); d.title = `step ${i + 1}`; d.onclick = () => { tour.step = i; drawOnboarding(); }; dots.appendChild(d); });
+  const back = el('button', 'btn', 'back'); back.disabled = tour.step === 0; back.onclick = () => { tour.step--; drawOnboarding(); };
+  const next = el('button', 'btn sig', last ? (ACC.user ? 'start' : 'sign in') : 'next');
+  next.onclick = () => (last ? endOnboarding(!ACC.user) : (tour.step++, drawOnboarding()));
+  const actions = el('div', 'ob-actions');
+  actions.append(back);
+  if (last && !ACC.user) { const later = el('button', 'btn', 'not now'); later.onclick = () => endOnboarding(false); actions.append(later); }
+  actions.append(next);
+  foot.append(dots, actions);
+  card.append(head, body, foot);
+  next.focus();
+}
+$('#onboard').onkeydown = (e) => {
+  if (e.key === 'Escape') endOnboarding(false);
+  else if (e.key === 'ArrowRight' && tour.step < TOUR.length - 1) { tour.step++; drawOnboarding(); }
+  else if (e.key === 'ArrowLeft' && tour.step > 0) { tour.step--; drawOnboarding(); }
+};
+
 async function showLogin({ startup = false, mode = 'signin' } = {}) {
   loginState = { mode, startup, device: null };
   $('#login').hidden = false;
@@ -2476,7 +2539,9 @@ const ageOf = (t) => { const m = Math.max(0, Math.round((Date.now() - (t || 0)) 
   ACC.user = await synapse.account.get().catch(() => null);
   renderMe();
   synapse.requests.list().then((f) => { ACC.feed = f || ACC.feed; renderDot(); }).catch(() => {});
-  if (!ACC.user && !flags.shot && !(await synapse.account.skipped().catch(() => true))) showLogin({ startup: true });
+  // a new install gets the tour first, and its last step offers sign-in; everyone else gets sign-in as before
+  if ((await synapse.onboarding.get().catch(() => ({}))).show) showOnboarding(true);
+  else if (!ACC.user && !flags.shot && !(await synapse.account.skipped().catch(() => true))) showLogin({ startup: true });
   if (flags.shot.startsWith('login')) setTimeout(() => showLogin({ startup: true, mode: flags.shot.split(':')[1] || 'signin' }), 600);
   if (flags.shot === 'account') setTimeout(openAccount, 800);
   if (flags.shot === 'settings') setTimeout(openSettings, 800);
