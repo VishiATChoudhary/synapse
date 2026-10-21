@@ -155,6 +155,13 @@ db.exec(`CREATE TABLE IF NOT EXISTS trust_dismissed (
      PRIMARY KEY (user_id, other_user)
    );`);
 
+// the friends board: each account's last 7 days, sent by its Mac once it joins
+db.exec(`CREATE TABLE IF NOT EXISTS board (
+     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+     stats TEXT NOT NULL,
+     at INTEGER NOT NULL
+   );`);
+
 const cache = new Map();
 const stmt = (sql) => { let s = cache.get(sql); if (!s) { s = db.prepare(sql); cache.set(sql, s); } return s; };
 export const get = (sql, ...a) => stmt(sql).get(...a);

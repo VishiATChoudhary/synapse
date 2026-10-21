@@ -158,6 +158,20 @@ async function scan({ repos = [], cacheFile, homes = defaultHomes(), env = proce
   return { ...data, ...summarize(data, now) };
 }
 
+// what goes on the friends board: the last 7 days, today included
+export function lastWeek(a, now = Date.now()) {
+  const days = [...Array(7)].map((_, i) => dayOf(now - i * 86400_000));
+  const code = a.github ? a.github.days : a.commits;
+  const add = (o) => days.reduce((n, d) => n + (o?.[d] || 0), 0);
+  const prompts = add(a.prompts.claude) + add(a.prompts.codex);
+  return {
+    tokens: days.reduce((n, d) => n + (a.tokens[d]?.all || 0), 0), tokensOut: days.reduce((n, d) => n + (a.tokens[d]?.out || 0), 0),
+    prompts, code: add(code),
+    activeDays: days.filter((d) => (code[d] || 0) + (a.commits[d] || 0) + (a.prompts.claude[d] || 0) + (a.prompts.codex[d] || 0) > 0).length,
+    streak: a.streak, level: a.level, xp: a.xp,
+  };
+}
+
 export function defaultHomes() {
   return { claude: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects'), codex: path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'sessions') };
 }

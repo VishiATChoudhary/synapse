@@ -1737,13 +1737,52 @@ async function drawActivity() {
   if (a.models.length) tokens.appendChild(models);
   const badges = el('div', 'act-badges');
   for (const b of a.badges) { const c = el('div', 'act-badge' + (b.got ? ' got' : '')); c.append(el('b', '', b.name), el('span', '', b.what)); badges.appendChild(c); }
-  page.append(head, tiles, code,
+  const friends = section('Friends this week', 'the last 7 days, next to the people you trust', el('div', 'act-board'));
+  drawBoard(friends.querySelector('.act-board'));
+  page.append(head, tiles, friends, code,
     section('Agents', `${fmt(a.totals.claude)} prompts to Claude · ${fmt(a.totals.codex)} to Codex`, heatmap(agents, 'prompts')),
     tokens,
     section('Badges', `${a.badges.filter((b) => b.got).length} of ${a.badges.length}`, badges),
     el('div', 'act-foot', 'counted on this Mac from your repos and agent conversations · esc closes'));
   box.replaceChildren(page);
 }
+// the friends board: you and the people you trust both ways who joined, ranked by one number at a time
+let boardBy = 'tokens';
+const BOARD_BY = [['tokens', 'tokens', compact], ['prompts', 'prompts', fmt], ['activeDays', 'active days', fmt], ['streak', 'streak', fmt]];
+async function drawBoard(box, act) {
+  let b;
+  try { b = await (act ? synapse.board[act]() : synapse.board.get()); } catch (e) { box.replaceChildren(el('div', 'act-board-note', e.message)); return; }
+  const note = (text, button, onClick) => {
+    const n = el('div', 'act-board-join');
+    n.append(el('p', '', text));
+    if (button) { const go = el('button', 'btn sig', button); go.onclick = async () => { go.disabled = true; go.textContent = 'counting…'; await drawBoard(box, onClick); }; n.appendChild(go); }
+    box.replaceChildren(n);
+  };
+  if (!b.signedIn) return note('Sign in to Synapse (settings) to compete with the people you trust.');
+  if (!b.joined) return note(`See how your week compares with the people you trust. Joining shows them your last 7 days: tokens, prompts, commits, active days and streak.${b.waiting ? ` ${b.waiting} of them ${b.waiting === 1 ? 'is' : 'are'} on the board already.` : ''}`, 'join the board', 'join');
+  const [key, , show] = BOARD_BY.find((x) => x[0] === boardBy);
+  const people = [...b.people].sort((x, y) => (y[key] || 0) - (x[key] || 0));
+  const top = Math.max(1, people[0]?.[key] || 0);
+  const tabs = el('div', 'act-board-by');
+  for (const [k, label] of BOARD_BY) { const t = el('button', k === boardBy ? 'on' : '', label); t.onclick = () => { boardBy = k; drawBoard(box); }; tabs.appendChild(t); }
+  const list = el('div', 'act-board-list');
+  people.forEach((p, i) => {
+    const row = el('div', 'act-rank' + (p.me ? ' me' : '') + (i === 0 && people.length > 1 ? ' first' : ''));
+    const who = el('div', 'who');
+    who.append(el('b', '', p.me ? 'You' : p.name || p.handle), el('span', '', p.handle ? `@${p.handle}` : ''));
+    const bar = el('span', 'bar'), fill = el('i');
+    fill.style.width = `${Math.max(1.5, (100 * (p[key] || 0)) / top)}%`; bar.appendChild(fill);
+    row.append(el('span', 'pos', String(i + 1)), who, bar, el('span', 'n', show(p[key] || 0)));
+    list.appendChild(row);
+  });
+  const foot = el('div', 'act-board-foot');
+  if (people.length === 1) foot.appendChild(el('span', '', 'Nobody you trust has joined yet. When they do, they show up here.'));
+  const leave = el('button', 'act-board-leave', 'leave the board');
+  leave.onclick = () => drawBoard(box, 'leave');
+  foot.appendChild(leave);
+  box.replaceChildren(tabs, list, foot);
+}
+
 for (const type of ['mouseup', 'auxclick']) addEventListener(type, (ev) => {
   if (ev.button !== 3 && ev.button !== 4) return;
   ev.preventDefault(); ev.stopImmediatePropagation();

@@ -255,6 +255,21 @@ function sendVerification(user) {
 
 // ---------------------------------------------------------------- trusted people and requests
 
+// ---- the friends board: people who trust each other both ways and have both joined see each other's last
+// 7 days. Joining is sending your own numbers; leaving deletes them.
+const BOARD_KEYS = ['tokens', 'tokensOut', 'prompts', 'code', 'activeDays', 'streak', 'level', 'xp'];
+const boardStats = (b) => Object.fromEntries(BOARD_KEYS.map((k) => [k, Math.max(0, Math.min(1e13, Math.floor(Number(b?.[k]) || 0)))]));
+const mutual = (a, b) => trusts(a, b) && trusts(b, a);
+function boardOf(userId) {
+  const mine = get('SELECT * FROM board WHERE user_id = ?', userId);
+  const friends = all(`SELECT u.id, u.handle, u.name, u.avatar, b.stats, b.at FROM trusted t JOIN users u ON u.id = t.trusted_user
+                       JOIN board b ON b.user_id = u.id WHERE t.user_id = ?`, userId).filter((r) => mutual(userId, r.id));
+  if (!mine) return { joined: false, waiting: friends.length };
+  const me = get('SELECT id, handle, name, avatar FROM users WHERE id = ?', userId);
+  const row = (u, b, isMe) => ({ handle: u.handle, name: u.name, avatar: u.avatar || null, me: isMe, at: b.at, ...JSON.parse(b.stats) });
+  return { joined: true, people: [row(me, mine, true), ...friends.map((r) => row(r, r, false))] };
+}
+
 function trustedList(userId) {
   return all(`SELECT t.id, t.email AS invited, u.id AS uid, u.handle, u.name, u.avatar, u.email
               FROM trusted t LEFT JOIN users u ON u.id = t.trusted_user WHERE t.user_id = ? ORDER BY t.created_at`, userId)
@@ -562,6 +577,13 @@ const routes = {
   },
 
   // ---- trusted people
+  'GET /v1/board': async (req, res) => json(res, 200, boardOf(must(req).user.id)),
+  'PUT /v1/board': async (req, res, b) => {
+    const { user } = must(req);
+    run('INSERT INTO board (user_id, stats, at) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET stats = excluded.stats, at = excluded.at', user.id, JSON.stringify(boardStats(b)), now());
+    return json(res, 200, boardOf(user.id));
+  },
+  'DELETE /v1/board': async (req, res) => { const { user } = must(req); run('DELETE FROM board WHERE user_id = ?', user.id); return json(res, 200, boardOf(user.id)); },
   'GET /v1/trusted': async (req, res) => json(res, 200, { trusted: trustedList(must(req).user.id) }),
   'POST /v1/trusted': async (req, res, b) => {
     const { user } = member(req);

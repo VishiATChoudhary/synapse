@@ -656,3 +656,29 @@ test('the phone app signs in with GitHub through its browser sheet: a one-time c
   assert.match((await call(`/app/done?state=${state}`)).headers.get('location'), /^\/login\?next=/, 'signed out: sign in first');
   assert.equal((await call('/app/done?state=x')).status, 400);
 });
+
+test('friends board: only people who trust each other both ways and both joined see each other', async () => {
+  const [ann, bob, cat] = await Promise.all([signup('ann@example.com', 'Ann'), signup('bob@example.com', 'Bob'), signup('cat@example.com', 'Cat')]);
+  const tok = (x) => x.json.token;
+  const week = (n) => ({ tokens: n * 1000, tokensOut: n * 10, prompts: n, code: 2, activeDays: 5, streak: 4, level: 3, xp: 900, evil: '<script>' });
+  // Ann and Bob trust each other; Cat trusts Ann, Ann does not trust Cat
+  await call('/v1/trusted', { token: tok(ann), body: { who: '@bob' } });
+  await call('/v1/trusted', { token: tok(bob), body: { who: '@ann' } });
+  await call('/v1/trusted', { token: tok(cat), body: { who: '@ann' } });
+
+  assert.deepEqual((await call('/v1/board', { token: tok(ann) })).json, { joined: false, waiting: 0 });
+  await call('/v1/board', { token: tok(bob), method: 'PUT', body: week(50) });
+  assert.deepEqual((await call('/v1/board', { token: tok(ann) })).json, { joined: false, waiting: 1 }, 'Bob joined, Ann sees only that someone is waiting');
+  await call('/v1/board', { token: tok(cat), method: 'PUT', body: week(99) });
+
+  const joined = (await call('/v1/board', { token: tok(ann), method: 'PUT', body: week(20) })).json;
+  assert.equal(joined.joined, true);
+  assert.deepEqual(joined.people.map((p) => [p.handle, p.me, p.prompts]), [['ann', true, 20], ['bob', false, 50]], 'Cat is not on Ann\'s board: Ann does not trust her');
+  assert.equal(joined.people[0].evil, undefined, 'only known numbers are kept');
+  assert.equal((await call('/v1/board', { token: tok(cat) })).json.people.length, 1, 'Cat sees only herself');
+
+  // leaving takes Ann off Bob's board
+  await call('/v1/board', { token: tok(ann), method: 'DELETE' });
+  assert.deepEqual((await call('/v1/board', { token: tok(bob) })).json.people.map((p) => p.handle), ['bob']);
+  assert.equal((await call('/v1/board')).status, 401);
+});

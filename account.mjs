@@ -80,6 +80,10 @@ export async function updateMe(patch) {
   save({ ...account(), user });
   return user;
 }
+// the friends board: your last 7 days next to the people you and they both trust (joining sends yours)
+export const board = () => api('GET', '/v1/board');
+export const boardSend = (week) => api('PUT', '/v1/board', week);
+export const boardLeave = () => api('DELETE', '/v1/board');
 export const changePassword = ({ current, password }) => api('POST', '/v1/me/password', { current, password });
 export const forgot = (email) => api('POST', '/v1/auth/forgot', { email }, { auth: false });
 export const resendVerification = () => api('POST', '/v1/auth/resend-verification', {});

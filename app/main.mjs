@@ -15,7 +15,7 @@ import { openRequests, talkPerHour, talkModel, clampPerHour } from '../talk.mjs'
 import { isConnected } from '../remote.mjs';
 import { createUpdater, bundleOf, MANIFEST_URL } from './updater.mjs';
 import * as phone from './phone.mjs';
-import { collect as collectActivity } from './activity.mjs';
+import { collect as collectActivity, lastWeek } from './activity.mjs';
 
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
 const SHELL = process.env.SHELL || '/bin/zsh';
@@ -861,7 +861,29 @@ handle('settings:get', () => settingsOut(config()));
 handle('share:mode', ({ id, mode }) => changeShare(id, mode === 'talk' ? 'talk' : 'sync'));
 handle('share:remove', ({ id }) => changeShare(id, 'remove'));
 // the activity view: GitHub, commits and prompts over the last year; the first count reads every transcript, so it reports progress
-handle('activity:get', () => collectActivity({ repos: config().workspaces, cacheFile: path.join(DATA, 'activity.json'), env: cleanEnv(), onProgress: (p) => win?.webContents.send('activity:progress', p) }));
+const countActivity = () => collectActivity({ repos: config().workspaces, cacheFile: path.join(DATA, 'activity.json'), env: cleanEnv(), onProgress: (p) => win?.webContents.send('activity:progress', p) });
+handle('activity:get', async () => {
+  const a = await countActivity();
+  // on the friends board: send this week's numbers whenever they are counted again
+  if (config().board) acct().then((m) => m.account() && m.boardSend(lastWeek(a))).catch(() => {});
+  return a;
+});
+// the friends board in the activity view; joining sends your last 7 days, leaving deletes them on the cloud
+handle('board:get', async () => {
+  const m = await acct();
+  if (!m.account()) return { signedIn: false };
+  return { signedIn: true, ...(await m.board()) };
+});
+handle('board:join', async () => {
+  const m = await acct();
+  const out = await m.boardSend(lastWeek(await countActivity()));
+  const c = config(); c.board = true; writeJSON(FILES.app, c);
+  return { signedIn: true, ...out };
+});
+handle('board:leave', async () => {
+  const c = config(); c.board = false; writeJSON(FILES.app, c);
+  return { signedIn: true, ...(await (await acct()).boardLeave()) };
+});
 handle('talk:usage', () => talkHistory('api/talks/usage'));
 handle('settings:set', (patch) => {
   const c = config();
