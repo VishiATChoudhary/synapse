@@ -59,8 +59,9 @@ try {
   let shOut = '';
   sh.onData((d) => { shOut += d; });
   await sleep(1500);
-  sh.write('Write-Output ("synapse" + "-" + (Get-Location).Path)\r');
-  await until(() => shOut.includes(`synapse-${work}`), 'PowerShell answered in the right folder');
+  sh.write('Write-Output ("synapse" + "-ok" + (Get-Location).Path)\r');
+  await until(() => shOut.includes('synapse-ok'), 'PowerShell answered').catch((e) => { console.log(JSON.stringify(shOut.slice(-2000))); throw e; });
+  assert.ok(shOut.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r?\n/g, '').includes(`synapse-ok${work}`), 'in the right folder');
   console.log('PASS PowerShell tab');
   console.log('windows suite passed');
 } catch (e) {
@@ -70,5 +71,5 @@ try {
   for (const t of terms) try { t.kill(); } catch {}
   await sleep(500);
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
-  process.exit(process.exitCode || 0);
+  process.stdout.write('', () => process.exit(process.exitCode || 0)); // node-pty keeps the loop alive; flush first
 }
