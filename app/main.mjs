@@ -9,7 +9,7 @@ import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
 import { git, listChoices, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
-import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork } from '../lib.mjs';
+import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, readAgentMessages } from '../lib.mjs';
 import { createEdge, allowTalkRequest, dismissTalkRequest, setMode, removeEdge } from '../ops.mjs';
 import { openRequests, talkPerHour, talkModel, clampPerHour } from '../talk.mjs';
 import { isConnected } from '../remote.mjs';
@@ -864,8 +864,27 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-const settingsOut = (c) => ({ openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, talkPerHour: talkPerHour(), talkModel: talkModel() });
+const settingsOut = (c) => ({ openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, notifyDone: c.notifyDone !== false, talkPerHour: talkPerHour(), talkModel: talkModel() });
 handle('settings:get', () => settingsOut(config()));
+// an agent finished a turn while Synapse was in the background (the renderer decides when): say so, with the
+// start of its last reply; a click brings that session to the front
+const lastReply = (pty) => {
+  const id = agentsByPty()[pty]?.synapseId, a = id && listAgents().find((x) => x.id === id);
+  if (!a) return '';
+  const said = readAgentMessages(a, null, { tailBytes: 262144 }).messages.filter((m) => m.role === 'assistant' && !m.tool).at(-1)?.text || '';
+  const t = said.replace(/\s+/g, ' ').trim();
+  return t.length > 140 ? t.slice(0, 139) + '…' : t;
+};
+handle('notify:done', ({ pty, title, took }) => {
+  if (config().notifyDone === false || !Notification.isSupported() || process.env.SYNAPSE_SHOT) return false;
+  const mins = Math.round(took / 60_000);
+  let body = '';
+  try { body = lastReply(pty); } catch {}
+  const n = new Notification({ title: `${title} is done${mins >= 1 ? ` · ${mins} min` : ''}`, body: body || 'Its turn is over. Click to open it.' });
+  n.on('click', () => { if (!win) return; win.show(); win.focus(); win.webContents.send('notify:open', pty); });
+  n.show();
+  return true;
+});
 handle('share:mode', ({ id, mode }) => changeShare(id, mode === 'talk' ? 'talk' : 'sync'));
 handle('share:remove', ({ id }) => changeShare(id, 'remove'));
 // the activity view: GitHub, commits and prompts over the last year; the first count reads every transcript, so it reports progress
@@ -897,6 +916,7 @@ handle('settings:set', (patch) => {
   const c = config();
   if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink;
   if ('autoSendFork' in patch) c.autoSendFork = !!patch.autoSendFork;
+  if ('notifyDone' in patch) c.notifyDone = !!patch.notifyDone;
   if ('openAtLogin' in patch) setLoginOpen(patch.openAtLogin);
   if ('talkPerHour' in patch) c.talkPerHour = clampPerHour(patch.talkPerHour);
   if ('talkModel' in patch) c.talkModel = ['opus', 'sonnet', 'haiku'].includes(patch.talkModel) ? patch.talkModel : 'agent';

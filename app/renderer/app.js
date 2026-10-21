@@ -1474,6 +1474,13 @@ async function openSettings() {
       try { M.autoSendFork = (await synapse.settings.set({ autoSendFork: fcb.checked })).autoSendFork; toast(fcb.checked ? 'forks send their question right away' : 'a fork\'s question waits in its prompt for you'); }
       catch (e) { fcb.checked = !fcb.checked; toast(e.message, true); }
     };
+    const doneRow = el('label', 'opt set'), dcb = el('input');
+    dcb.type = 'checkbox'; dcb.checked = s.notifyDone !== false;
+    doneRow.append(dcb, el('span', 'k', 'notify when done'), el('span', 'c', 'a notification when an agent finishes while Synapse is in the background, a toast when you are looking at another one'));
+    dcb.onchange = async () => {
+      try { dcb.checked = (await synapse.settings.set({ notifyDone: dcb.checked })).notifyDone; toast(dcb.checked ? 'agents tell you when they are done' : 'no notifications when agents finish'); }
+      catch (e) { dcb.checked = !dcb.checked; toast(e.message, true); }
+    };
     const loginRow = el('label', 'opt set'), lcb = el('input');
     lcb.type = 'checkbox'; lcb.checked = !!s.openAtLogin;
     loginRow.append(lcb, el('span', 'k', 'Open Synapse at login'), el('span', 'c', 'so friends\' questions get answered while you work'));
@@ -1497,7 +1504,7 @@ async function openSettings() {
     const tourRow = el('div', 'opt set'), tourBtn = el('button', 'btn', 'replay');
     tourRow.append(el('span', 'k', 'tour'), el('span', 'c', 'the five steps a new install starts with'), tourBtn);
     tourBtn.onclick = () => { close(); showOnboarding(false); };
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow, loginRow, updRow, tourRow);
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow, doneRow, loginRow, updRow, tourRow);
     const phones = el('div', 'phones');
     body.append(el('div', 'sub', 'phone'), phones);
     drawPhones(phones);
@@ -1552,9 +1559,10 @@ synapse.onLoginSuggest(() => {
 });
 
 let toastTimer = null;
-function toast(text, sig = false) {
-  const t = $('#toast'); t.textContent = text; t.className = 'toast' + (sig ? ' sig' : ''); t.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 2600);
+function toast(text, sig = false, onClick = null) {
+  const t = $('#toast'); t.textContent = text; t.className = 'toast' + (sig ? ' sig' : '') + (onClick ? ' act' : ''); t.hidden = false;
+  t.onclick = onClick && (() => { t.hidden = true; onClick(); });
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), onClick ? 6000 : 2600);
 }
 
 // ---------------------------------------------------------------- keys
@@ -1863,12 +1871,41 @@ function apply(st) {
     const a = M.agents[x.pty];
     if (a?.synapseId && (a.transcript || !x.resume)) x.resume = { synapseId: a.synapseId, transcript: a.transcript || null };
     if (a && agentWorking(a)) x.ran = true; // noted here, not on draw, so a folded workspace's agents count too
+    if (a) watchTurn(x, a);
     if (a && x.named === false) { x.named = true; nameForkAgent(x); }
   }
   refreshPullRequests();
   render();
 }
 synapse.onState(apply);
+
+// An agent that finishes a turn while you look elsewhere says so: a toast when Synapse is in front, a
+// notification when it is not. A turn has to have run a few seconds and then stayed quiet for two checks, so
+// the pause between two steps of one turn is not a finish.
+const TURN_MIN = 5000;
+function watchTurn(x, a) {
+  if (agentWorking(a)) { x.turnSince ||= Date.now(); x.quiet = 0; return; }
+  if (!x.turnSince || ++x.quiet < 2) return;
+  const long = Date.now() - x.turnSince;
+  x.turnSince = 0;
+  if (long < TURN_MIN || x.exited) return;
+  const s = M.slots.find((sl) => sl.sessions.includes(x));
+  const looking = document.hasFocus() && !canvasOpen && $('#modal').hidden && s && focusedSlot() === s && top(s) === x;
+  if (looking) return;
+  // a tab still called just "codex" says little with three of them open; the agent's name says which
+  const name = x.title && x.title !== x.kind ? x.title : a.name || x.title;
+  if (document.hasFocus()) toast(`✓ ${name} is done · open`, false, () => openTurn(x.pty));
+  else synapse.notify.done({ pty: x.pty, title: name, took: long });
+}
+function openTurn(pty) {
+  const s = M.slots.find((sl) => sl.sessions.some((x) => x.pty === pty));
+  if (!s) return;
+  M.focused = s.id; focusPath(s, s.sessions.find((x) => x.pty === pty).id);
+  if (canvasOpen) toggleCanvas();
+  render();
+  top(s)?.term.focus();
+}
+synapse.notify.onOpen(openTurn);
 synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { requestId, parentPty }));
 
 // ---------------------------------------------------------------- account, trusted people, synapse requests

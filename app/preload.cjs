@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('synapse', {
   state: () => call('state'),
   flags: () => call('flags'),
   onState: (fn) => on('state', fn),
+  notify: { done: (a) => call('notify:done', a), onOpen: (fn) => on('notify:open', fn) },
   pty: {
     spawn: (a) => call('pty:spawn', a),
     restore: (a) => call('pty:restore', a),

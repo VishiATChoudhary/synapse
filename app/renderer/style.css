@@ -273,6 +273,8 @@ body.sidebar-collapsed .main > .top { padding-left: 86px; }
 .toast.login-suggest { display: flex; align-items: center; gap: 10px; max-width: 90vw; white-space: normal; z-index: 41; }
 .toast.login-suggest .btn { padding: 6px 12px; }
 .toast.sig { border-color: var(--sig); color: var(--sig); }
+.toast.act { cursor: pointer; border-color: #2FBF5B; }
+.toast.act:hover { background: color-mix(in srgb, #2FBF5B 12%, var(--paper)); }
 @keyframes rise { from { opacity: 0; transform: translate(-50%, 6px); } }
 
 .grain { position: fixed; inset: -50%; width: 200%; height: 200%; z-index: 50; pointer-events: none; opacity: var(--grain); mix-blend-mode: var(--blend);
