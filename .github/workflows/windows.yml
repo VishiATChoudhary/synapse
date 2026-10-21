@@ -39,6 +39,8 @@ jobs:
           if (!(Test-Path $exe)) { Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Depth 1; throw "not installed at $exe" }
           if (!(Test-Path "$env:LOCALAPPDATA\Programs\Synapse\resources\cloudflared.exe")) { throw 'cloudflared.exe missing' }
           $env:SYNAPSE_HOME = "$env:RUNNER_TEMP\synapse-home"
+          New-Item -ItemType Directory -Force $env:SYNAPSE_HOME | Out-Null
+          '{"skipLogin": true}' | Set-Content "$env:SYNAPSE_HOME\app.json" # straight to the terminals, past sign-in and the tour
           $env:SYNAPSE_SHOT = "$env:RUNNER_TEMP\synapse-shot.png"
           $env:SYNAPSE_SHOT_DELAY = '8000'
           $env:SYNAPSE_APP_PORT = '4999'

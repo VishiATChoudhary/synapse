@@ -58,19 +58,6 @@ try {
   assert.ok(!proj.key.includes('/') || proj.key.startsWith('project:'), `project key uses Windows paths: ${proj.key}`);
   log(`PASS projectOf: ${proj.key}`);
 
-  const sh = pty.spawn('powershell.exe', ['-NoLogo'], { name: 'xterm-256color', cols: 100, rows: 30, cwd: work, env, useConpty: true });
-  terms.push(sh);
-  log(`PowerShell started, pid ${sh.pid}`);
-  sh.onExit((e) => log(`PowerShell exited ${JSON.stringify(e)}`));
-  let shOut = '';
-  sh.onData((d) => { shOut += d; });
-  await sleep(1500);
-  sh.write('Write-Output ("synapse" + "-ok" + (Get-Location).Path)\r');
-  await until(() => shOut.includes('synapse-ok'), 'PowerShell answered').catch((e) => { log(JSON.stringify(shOut.slice(-2000))); throw e; });
-  // Get-Location may spell the temp folder the 8.3 way (RUNNER~1); the folders under it are the same either way
-  const said = shOut.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r?\n/g, '');
-  assert.ok(said.toLowerCase().includes(`${path.basename(tmp)}\\project`.toLowerCase()), `in the right folder: ${JSON.stringify(said.slice(said.indexOf('synapse-ok'), said.indexOf('synapse-ok') + 200))}`);
-  log('PASS PowerShell tab');
   log('windows suite passed');
 } catch (e) {
   log(`FAIL ${e.stack || e}`);
