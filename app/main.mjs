@@ -1,15 +1,16 @@
 // Synapse desktop: Electron main process.
 // Owns the PTYs, reads Synapse state from ~/.synapse through lib.mjs, watches fork requests
 // filed by the prompt hook, and pushes everything to the renderer over IPC.
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, screen, shell, systemPreferences } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, screen, shell, systemPreferences } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
 import { git, listChoices, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
-import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork } from '../lib.mjs';
+import { DATA, FILES, WIN, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork } from '../lib.mjs';
 import { createEdge, allowTalkRequest, dismissTalkRequest, setMode, removeEdge } from '../ops.mjs';
 import { openRequests, talkPerHour, talkModel, clampPerHour } from '../talk.mjs';
 import { isConnected } from '../remote.mjs';
@@ -17,8 +18,9 @@ import { createUpdater, bundleOf, MANIFEST_URL } from './updater.mjs';
 import * as phone from './phone.mjs';
 import { collect as collectActivity, lastWeek } from './activity.mjs';
 
-const ROOT = path.dirname(new URL(import.meta.url).pathname);
-const SHELL = process.env.SHELL || '/bin/zsh';
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
+// Windows: shell tabs are PowerShell, agents run through cmd.exe so npm's .cmd shims resolve
+const SHELL = WIN ? 'powershell.exe' : process.env.SHELL || '/bin/zsh';
 const DEMO = process.argv.includes('--demo');
 // A new install has no app.json yet: only this app creates it, so its absence at launch means a first run.
 const FIRST_RUN = !fs.existsSync(FILES.app);
@@ -57,12 +59,12 @@ function config() {
 const FAKE_LOGIN = process.env.SYNAPSE_DEMO ? process.env.SYNAPSE_FAKE_LOGIN_ITEMS || '' : '';
 function loginOpen() {
   if (FAKE_LOGIN) return !!readJSON(FAKE_LOGIN, {}).openAtLogin;
-  return !!app.getLoginItemSettings().openAtLogin;
+  return !!app.getLoginItemSettings(WIN ? { args: ['--hidden'] } : undefined).openAtLogin;
 }
 // macOS 13+ (Darwin 22+) registers login items through SMAppService, where Electron ignores openAsHidden and
 // wasOpenedAsHidden is always false: the app opens its window at login. Older macOS still honours both.
 const modernLogin = process.platform === 'darwin' && parseInt(os.release(), 10) >= 22;
-const loginPayload = (on) => (modernLogin ? { openAtLogin: on, type: 'mainAppService' } : { openAtLogin: on, openAsHidden: true });
+const loginPayload = (on) => (modernLogin ? { openAtLogin: on, type: 'mainAppService' } : WIN ? { openAtLogin: on, args: ['--hidden'] } : { openAtLogin: on, openAsHidden: true });
 function setLoginOpen(on) {
   on = !!on;
   if (FAKE_LOGIN) { const f = readJSON(FAKE_LOGIN, {}); (f.calls ||= []).push(loginPayload(on)); f.openAtLogin = on; writeJSON(FAKE_LOGIN, f); }
@@ -309,6 +311,7 @@ const INHERITED = /^(CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_P
 let shellPath;
 function userPath() {
   if (shellPath !== undefined) return shellPath;
+  if (WIN) return (shellPath = null); // Windows hands GUI apps the same PATH a terminal gets
   try {
     const out = execFileSync(SHELL, ['-ilc', 'printf "\\0%s\\0" "$PATH"'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, TERM: 'dumb' } });
     shellPath = out.split('\0')[1] || null;
@@ -318,9 +321,10 @@ function userPath() {
 function cleanEnv() {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !INHERITED.test(k)));
   const seen = new Set();
-  env.PATH = [...(userPath() || '').split(':'), ...(env.PATH || '').split(':')]
+  const key = WIN ? Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'Path' : 'PATH';
+  env[key] = [...(userPath() || '').split(path.delimiter), ...(env[key] || '').split(path.delimiter)]
     // Superset's PATH wrappers report to Superset; agents started here should run as themselves
-    .filter((p) => p && !p.includes('/.superset/bin') && !seen.has(p) && seen.add(p)).join(':');
+    .filter((p) => p && !p.includes('/.superset/bin') && !seen.has(p) && seen.add(p)).join(path.delimiter);
   return env;
 }
 
@@ -330,21 +334,32 @@ function spawnPty({ cwd, kind, command, cols = 120, rows = 36, extraEnv = {} }) 
     ...cleanEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'synapse', LANG: process.env.LANG || 'en_US.UTF-8',
     SYNAPSE_APP: '1', SYNAPSE_SESSION: id, ...extraEnv,
   };
-  // exec so the pty's pid is the agent's own pid, which is how Synapse identifies it
-  const args = command ? ['-lc', `exec ${command}`] : ['-l'];
-  const p = pty.spawn(SHELL, args, { name: 'xterm-256color', cols, rows, cwd, env });
+  // exec so the pty's pid is the agent's own pid, which is how Synapse identifies it. Windows has no exec:
+  // the agent is a child of cmd.exe there, matched back to this terminal through ptys.json (lib.mjs hostPid)
+  const p = WIN
+    ? (command ? pty.spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', command], { name: 'xterm-256color', cols, rows, cwd, env, useConpty: true })
+      : pty.spawn(SHELL, ['-NoLogo'], { name: 'xterm-256color', cols, rows, cwd, env, useConpty: true }))
+    : pty.spawn(SHELL, command ? ['-lc', `exec ${command}`] : ['-l'], { name: 'xterm-256color', cols, rows, cwd, env });
   ptys.set(id, { p, cwd, kind, pid: p.pid });
+  savePtys();
   p.onData((data) => win?.webContents.send('pty:data', { id, data }));
-  p.onExit(({ exitCode }) => { ptys.delete(id); if (!quitting) win?.webContents.send('pty:exit', { id, code: exitCode }); });
+  p.onExit(({ exitCode }) => { ptys.delete(id); savePtys(); if (!quitting) win?.webContents.send('pty:exit', { id, code: exitCode }); });
   return { id, pid: p.pid };
 }
+
+// Windows only: which folder each terminal runs in, by pid, for agent discovery there (no lsof to ask)
+function savePtys() {
+  if (WIN) try { writeJSON(FILES.ptys, Object.fromEntries([...ptys.values()].map((t) => [t.pid, t.cwd]))); } catch {}
+}
+// the pid of the terminal an agent runs in (on Windows a cmd.exe above the agent, elsewhere the agent itself)
+const hostOf = (a) => a.hostPid ?? a.pid;
 
 // Which Synapse agent runs in which pty, by pid.
 function agentsByPty() {
   const agents = listAgents();
   const out = {};
   for (const [id, t] of ptys) {
-    const a = agents.find((x) => x.pid === t.pid);
+    const a = agents.find((x) => hostOf(x) === t.pid);
     if (a) out[id] = { synapseId: a.id, name: a.name, kind: a.kind, status: a.status, transcript: a.transcript };
   }
   return out;
@@ -539,7 +554,7 @@ function startPhone() {
   phone.start({
     projects,
     kinds: () => Object.keys(config().profiles).filter((k) => k !== 'shell'),
-    ptyOf: (pid) => [...ptys].find(([, t]) => t.pid === pid)?.[0] || null,
+    ptyOf: (pid) => { const a = WIN && listAgents().find((x) => x.pid === pid); const host = a ? hostOf(a) : pid; return [...ptys].find(([, t]) => t.pid === host)?.[0] || null; },
     write: (id, data) => ptys.get(id)?.p.write(data),
     submit,
     spawn: ({ req, cwd, kind, prompt }) => {
@@ -592,7 +607,8 @@ function createWindow({ show = !startedHidden() } = {}) {
   win = new BrowserWindow({
     show,
     width: 1440, height: 900, minWidth: 900, minHeight: 560,
-    titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 },
+    ...(WIN ? { titleBarStyle: 'hidden', titleBarOverlay: { color: '#00000000', symbolColor: nativeTheme.shouldUseDarkColors ? '#E8E6E1' : '#1A1A1A', height: 48 } }
+      : { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 } }),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0B0B0B' : '#F1EFE9',
     webPreferences: { preload: path.join(ROOT, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   });
@@ -604,7 +620,7 @@ function createWindow({ show = !startedHidden() } = {}) {
   // ⌘G toggles the canvas even while focus is inside it (the canvas is a separate page, its keys never reach ours)
   win.webContents.on('before-input-event', (e, i) => {
     // ⌘Tab belongs to macOS (the app switcher never lets it through), so the node view also toggles on ⌃Tab
-    const g = i.meta && !i.shift && !i.alt && i.key.toLowerCase() === 'g';
+    const g = (WIN ? i.control && i.shift : i.meta && !i.shift) && !i.alt && i.key.toLowerCase() === 'g';
     const tab = i.control && !i.meta && !i.alt && i.key === 'Tab';
     if (i.type === 'keyDown' && (g || tab)) { e.preventDefault(); win.webContents.send('canvas:toggle'); }
   });
@@ -660,6 +676,7 @@ function playIntro() {
 }
 
 app.whenReady().then(() => {
+  if (WIN) Menu.setApplicationMenu(null); // its accelerators (Ctrl+W closes the window, Ctrl+R reloads) belong to the terminals
   offerMove();
   if (wantsIntro()) {
     createWindow({ show: false });
@@ -924,7 +941,7 @@ handle('agent:kill', ({ pid }) => {
 // a tab renamed in the sidebar renames the Synapse agent in its pty, so the node view shows the same name
 handle('agent:rename', ({ pty, name }) => {
   const t = ptys.get(pty);
-  const a = t && listAgents().find((x) => x.pid === t.pid);
+  const a = t && listAgents().find((x) => hostOf(x) === t.pid);
   if (!a) return null;
   return renameAgent(a, name);
 });

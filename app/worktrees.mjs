@@ -15,7 +15,8 @@ export function listWorktrees(repo) {
       const at = line.indexOf(' ');
       return at < 0 ? [line, true] : [line.slice(0, at), line.slice(at + 1)];
     }));
-    return { path: fields.worktree, branch: (fields.branch || '').replace(/^refs\/heads\//, ''), home: i === 0, locked: !!fields.locked, missing: !fs.existsSync(fields.worktree), bare: !!fields.bare };
+    // git prints C:/forward/slashes on Windows; resolve so they compare equal to paths from anywhere else
+    return { path: path.resolve(fields.worktree), branch: (fields.branch || '').replace(/^refs\/heads\//, ''), home: i === 0, locked: !!fields.locked, missing: !fs.existsSync(fields.worktree), bare: !!fields.bare };
   });
 }
 

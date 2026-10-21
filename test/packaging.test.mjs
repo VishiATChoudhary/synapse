@@ -29,8 +29,12 @@ test('every local import of a shipped module is shipped too', () => {
 
 test('the app ships cloudflared where the phone links look for it, and the build fetches it', () => {
   const config = JSON.parse(fs.readFileSync(path.join(ROOT, 'app/build/electron-builder.json'), 'utf8'));
-  assert.ok((config.extraResources || []).some((r) => r.from === 'app/vendor/cloudflared' && r.to === 'cloudflared'), 'Contents/Resources/cloudflared');
+  assert.ok((config.mac.extraResources || []).some((r) => r.from === 'app/vendor/cloudflared' && r.to === 'cloudflared'), 'Contents/Resources/cloudflared');
+  assert.ok((config.win.extraResources || []).some((r) => r.from === 'app/vendor/cloudflared.exe' && r.to === 'cloudflared.exe'), 'resources\\cloudflared.exe');
   assert.match(fs.readFileSync(path.join(ROOT, 'app/phone-share.mjs'), 'utf8'), /process\.resourcesPath && path\.join\(process\.resourcesPath, name\)/);
-  assert.match(fs.readFileSync(path.join(ROOT, 'scripts/build-app.mjs'), 'utf8'), /await fetchCloudflared\(\)/);
-  assert.match(fs.readFileSync(path.join(ROOT, 'scripts/fetch-cloudflared.mjs'), 'utf8'), /const SHA256 = '[0-9a-f]{64}'/, 'pinned by checksum');
+  const build = fs.readFileSync(path.join(ROOT, 'scripts/build-app.mjs'), 'utf8');
+  assert.match(build, /await fetchCloudflared\(\)/);
+  assert.match(build, /await fetchCloudflared\('win'\)/);
+  const fetcher = fs.readFileSync(path.join(ROOT, 'scripts/fetch-cloudflared.mjs'), 'utf8');
+  assert.equal(fetcher.match(/sha256: '[0-9a-f]{64}'/g)?.length, 2, 'both builds pinned by checksum');
 });

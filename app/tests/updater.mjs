@@ -7,7 +7,7 @@ import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
-import { createUpdater, signManifest, verifyManifest, newer, bundleOf, PUBLIC_KEY } from '../updater.mjs';
+import { createUpdater, signManifest, verifyManifest, windowsEntry, newer, bundleOf, PUBLIC_KEY } from '../updater.mjs';
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-update-')));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -66,7 +66,24 @@ try {
   assert.ok(!newer('0.3.0', '0.3.0') && !newer('0.2.9', '0.3.0'));
   assert.equal(bundleOf('/Applications/Synapse.app/Contents/MacOS/Synapse'), '/Applications/Synapse.app');
   assert.equal(bundleOf('/usr/local/bin/node'), null);
+  assert.equal(bundleOf('C:\\Users\\a\\AppData\\Local\\Programs\\Synapse\\Synapse.exe', 'win32'), 'C:\\Users\\a\\AppData\\Local\\Programs\\Synapse');
+  assert.equal(bundleOf('C:\\Program Files\\nodejs\\node.exe', 'win32'), null);
   console.log('PASS versions and bundle path');
+
+  // Windows: its own signed entry in the same manifest; the Mac fields stay valid for Macs
+  const setup = Buffer.from('fake installer');
+  const winM = signManifest({ ...m, sig: undefined, win: signManifest({ version: '0.3.1', url: `${base}/Synapse-Setup-x64.exe`, sha256: crypto.createHash('sha256').update(setup).digest('hex'), size: setup.length }, PRIV) }, PRIV);
+  assert.equal(verifyManifest(winM, PUB).url, m.url, 'a Mac still reads its own entry');
+  assert.equal(windowsEntry(winM, PUB).url, `${base}/Synapse-Setup-x64.exe`);
+  assert.equal(windowsEntry(m, PUB), null, 'a release without a Windows build offers nothing');
+  assert.throws(() => windowsEntry({ ...winM, win: { ...winM.win, size: 99 } }, PUB), /signature/);
+  assert.throws(() => windowsEntry({ ...winM, version: '0.3.2' }, PUB), /signature/, 'the version is covered by the Windows signature too');
+  const winDir = path.join(tmp, 'win', 'Synapse'); fs.mkdirSync(winDir, { recursive: true });
+  files = { '/latest.json': JSON.stringify(winM), '/Synapse-Setup-x64.exe': setup };
+  const winUp = await createUpdater({ currentVersion: '0.3.0', bundle: winDir, manifestUrl: `${base}/latest.json`, publicKey: PUB, platform: 'win32' }).check();
+  assert.equal(winUp.state, 'ready', winUp.error);
+  assert.deepEqual(fs.readFileSync(winUp.staged), setup, 'the installer is staged as downloaded');
+  console.log('PASS windows manifest entry and staging');
 
   // nothing newer: stays idle
   publish(manifest({ version: '0.3.0' }));

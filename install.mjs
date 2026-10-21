@@ -7,9 +7,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const HOME = os.homedir();
-const ROOT = path.dirname(new URL(import.meta.url).pathname);
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const NODE = process.execPath;
 const MCP = path.join(ROOT, 'mcp.mjs');
 const HOOK = `"${NODE}" "${path.join(ROOT, 'hook.mjs')}"`;

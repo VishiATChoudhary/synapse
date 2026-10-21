@@ -50,7 +50,13 @@
     "gatekeeperAssess": false,
     "entitlements": "app/build/entitlements.mac.plist",
     "entitlementsInherit": "app/build/entitlements.mac.inherit.plist",
-    "notarize": true
+    "notarize": true,
+    "extraResources": [
+      {
+        "from": "app/vendor/cloudflared",
+        "to": "cloudflared"
+      }
+    ]
   },
   "dmg": {
     "title": "Synapse",
@@ -67,10 +73,29 @@
       }
     ]
   },
-  "extraResources": [
-    {
-      "from": "app/vendor/cloudflared",
-      "to": "cloudflared"
-    }
-  ]
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "icon": "app/build/icon.png",
+    "extraResources": [
+      {
+        "from": "app/vendor/cloudflared.exe",
+        "to": "cloudflared.exe"
+      }
+    ],
+    "signExecutable": false
+  },
+  "nsis": {
+    "oneClick": true,
+    "perMachine": false,
+    "artifactName": "Synapse-Setup-${version}.exe",
+    "shortcutName": "Synapse",
+    "deleteAppDataOnUninstall": false
+  }
 }

@@ -31,7 +31,9 @@ export const FILES = {
   account: path.join(DATA, 'account.json'),         // Synapse Cloud sign-in: { cloud, token, user }
   requests: path.join(DATA, 'requests.json'),       // synapse requests last fetched from the cloud
   talks: path.join(DATA, 'talks.json'),             // agent talk: conversations with friends' agents
+  ptys: path.join(DATA, 'ptys.json'),               // Windows: the desktop app's terminals, { pid: cwd }
 };
+export const WIN = process.platform === 'win32';
 export const REMOTE_DIR = path.join(DATA, 'remote');
 
 export function readJSON(file, fallback) {
@@ -369,6 +371,7 @@ const RUNTIMES = new Set(['node', 'bun', 'deno', 'bash', 'sh', 'zsh', 'python', 
 const SKIP_SUBCOMMANDS = new Set(['mcp', 'mcp-server', 'app-server', 'login', 'logout', 'daemon', 'host', 'serve', 'proto', '--version', '-v', 'update', 'completion']);
 
 function processTable() {
+  if (WIN) return winProcessTable();
   // lstart is five tokens, e.g. "Wed Oct 14 23:52:13 2026"
   const rows = [];
   for (const line of sh('ps', ['-axo', 'pid=,ppid=,pcpu=,lstart=,command=']).split('\n')) {
@@ -378,12 +381,35 @@ function processTable() {
   return rows;
 }
 
+// Windows has no ps: ask CIM once, and reuse the answer for a moment (PowerShell takes a while to start, and the
+// app asks every second). No CPU figure there, so agents found this way always show as idle.
+let winTable = { at: 0, rows: [] };
+const WIN_PS = "Get-CimInstance Win32_Process | ForEach-Object { '{0}\t{1}\t{2}\t{3}' -f $_.ProcessId, $_.ParentProcessId, $(if ($_.CreationDate) { [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds() } else { 0 }), $_.CommandLine }";
+function winProcessTable() {
+  if (Date.now() - winTable.at < 2500) return winTable.rows;
+  const rows = [];
+  const out = (() => {
+    try { return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', WIN_PS], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 8000, maxBuffer: 32 << 20, windowsHide: true }); }
+    catch (e) { return e.stdout || ''; }
+  })();
+  for (const line of out.split(/\r?\n/)) {
+    const [pid, ppid, start, ...cmd] = line.split('\t');
+    if (/^\d+$/.test(pid) && cmd.join('\t')) rows.push({ pid: +pid, ppid: +ppid, cpu: 0, start: +start || 0, cmd: cmd.join('\t') });
+  }
+  winTable = { at: Date.now(), rows };
+  return rows;
+}
+
+// A command line as words, quotes respected (Windows puts "C:\Program Files\..." first)
+const words = (cmd) => (String(cmd).match(/"[^"]*"|\S+/g) || []).map((w) => w.replace(/^"|"$/g, ''));
+const exeName = (p) => p.split(/[\\/]/).pop().replace(/\.exe$/i, '');
+
 function kindOf(cmd) {
-  const argv = cmd.split(/\s+/);
-  if (argv[0].includes('.app/')) return null; // desktop apps (e.g. Superset.app) are not CLI agents
+  const argv = words(cmd);
+  if (!argv.length || argv[0].includes('.app/')) return null; // desktop apps (e.g. Superset.app) are not CLI agents
   let i = 0;
-  let base = path.basename(argv[0]);
-  if (RUNTIMES.has(base) || /^python3?\.\d+$/.test(base)) { i = 1; while (argv[i]?.startsWith('-')) i++; base = path.basename(argv[i] || ''); }
+  let base = exeName(argv[0]);
+  if (RUNTIMES.has(base) || /^python3?\.\d+$/.test(base)) { i = 1; while (argv[i]?.startsWith('-')) i++; base = exeName(argv[i] || ''); }
   base = base.replace(/\.(m?js|cjs|ts)$/, '');
   if (!KINDS.includes(base) || base === 'claude') return null;
   if (SKIP_SUBCOMMANDS.has(argv[i + 1])) return null;
@@ -393,12 +419,27 @@ function kindOf(cmd) {
 function cwds(pids) {
   const out = new Map();
   if (!pids.length) return out;
+  if (WIN) { // no lsof: an agent in one of the app's terminals has that terminal's folder
+    const terms = readJSON(FILES.ptys, {});
+    for (const pid of pids) { const host = hostPid(pid); if (terms[host]) out.set(pid, terms[host]); }
+    return out;
+  }
   let pid = null;
   for (const l of sh('lsof', ['-a', '-d', 'cwd', '-Fn', '-p', pids.join(',')]).split('\n')) {
     if (l[0] === 'p') pid = +l.slice(1);
     else if (l[0] === 'n' && pid) out.set(pid, l.slice(1));
   }
   return out;
+}
+
+// The pid of the app terminal an agent runs in. On macOS the terminal execs the agent, so they are the same
+// process; on Windows the terminal is a cmd.exe and the agent one of its descendants.
+export function hostPid(pid) {
+  if (!WIN || !pid) return pid;
+  const terms = readJSON(FILES.ptys, {});
+  const rows = new Map(processTable().map((r) => [r.pid, r]));
+  for (let p = pid, guard = 0; p > 4 && guard < 64; p = rows.get(p)?.ppid, guard++) if (terms[p]) return p;
+  return pid;
 }
 
 const transcriptCache = new Map(); // agent id -> path
@@ -410,7 +451,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // mentions "resume <uuid>" does not count.
 export function codexResume(cmd) {
   const argv = String(cmd || '').split(/\s+/).filter(Boolean);
-  const at = argv.findIndex((t, i) => t === 'resume' && argv.slice(0, i).every((x) => x.startsWith('-') || /(^|\/)(node|codex)$/.test(x)));
+  const at = argv.findIndex((t, i) => t === 'resume' && argv.slice(0, i).every((x) => x.startsWith('-') || /(^|[\\/])(node|codex)(\.exe)?$/.test(x)));
   if (at < 0) return null;
   for (let i = at + 1; i < argv.length; i++) {
     if (UUID_RE.test(argv[i])) return { id: argv[i].toLowerCase() };
@@ -620,8 +661,10 @@ export function localAgents() {
   // forks: which agent each one was forked from and the question it was given (the app records it by pid)
   const lineage = readJSON(FILES.lineage, {});
   return found.map((a) => {
-    const n = names[a.id] ? { ...a, name: names[a.id], autoName: a.name } : a;
-    const f = lineage[a.pid];
+    const n = names[a.id] ? { ...a, name: names[a.id], autoName: a.name } : { ...a };
+    const host = a.pid && WIN ? hostPid(a.pid) : a.pid;
+    if (host !== a.pid) n.hostPid = host;
+    const f = lineage[host] || lineage[a.pid];
     return f ? { ...n, forkOf: f.parent, forkQ: f.question } : n;
   });
 }
@@ -686,13 +729,14 @@ export function projectOf(cwd) {
   if (!p) {
     let key = null, label = path.basename(cwd), worktree = null;
     try {
+      // path.resolve: git answers C:/forward/slashes on Windows, everything else there uses backslashes
       const [top, common] = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'],
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).trim().split('\n');
-      key = common.replace(/\/\.git\/?$/, '');
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).trim().split('\n').map((p) => (p ? path.resolve(p) : p));
+      key = path.basename(common) === '.git' ? path.dirname(common) : common;
       label = path.basename(key);
       if (top && top !== key) worktree = { path: top, name: path.basename(top) }; // a linked worktree, not the repo's own folder
     } catch {}
-    const wt = cwd.match(/\/worktrees\/([^/]+)\//); // e.g. ~/.superset/worktrees/<Project>/<branch>
+    const wt = cwd.match(/[\\/]worktrees[\\/]([^\\/]+)[\\/]/); // e.g. ~/.superset/worktrees/<Project>/<branch>
     if (wt) label = wt[1];
     if (!key) key = `project:${label}`; // not a git repo: group by name
     else if (!worktree) { // a repo's own folder was once keyed by name: carry its given name over

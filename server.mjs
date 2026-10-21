@@ -7,6 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { exec, execFile } from 'node:child_process';
 import { pipeline } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import { FILES, readJSON, writeJSON, listAgents, readAgentMessages, transcriptFile, projectOfAgent, colorOf, renameAgent, renameProject } from './lib.mjs';
 import { createEdge, removeEdge, setMode, endTalk, allowTalkRequest, dismissTalkRequest } from './ops.mjs';
 import * as remote from './remote.mjs';
@@ -28,7 +29,7 @@ if (process.env.SYNAPSE_DEMO && !fs.existsSync(FILES.edges)) {
   writeJSON(FILES.messages, msgs);
   writeJSON(FILES.layout, Object.fromEntries(Object.entries(DEMO_LAYOUT).map(([n, [x, y]]) => [by(n).id, { x, y }])));
 }
-const ROOT = path.dirname(new URL(import.meta.url).pathname);
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const INDEX = path.join(ROOT, 'public', 'index.html');
 
 const previewCache = new Map(); // sessionId -> { mtime, preview }
@@ -322,7 +323,8 @@ async function files(req, res, p, q) {
   const file = resolveFile(cwd, q.path), st = file && stat(file);
   if (!st) return json(res, 404, { error: 'not found', path: file });
   if (p === '/api/file/open' && req.method === 'POST') {
-    execFile('open', q.reveal ? ['-R', file] : [file], () => {});
+    if (process.platform === 'win32') execFile('explorer.exe', q.reveal ? [`/select,${file}`] : [file], () => {});
+    else execFile('open', q.reveal ? ['-R', file] : [file], () => {});
     return json(res, 200, { ok: true });
   }
   // fifos and sockets would block the event loop on open, so only regular files are read
@@ -355,5 +357,5 @@ async function files(req, res, p, q) {
 server.listen(PORT, '127.0.0.1', () => {
   const url = `http://localhost:${PORT}`;
   console.log(`synapse running at ${url}`);
-  if (!process.env.NO_OPEN) exec(`open ${url}`);
+  if (!process.env.NO_OPEN) exec(process.platform === 'win32' ? `start "" ${url}` : `open ${url}`);
 });

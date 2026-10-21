@@ -4,6 +4,9 @@ import { Terminal } from '../node_modules/@xterm/xterm/lib/xterm.mjs';
 import { FitAddon } from '../node_modules/@xterm/addon-fit/lib/addon-fit.mjs';
 
 const $ = (s) => document.querySelector(s);
+// Windows has no ⌘: the app's shortcuts are Ctrl+Shift+key there (Alt adds what ⇧ adds on a Mac), and every
+// title and hint written with Mac glyphs is rewritten to say so (winKeys below)
+const WIN = navigator.userAgent.includes('Windows');
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
 // Small inline SVGs inherit the current theme and need no image dependency.
@@ -120,9 +123,15 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
     // ⇧Enter is a newline in agent prompts: Claude Code and Codex read the CSI u form their own terminal
     // setup installs in iTerm2 and VS Code. A shell gets a plain Enter; the sequence would only echo there.
     if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey && kind !== 'shell') { e.preventDefault(); term.input('\x1b[13;2u'); return false; }
-    if (!e.metaKey || e.type !== 'keydown') return true;
+    if (WIN && e.type === 'keydown' && e.ctrlKey && !e.altKey) { // Windows terminal habits: Ctrl+V pastes, Ctrl+Shift+C/V copy and paste
+      if (!e.shiftKey && e.code === 'KeyV') return false; // the browser's paste event reaches xterm
+      if (e.shiftKey && e.code === 'KeyC') { e.preventDefault(); const sel = term.getSelection(); if (sel) navigator.clipboard.writeText(sel); return false; }
+      if (e.shiftKey && e.code === 'KeyV') { e.preventDefault(); navigator.clipboard.readText().then((t) => t && term.paste(t)); return false; }
+      if (!e.shiftKey && e.code === 'KeyC' && term.hasSelection()) { e.preventDefault(); navigator.clipboard.writeText(term.getSelection()); term.clearSelection(); return false; }
+    }
+    if (!appMod(e) || e.type !== 'keydown') return true;
     if (APP_KEYS.has(keyName(e))) return false;
-    const bytes = !e.shiftKey && !e.altKey && !e.ctrlKey && META_EDIT[e.key];
+    const bytes = (WIN ? !e.altKey : !e.shiftKey && !e.altKey && !e.ctrlKey) && META_EDIT[e.key];
     if (!bytes) return true;
     e.preventDefault(); term.input(bytes); return false;
   });
@@ -1558,7 +1567,10 @@ function toast(text, sig = false) {
 
 // ---------------------------------------------------------------- keys
 
-const keyName = (e) => (e.shiftKey ? 'shift+' : '') + e.key.toLowerCase();
+const appMod = (e) => (WIN ? e.ctrlKey && e.shiftKey && !e.metaKey : e.metaKey);
+// on Windows Shift is part of the modifier, so e.key is the shifted character: name the physical key instead
+const winKey = (e) => (/^(Key|Digit)/.test(e.code) ? e.code.slice(-1).toLowerCase() : { BracketLeft: '[', BracketRight: ']', Comma: ',' }[e.code] || e.key.toLowerCase());
+const keyName = (e) => (WIN ? (e.altKey ? 'shift+' : '') + winKey(e) : (e.shiftKey ? 'shift+' : '') + e.key.toLowerCase());
 // ⌃1 ⌃2 … start the nth agent (claude, codex, …; the shell is not in this list) in the focused worktree
 const agentProfiles = () => profileOrder().filter((k) => k !== 'shell');
 const agentKey = (e) => (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key) ? agentProfiles()[e.key - 1] : null);
@@ -1576,7 +1588,7 @@ window.addEventListener('keydown', (e) => {
   if (fanOpen && e.key === 'Backspace') { const s = focusedSlot(); const t = top(s); if (t?.parent != null) requestCloseSession(s, t.id); return; }
   const agent = agentKey(e);
   if (agent) { e.preventDefault(); const wt = focusedSlot()?.worktree || M.projects[0]?.worktrees[0]?.path; if (wt) newSlot(wt, agent); else toast('add a workspace first', true); return; }
-  if (!e.metaKey) return;
+  if (!appMod(e)) return;
   const k = keyName(e);
   if (!APP_KEYS.has(k)) return;
   e.preventDefault();
@@ -2512,6 +2524,30 @@ async function drawTalkHistory(box) {
 const ageOf = (t) => { const m = Math.max(0, Math.round((Date.now() - (t || 0)) / 60000)); return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
 
 // ---------------------------------------------------------------- boot
+
+// ---------------------------------------------------------------- Windows: say Ctrl, not ⌘
+
+const winKeys = (t) => t.replace(/⇧⌘/g, 'Ctrl+Shift+Alt+').replace(/⌘/g, 'Ctrl+Shift+').replace(/⌃/g, 'Ctrl+').replace(/⌥/g, 'Alt+')
+  .replace(/⇧/g, 'Shift+').replace(/⌫/g, 'Backspace').replace(/\bthis Mac\b/g, 'this PC').replace(/\byour Mac\b/g, 'your PC');
+const MAC_GLYPHS = /[⌘⌃⌥⇧⌫]|\b(this|your) Mac\b/;
+function winText(root) {
+  if (root.nodeType === Node.TEXT_NODE) { if (MAC_GLYPHS.test(root.data) && !root.parentElement?.closest('.xterm')) root.data = winKeys(root.data); return; }
+  if (root.nodeType !== Node.ELEMENT_NODE || root.closest('.xterm')) return;
+  for (const e of [root, ...root.querySelectorAll('[title], [aria-label]')]) for (const a of ['title', 'aria-label']) { const v = e.getAttribute(a); if (v && MAC_GLYPHS.test(v)) e.setAttribute(a, winKeys(v)); }
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) if (MAC_GLYPHS.test(n.data) && !n.parentElement?.closest('.xterm')) n.data = winKeys(n.data);
+}
+if (WIN) {
+  document.body.classList.add('win');
+  winText(document.body);
+  new MutationObserver((list) => {
+    for (const m of list) {
+      if (m.target.nodeType === Node.ELEMENT_NODE && m.target.closest('.xterm')) continue;
+      if (m.type === 'attributes' || m.type === 'characterData') winText(m.target);
+      else m.addedNodes.forEach(winText);
+    }
+  }).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['title', 'aria-label'] });
+}
 
 (async () => {
   const flags = await synapse.flags();

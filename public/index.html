@@ -696,6 +696,8 @@ function hitTest(wx, wy) {
 // ---------- input ----------
 // Inside the Synapse desktop app the canvas is an iframe: ⌘-click on a node asks the app to open that session.
 const EMBEDDED = window.parent !== window;
+// ⌘-click opens a node's session in the app; Windows has no ⌘, so Ctrl-click there
+const openMod = (ev) => ev.metaKey || (navigator.userAgent.includes('Windows') && ev.ctrlKey);
 if (EMBEDDED) $('hints').insertAdjacentHTML('afterbegin', '<span><kbd>⌘ click</kbd>open session</span>');
 // Right-click. Inside the app the app draws the menu (it can start agents, add workspaces, kill
 // processes) and tells us what to do here; standalone we offer what the canvas itself can do.
@@ -747,7 +749,7 @@ cv.addEventListener('pointerdown', (ev) => {
   cv.setPointerCapture(ev.pointerId);
   const w = toWorld(ev.clientX, ev.clientY);
   const h = hitTest(w.x, w.y);
-  if (EMBEDDED && ev.metaKey && h?.type === 'node' && !agents.get(h.id)?.a.external) {
+  if (EMBEDDED && openMod(ev) && h?.type === 'node' && !agents.get(h.id)?.a.external) {
     const a = agents.get(h.id)?.a;
     window.parent.postMessage({ type: 'synapse:open', id: h.id, pid: a?.pid, name: a?.name, kind: a?.kind, cwd: a?.cwd }, '*');
     return;
@@ -784,7 +786,7 @@ addEventListener('pointermove', (ev) => {
     hover = hitTest(w.x, w.y);
   }
   cv.style.cursor = drag?.mode === 'link' ? 'crosshair' : drag?.mode ? 'grabbing'
-    : EMBEDDED && ev.metaKey && hover?.type === 'node' ? 'pointer'
+    : EMBEDDED && openMod(ev) && hover?.type === 'node' ? 'pointer'
     : hover?.type === 'ring' ? 'crosshair' : hover?.type === 'node' || hover?.type === 'group' ? 'grab'
     : hover?.type === 'x' || hover?.type === 'edge' ? 'pointer' : 'default';
 });

@@ -2,6 +2,8 @@
 // Build dist/mac-arm64/Synapse.app and dist/Synapse-<version>-arm64.dmg.
 //   node scripts/build-app.mjs             sign with the Developer ID in the keychain and notarize (what releases need)
 //   node scripts/build-app.mjs --ad-hoc    skip Apple entirely: quick local build, Gatekeeper warns on first launch
+//   node scripts/build-app.mjs --win       the Windows x64 installer, dist/Synapse-Setup-<version>.exe (cross-built here,
+//                                          unsigned: SmartScreen warns on first launch until it has an Authenticode cert)
 // With a "Developer ID Application" certificate present, electron-builder signs with the hardened runtime
 // (app/build/entitlements.mac.plist) and hands the app to Apple's notary service. Credentials, first match wins:
 //   - any APPLE_* variables electron-builder understands (APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID,
@@ -11,19 +13,33 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { fetchCloudflared } from './fetch-cloudflared.mjs';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const CONFIG = 'app/build/electron-builder.json';
 const APP = path.join(ROOT, 'dist', 'mac-arm64', 'Synapse.app');
-const builder = path.join(ROOT, 'node_modules', '.bin', 'electron-builder');
 
 const run = (cmd, a, env = {}) => {
   const r = spawnSync(cmd, a, { cwd: ROOT, stdio: 'inherit', env: { ...process.env, ...env } });
   if (r.status !== 0) process.exit(r.status ?? 1);
 };
+// through node, not node_modules/.bin: on Windows that is a .cmd, which spawn can not run directly
+const builder = (a, env) => run(process.execPath, [path.join(ROOT, 'node_modules', 'electron-builder', 'cli.js'), ...a], env);
 const out = (cmd, a) => { try { return execFileSync(cmd, a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return ''; } };
+
+if (args.includes('--win')) {
+  // node-pty ships its Windows prebuilds (conpty) in the same package, so nothing native is compiled for this.
+  // No wine here, so the exe keeps Electron's stock icon and version info (signAndEditExecutable: false).
+  if (!fs.existsSync(path.join(ROOT, 'app', 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node'))) {
+    console.error('build-app: app/node_modules has no node-pty win32-x64 prebuild; run `npm ci` in app/');
+    process.exit(1);
+  }
+  await fetchCloudflared('win');
+  builder(['--win', 'nsis', '--x64', '--config', CONFIG]);
+  process.exit(0);
+}
 
 // node-pty's prebuilt spawn-helper ships without the execute bit, and then no terminal can start (posix_spawnp failed)
 const helper = path.join(ROOT, 'app', 'node_modules', 'node-pty', 'prebuilds', 'darwin-arm64', 'spawn-helper');
@@ -40,9 +56,9 @@ const identity = out('/usr/bin/security', ['find-identity', '-v', '-p', 'codesig
 if (args.includes('--ad-hoc') || !identity) {
   if (!identity) console.warn('build-app: no "Developer ID Application" certificate in the keychain, ad-hoc signing (Gatekeeper will warn)');
   const noSign = { CSC_IDENTITY_AUTO_DISCOVERY: 'false' };
-  run(builder, ['--mac', 'dir', '--arm64', '--config', CONFIG], noSign);
+  builder(['--mac', 'dir', '--arm64', '--config', CONFIG], noSign);
   run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', APP]);
-  run(builder, ['--mac', 'dmg', '--arm64', '--prepackaged', APP, '--config', CONFIG], noSign);
+  builder(['--mac', 'dmg', '--arm64', '--prepackaged', APP, '--config', CONFIG], noSign);
   process.exit(0);
 }
 
@@ -54,7 +70,7 @@ if (!hasCreds && !env.APPLE_KEYCHAIN_PROFILE) {
   process.exit(1);
 }
 console.log(`build-app: signing with ${identity.trim().replace(/^\S+\s+\S+\s+/, '')}, notarizing via ${env.APPLE_KEYCHAIN_PROFILE ? 'keychain profile "synapse"' : 'APPLE_* environment'}`);
-run(builder, ['--mac', 'dmg', 'dir', '--arm64', '--config', CONFIG], env);
+builder(['--mac', 'dmg', 'dir', '--arm64', '--config', CONFIG], env);
 
 // Prove it: Gatekeeper must accept the app as "Notarized Developer ID" and the ticket must be stapled on.
 run('/usr/bin/codesign', ['--verify', '--deep', '--strict', APP]);
