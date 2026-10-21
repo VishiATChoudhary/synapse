@@ -682,6 +682,7 @@ app.on('window-all-closed', () => app.quit());
 // only once node-pty has seen them all exit: its exit-watcher threads otherwise block or crash Node's shutdown.
 let quitting = false;
 app.on('before-quit', (e) => {
+  phone.stopShares(); // no tunnel outlives the app
   try { canvasProc?.kill(); } catch {}
   if (updater.state.state === 'ready') updater.install({ relaunch: false, open: UPDATE_OPEN }); // swaps in once we are gone
   if (quitting || !ptys.size) return;
@@ -815,6 +816,8 @@ handle('pty:spawn', (a) => {
 handle('phone:devices', () => phone.devices());
 handle('phone:allow', ({ id }) => phone.allow(id));
 handle('phone:remove', ({ id }) => phone.remove(id));
+handle('phone:shares', () => phone.liveShares());
+handle('phone:unshare', ({ id }) => phone.stopShare(id));
 handle('pty:write', ({ id, data }) => { ptys.get(id)?.p.write(data); });
 handle('pty:resize', ({ id, cols, rows }) => { try { ptys.get(id)?.p.resize(cols, rows); } catch {} });
 handle('pty:kill', ({ id }) => { ptys.get(id)?.p.kill(); });

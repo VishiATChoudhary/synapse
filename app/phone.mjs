@@ -17,6 +17,7 @@ import path from 'node:path';
 import nacl from 'tweetnacl';
 import { DATA, readJSON, writeJSON, listAgents, readAgentMessages, projectOf, colorOf } from '../lib.mjs';
 import * as media from './phone-media.mjs';
+import * as shares from './phone-share.mjs';
 
 const FILE = path.join(DATA, 'phones.json');
 const ACTIVE = 2 * 60_000;           // a phone that checked in this recently gets live updates
@@ -103,8 +104,14 @@ const spawns = new Map();  // request id -> { phone, at, pty }
 export function start(h) {
   host = h;
   media.setOnChange(() => schedule(100)); // a video copy is ready: tell the phone now
+  shares.sweep();
+  shares.attach((list) => { schedule(100); host.changed({ shares: list }); }); // a link went live, got more time or ended
   schedule(1000);
 }
+// live links, for the Mac's own list and for quitting
+export const liveShares = () => shares.list();
+export const stopShare = (id) => shares.stop(id);
+export const stopShares = () => shares.stopAll();
 const schedule = (ms) => { clearTimeout(timer); timer = setTimeout(tick, ms); };
 export const wake = () => schedule(200); // signed in or out, a phone allowed: look again now
 
@@ -161,6 +168,20 @@ async function handle(id, phone, m) {
     if (!p) return send(id, phone, { t: 'piece', id: m.id, i: m.i, gone: true });
     return sendBin(id, phone, { t: 'piece', id: m.id, i: p.i, n: p.n, size: p.size }, p.bytes);
   }
+  // a link or file in an agent's chat, opened on the phone: only what that agent's messages mention, nothing else
+  // on this Mac. Starting a tunnel takes seconds, so the answer comes later and the mailbox keeps flowing.
+  if (m.t === 'share') {
+    const a = listAgents().find((x) => x.id === m.id && !x.remote);
+    if (!a) throw new Error('that agent is no longer running');
+    const target = String(m.target || '');
+    if (![...messagesOf(a), ...messagesOf(a, true)].some((x) => shares.targetsIn(x.text).includes(target))) throw new Error('that link is not in this chat');
+    shares.share(target, { cwd: a.cwd })
+      .then((s) => send(id, phone, { t: 'shared', req: m.req, share: s }))
+      .catch((e) => send(id, phone, { t: 'error', req: m.req, error: e.message }));
+    return;
+  }
+  if (m.t === 'extend') return send(id, phone, { t: 'shared', req: m.req, share: shares.extend(String(m.share || '')) });
+  if (m.t === 'unshare') { shares.stop(String(m.share || '')); return; }
   if (m.t === 'watch') { l.watch = typeof m.id === 'string' ? m.id : null; l.sent.messages = null; return; }
   if (m.t === 'bye') { live.delete(phone.id); return; }
   if (m.t === 'send' || m.t === 'stop') {
@@ -293,7 +314,7 @@ function snapshot() {
       preview: last ? { role: last.role, text: last.text.slice(0, 200) } : null,
     };
   });
-  return { projects, agents, kinds: host.kinds() };
+  return { projects, agents, kinds: host.kinds(), shares: shares.list() };
 }
 
 async function push(id) {

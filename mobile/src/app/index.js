@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Squares, rooms, summary } from '../rooms';
 import { byAttention, leaveDemo, useSynapse } from '../store';
 import { FONT, useTheme } from '../theme';
+import { minutesLeft } from '../links';
 import { Display, Meta } from '../ui';
 
 function Notice({ children }) {
@@ -35,7 +36,7 @@ function Room({ r }) {
 export default function Home() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
-  const { agents, projects, mode, computer, computers, online, access, error, user } = useSynapse();
+  const { agents, projects, mode, computer, computers, online, access, error, user, shares = [] } = useSynapse();
   if (mode === 'loading') return <View style={{ flex: 1, backgroundColor: t.paper }} />;
   if (mode === 'signed-out') return <Redirect href="/login" />;
   const account = mode === 'account';
@@ -83,6 +84,18 @@ export default function Home() {
             <Text style={{ flex: 1, fontFamily: FONT.sans, fontSize: 15, lineHeight: 21, color: t.paper }} numberOfLines={2}>
               <Text style={{ fontFamily: FONT.sansMedium }}>{asking.name}</Text> asks: {asking.needs.question.replace(/`/g, '')}
             </Text>
+          </Pressable>
+        )}
+
+        {shares.length > 0 && (
+          <Pressable onPress={() => router.push('/live')} style={({ pressed }) => ({
+            flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: t.sig, padding: 12, marginBottom: 16, opacity: pressed ? 0.7 : 1,
+          })}>
+            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: t.sig }} />
+            <Text style={{ flex: 1, fontFamily: FONT.sans, fontSize: 15, color: t.ink }} numberOfLines={1}>
+              {shares.length === 1 ? `${shares[0].label} is open` : `${shares.length} links open`}
+            </Text>
+            <Meta color={t.ink2}>{`${minutesLeft(Math.min(...shares.map((s) => s.expires)))} min ›`}</Meta>
           </Pressable>
         )}
 

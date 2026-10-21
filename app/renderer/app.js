@@ -2170,9 +2170,23 @@ async function drawPhones(box) {
     box.append(row);
   }
   if (!info.list.length) box.append(el('div', 'hint', `sign in to the Synapse phone app as ${ACC.user?.email || 'this account'}: the phone shows up here to be allowed`));
+  // links the phone opened: public for a while through Cloudflare, so they are listed here too and can be stopped
+  const live = await synapse.phone.shares().catch(() => []);
+  for (const sh of live.filter((x) => x.state !== 'error')) {
+    const row = el('div', 'opt set'), stop = el('button', 'btn', 'stop');
+    const left = Math.max(0, Math.ceil((sh.expires - Date.now()) / 60000));
+    row.append(el('span', 'k', sh.label), el('span', 'c', sh.state === 'live' ? `open to your phone · ${left} min left · anyone with the link can see it` : 'starting…'), stop);
+    stop.onclick = async () => { try { await synapse.phone.unshare(sh.id); } catch (e) { toast(e.message, true); } drawPhones(box); };
+    box.append(row);
+  }
 }
-synapse.phone.onChanged(({ asking }) => {
+let liveShareIds = new Set();
+synapse.phone.onChanged(({ asking, shares }) => {
   if (asking) toast(`${asking} wants to use this Mac · allow it in settings`);
+  if (shares) {
+    for (const sh of shares) if (sh.state === 'live' && !liveShareIds.has(sh.id)) toast(`${sh.label} is open to your phone for ${Math.round((sh.expires - Date.now()) / 60000)} min · stop it in settings`);
+    liveShareIds = new Set(shares.filter((x) => x.state === 'live').map((x) => x.id));
+  }
   if (phoneBox?.isConnected) drawPhones(phoneBox);
 });
 synapse.phone.onShow(() => openSettings());

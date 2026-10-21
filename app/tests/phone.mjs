@@ -96,6 +96,15 @@ assert.ok(!typed.some((x) => x.text === 'forged'), 'a box with the wrong key is 
 // stop is Esc; an agent outside the app cannot be typed into
 await c.send({ t: 'stop', id: api.id });
 await until('stop sends Esc', () => typed.some((x) => x.data === '\x1b'));
+
+// links in a chat open on the phone; anything the agent's messages do not mention is refused before any tunnel
+const reply = (req) => until(`answer to ${req}`, async () => { inbox.push(...await c.poll()); return inbox.find((m) => m.req === req); });
+const limits = listAgents().find((a) => a.name === 'api-rate-limit');
+await c.send({ t: 'share', req: 's1', id: limits.id, target: '/etc/passwd' });
+assert.match((await reply('s1')).error, /not in this chat/);
+await c.send({ t: 'share', req: 's2', id: limits.id, target: 'config/limits.yaml' });
+assert.match((await reply('s2')).error, /limits\.yaml does not exist|cloudflared/, 'a mentioned file gets as far as sharing (it is not on this machine)');
+assert.ok(Array.isArray((await wait(c, 'state', 'state')).shares), 'the state lists live links');
 inbox.length = 0;
 await c.send({ t: 'send', id: st.agents.find((a) => !a.inApp).id, text: 'hi' });
 await wait(c, 'error', 'an error comes back');
@@ -142,7 +151,7 @@ assert.ok((await link.computers(viaBrowser)).some((m) => m.id === mac.id), 'sign
 await assert.rejects(link.signInWith(cloud.base, 'github', 'Gave up', async () => null), /cancelled/, 'closing the sheet cancels');
 await assert.rejects(link.signInWith(cloud.base, 'github', 'Forged', async () => 'synapse://signed-in?code=abc&state=wrong'), /did not finish/, 'a callback for another sign-in is refused');
 
-console.log('PASS phone link: account sign-in, the Mac asks first, state, chat, other accounts shut out, replay and forgery dropped, read-only agents, spawn rules, remove and sign out, browser sign-in');
+console.log('PASS phone link: account sign-in, the Mac asks first, state, chat, other accounts shut out, replay and forgery dropped, read-only agents, links only from the chat, spawn rules, remove and sign out, browser sign-in');
 cloud.stop();
 fs.rmSync(home, { recursive: true, force: true });
 process.exit(0);
