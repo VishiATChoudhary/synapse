@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('synapse', {
     remove: (id) => call('phone:remove', { id }),
     onSpawn: (fn) => on('phone:spawn', fn),
     onChanged: (fn) => on('phone:changed', fn),
+    shares: () => call('phone:shares'),
+    unshare: (id) => call('phone:unshare', { id }),
     onShow: (fn) => on('phone:show', fn),
   },
   fork: { spawn: (a) => call('fork:spawn', a), link: (child, parent) => call('fork:link', { child, parent }), onRequest: (fn) => on('fork:request', fn) },

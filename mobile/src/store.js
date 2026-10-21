@@ -17,7 +17,7 @@ const keychain = (key) => (Platform.OS === 'web'
 const ACCOUNT = keychain('account-v1'), CHOSEN = keychain('computer-v1');
 
 // mode: 'loading' | 'signed-out' | 'demo' | 'account'
-let state = { agents: [], projects: [], kinds: null, mode: 'loading', user: null, computers: [], computerId: null };
+let state = { agents: [], projects: [], kinds: null, shares: [], mode: 'loading', user: null, computers: [], computerId: null };
 const listeners = new Set();
 const subscribe = (l) => { listeners.add(l); return () => listeners.delete(l); };
 const set = (patch) => { state = { ...state, ...patch }; listeners.forEach((l) => l()); };
@@ -27,7 +27,7 @@ function use(make, mode) {
   current?.close?.();
   current = make((next) => set({ ...next, mode }));
 }
-const empty = { agents: [], projects: [], kinds: null, computer: null, online: false, access: null, error: null };
+const empty = { agents: [], projects: [], kinds: null, shares: [], computer: null, online: false, access: null, error: null };
 
 // the account's computers; the chosen one (or the most recently seen) is the source
 async function loadComputers() {
@@ -96,6 +96,9 @@ export const source = {
   stop: (id) => current?.stop(id),
   watch: (id) => current?.watch?.(id),
   spawn: async (opts) => (current ? current.spawn(opts) : null),
+  share: async (id, target) => (current?.share ? current.share(id, target) : { error: 'Not connected to a computer.' }),
+  extend: async (share) => current?.extend?.(share),
+  unshare: (share) => current?.unshare?.(share),
 };
 
 export const useSynapse = () => useSyncExternalStore(subscribe, () => state);

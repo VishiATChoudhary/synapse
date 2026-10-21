@@ -30,6 +30,7 @@ export default function Layout() {
         <Stack.Screen name="agent/[id]" options={{ title: '' }} />
         <Stack.Screen name="new" options={{ presentation: 'modal', title: 'New agent' }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
+        <Stack.Screen name="live" options={{ title: 'Live' }} />
         <Stack.Screen name="login" options={{ headerShown: false, animation: 'fade' }} />
       </Stack>
       <ConsentSheet />

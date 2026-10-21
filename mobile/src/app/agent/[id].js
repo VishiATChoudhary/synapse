@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { withConsent } from '../../consent';
+import { LinkChips } from '../../LinkChips';
 import { MediaStrip } from '../../MediaStrip';
 import { source, useAgent } from '../../store';
 import { FONT, useTheme } from '../../theme';
@@ -34,10 +35,10 @@ function Tools({ tools }) {
   );
 }
 
-function Message({ m }) {
+function Message({ m, agentId }) {
   const t = useTheme();
   const media = m.media?.length ? <MediaStrip media={m.media} /> : null;
-  if (m.tools) return <View style={{ gap: 10 }}><Tools tools={m.tools} />{media}</View>;
+  if (m.tools) return <View style={{ gap: 10 }}><Tools tools={m.tools} />{media}<LinkChips agentId={agentId} text={m.tools.join('\n')} /></View>;
   if (m.role === 'user') return (
     <View style={{ alignSelf: 'flex-end', maxWidth: '85%', gap: 10 }}>
       <View style={{ backgroundColor: t.ink, paddingVertical: 10, paddingHorizontal: 14 }}>
@@ -46,7 +47,7 @@ function Message({ m }) {
       {media}
     </View>
   );
-  return <View style={{ gap: 10 }}><Markdown text={m.text} />{media}</View>;
+  return <View style={{ gap: 10 }}><Markdown text={m.text} />{media}<LinkChips agentId={agentId} text={m.text} /></View>;
 }
 
 function Needs({ a }) {
@@ -96,7 +97,7 @@ export default function Agent() {
         ),
       }} />
       <ScrollView ref={scroll} contentContainerStyle={{ padding: 20, gap: 18 }}>
-        {a.messages.length ? group(a.messages).map((m, i) => <Message key={i} m={m} />) : <Meta>No messages yet. Say what to work on.</Meta>}
+        {a.messages.length ? group(a.messages).map((m, i) => <Message key={i} m={m} agentId={a.id} />) : <Meta>No messages yet. Say what to work on.</Meta>}
         {busy && <Meta color={t.sig}>Working…</Meta>}
         {a.needs && <Needs a={a} />}
       </ScrollView>

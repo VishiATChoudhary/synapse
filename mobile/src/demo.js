@@ -36,7 +36,7 @@ const AGENTS = [
     ['user', 'Rebuild the checkout page on the new design system.'],
     ['assistant', 'Checkout now uses `<Stepper>` and `<PriceRow>`. Here it is after paying:', false, [SHOT]],
     ['assistant', '[Bash: record the checkout flow → checkout-walkthrough.mp4]', true, [WALKTHROUGH]],
-    ['assistant', 'Recorded a walkthrough of the whole flow. Waiting on the API for the new auth cookie.'],
+    ['assistant', 'Recorded a walkthrough of the whole flow. The preview runs at http://localhost:5173/checkout and the notes are in docs/checkout.md. Waiting on the API for the new auth cookie.'],
   )],
   ['e2e', 'gemini', 1, 'e2e', say(
     ['user', 'Write Playwright tests for checkout.'],
@@ -88,6 +88,19 @@ export function createDemo(emit) {
       patch(id, (a) => ({ ...push('user', option)(a), needs: null }));
       work(id, 'Migration applied. Moving on to the token issuer.');
     },
+    // sample links open a page on the Synapse site, so the whole flow can be tried without a computer
+    share(id, target) {
+      const share = { id: `demo-share-${Date.now()}`, kind: /^https?:/.test(target) ? 'site' : 'file', label: /^https?:/.test(target) ? target.replace(/^https?:\/\//, '') : target.split('/').pop(), target, url: 'https://heysynapse.dev', state: 'live', expires: Date.now() + 15 * 60_000, started: Date.now() };
+      state.shares = [share, ...(state.shares || []).filter((s) => s.target !== target)];
+      emit({ ...state });
+      return Promise.resolve({ share });
+    },
+    extend(sid) {
+      state.shares = (state.shares || []).map((s) => (s.id === sid ? { ...s, expires: Math.max(s.expires, Date.now()) + 15 * 60_000 } : s));
+      emit({ ...state });
+      return Promise.resolve({ share: state.shares.find((s) => s.id === sid) });
+    },
+    unshare(sid) { state.shares = (state.shares || []).filter((s) => s.id !== sid); emit({ ...state }); },
     stop(id) {
       patch(id, (a) => ({ ...push('assistant', 'Interrupted by user')(a), status: 'idle' }));
     },
