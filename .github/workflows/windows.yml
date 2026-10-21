@@ -21,8 +21,10 @@ jobs:
       - name: smoke test
         shell: pwsh
         run: |
+          Push-Location app; $electron = node -p "require('electron')"; Pop-Location
+          Write-Output "electron: $electron"; Get-ChildItem app\node_modules\electron
           $env:ELECTRON_RUN_AS_NODE = '1'
-          & .\app\node_modules\electron\dist\electron.exe .\app\tests\windows.mjs
+          & $electron app\tests\windows.mjs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: build the installer
         run: node scripts/build-app.mjs --win
