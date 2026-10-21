@@ -82,7 +82,7 @@ export function createRemote(emit, acc, computer) {
     stop(id) { say({ t: 'stop', id }); },
     // resolves with the new agent's id once it is running on the computer (null if it did not start)
     // a link or file from an agent's chat, opened through a tunnel on the computer: resolves once it is live
-    share(id, target) { return request({ t: 'share', id, target }, 60_000); },
+    share(id, target) { return request({ t: 'share', id, target }, 90_000); }, // a tunnel plus its name appearing in DNS: about 10 s, at most about 70
     extend(share) { return request({ t: 'extend', share }, 20_000); },
     unshare(share) { say({ t: 'unshare', share }); snap = { ...snap, shares: snap.shares.filter((s) => s.id !== share) }; publish(); },
     spawn({ cwd, kind, prompt }) {

@@ -66,5 +66,11 @@
         "path": "/Applications"
       }
     ]
-  }
+  },
+  "extraResources": [
+    {
+      "from": "app/vendor/cloudflared",
+      "to": "cloudflared"
+    }
+  ]
 }

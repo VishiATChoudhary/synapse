@@ -32,8 +32,9 @@ function Chip({ agentId, target }) {
         paddingVertical: 6, paddingHorizontal: 10, opacity: pressed ? 0.6 : 1,
       })}>
         <Text style={{ fontFamily: FONT.mono, fontSize: 12, color: t.sig }}>{busy ? '…' : isSite(target) ? '◎' : '↗'}</Text>
-        <Text style={{ fontFamily: FONT.mono, fontSize: 12, color: t.ink, flexShrink: 1 }} numberOfLines={1}>{busy ? `Opening ${labelOf(target)}` : labelOf(target)}</Text>
+        <Text style={{ fontFamily: FONT.mono, fontSize: 12, color: t.ink, flexShrink: 1 }} numberOfLines={1}>{busy ? `Starting a secure link to ${labelOf(target)}…` : labelOf(target)}</Text>
       </Pressable>
+      {busy && <Meta>Takes about 10 seconds the first time.</Meta>}
       {!!error && <Meta color={t.sig}>{error}</Meta>}
     </View>
   );

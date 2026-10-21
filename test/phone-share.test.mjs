@@ -52,7 +52,7 @@ test('markdown is escaped before it is formatted', () => {
 });
 
 test('a file share serves that file under its token, Markdown as a page, nothing else', async () => {
-  const s = await share.share('plan.md', { cwd: docs, cloudflared: fake });
+  const s = await share.share('plan.md', { cwd: docs, cloudflared: fake, ready: async () => {} });
   assert.equal(s.state, 'live', s.error);
   const page = await get(s.url);
   assert.equal(page.status, 200);
@@ -65,7 +65,7 @@ test('a file share serves that file under its token, Markdown as a page, nothing
 });
 
 test('an HTML page also gets the files next to it, never dotfiles or the folder above', async () => {
-  const s = await share.share(path.join(docs, 'page.html'), { cloudflared: fake });
+  const s = await share.share(path.join(docs, 'page.html'), { cloudflared: fake, ready: async () => {} });
   assert.match((await get(s.url)).body, /<h1>hi<\/h1>/);
   assert.equal((await get(`${s.url}s.css`)).body, 'h1{color:red}');
   for (const p of ['.env', '..%2Foutside.txt', '%2E%2E/outside.txt']) assert.equal((await get(`${s.url}${p}`)).status, 404, p);
@@ -76,25 +76,25 @@ test('a site share tunnels its port; the same target gives the same link; extend
   await new Promise((r) => site.listen(0, '127.0.0.1', r));
   t.after(() => site.close());
   const port = site.address().port;
-  const s = await share.share(`http://localhost:${port}/dash?x=1`, { cloudflared: fake });
+  const s = await share.share(`http://localhost:${port}/dash?x=1`, { cloudflared: fake, ready: async () => {} });
   assert.equal(s.state, 'live', s.error);
   assert.ok(s.url.endsWith('/dash?x=1'), 'opens where the agent pointed');
-  assert.equal((await share.share(`http://localhost:${port}/dash?x=1`, { cloudflared: fake })).id, s.id);
+  assert.equal((await share.share(`http://localhost:${port}/dash?x=1`, { cloudflared: fake, ready: async () => {} })).id, s.id);
   const later = share.extend(s.id);
   assert.ok(later.expires - Date.now() > share.TTL + 60_000, 'extend adds 15 minutes');
   assert.ok(share.list().some((x) => x.id === s.id));
   assert.equal(share.stop(s.id), true);
   assert.ok(!share.list().some((x) => x.id === s.id), 'stopped');
-  await assert.rejects(share.share('http://localhost:1/', { cloudflared: fake }), /nothing is running on localhost:1/);
-  await assert.rejects(share.share(path.join(docs, 'missing.pdf'), { cloudflared: fake }), /does not exist/);
-  await assert.rejects(share.share(path.join(docs, 'x.exe'), { cloudflared: fake }), /cannot be opened/);
+  await assert.rejects(share.share('http://localhost:1/', { cloudflared: fake, ready: async () => {} }), /nothing is running on localhost:1/);
+  await assert.rejects(share.share(path.join(docs, 'missing.pdf'), { cloudflared: fake, ready: async () => {} }), /does not exist/);
+  await assert.rejects(share.share(path.join(docs, 'x.exe'), { cloudflared: fake, ready: async () => {} }), /cannot be opened/);
   fs.writeFileSync(path.join(docs, 'notes.txt'), 'n');
-  await assert.rejects(share.share(path.join(docs, 'notes.txt'), { cloudflared: null }), /brew install cloudflared/);
+  await assert.rejects(share.share(path.join(docs, 'notes.txt'), { cloudflared: null }), /missing its tunnel helper/);
 });
 
 test('pids are written down and swept, so no tunnel outlives a crash', async () => {
   share.stopAll();
-  const s = await share.share(path.join(docs, 'plan.md'), { cloudflared: fake });
+  const s = await share.share(path.join(docs, 'plan.md'), { cloudflared: fake, ready: async () => {} });
   const pids = JSON.parse(fs.readFileSync(path.join(process.env.SYNAPSE_HOME, 'shares.json'), 'utf8'));
   assert.equal(pids.length, 1);
   share.stopAll();

@@ -97,14 +97,14 @@ function arm(s) {
 // ---------------------------------------------------------------- starting one
 
 // the same target twice gives the same live link (with its time topped up), not a second tunnel
-export async function share(target, { cwd, cloudflared = which('cloudflared') } = {}) {
+export async function share(target, { cwd, cloudflared = which('cloudflared'), ready = reachable } = {}) {
   const site = siteOf(target);
   const file = site ? null : resolveFile(target, cwd);
   const key = site ? `site:${site.port}${site.path}` : `file:${file}`;
   const same = [...shares.values()].find((s) => s.key === key && s.state !== 'error');
   if (same) { if (same.state === 'live') extend(same.id, Math.max(0, Date.now() + TTL - same.expires)); return pub(same); }
   if (shares.size >= MAX_LIVE) throw new Error(`${MAX_LIVE} links are live already; stop one first`);
-  if (!cloudflared) throw new Error('cloudflared is not installed on the computer (brew install cloudflared)');
+  if (!cloudflared) throw new Error('Synapse on your computer is missing its tunnel helper; update or reinstall Synapse there');
   let port, label, open = '/';
   let server = null;
   if (site) {
@@ -122,6 +122,7 @@ export async function share(target, { cwd, cloudflared = which('cloudflared') } 
   shares.set(s.id, s); arm(s); changed();
   try {
     const base = await tunnel(s, cloudflared, port, site ? `localhost:${port}` : null);
+    await ready(`${base}${open}`);
     s.url = `${base}${open}`; s.state = 'live';
   } catch (e) {
     s.state = 'error'; s.error = e.message;
@@ -133,7 +134,28 @@ export async function share(target, { cwd, cloudflared = which('cloudflared') } 
   return pub(s);
 }
 
-function which(name) { return ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'].map((d) => path.join(d, name)).find((p) => fs.existsSync(p)) || null; }
+// the copy shipped inside the app first (Contents/Resources), then the one scripts/fetch-cloudflared.mjs put in
+// app/vendor when running from source, then one the user installed
+const HERE = path.dirname(new URL(import.meta.url).pathname);
+function which(name) {
+  const shipped = [process.resourcesPath && path.join(process.resourcesPath, name), path.join(HERE, 'vendor', name)];
+  return [process.env.SYNAPSE_CLOUDFLARED, ...shipped, ...['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'].map((d) => path.join(d, name))].find((p) => p && fs.existsSync(p)) || null;
+}
+
+// A new trycloudflare name takes a few seconds to exist in DNS. A resolver asked too early answers "no such name"
+// and remembers that for many minutes (Google's did, in testing), so a phone that opened the link at once would
+// see it broken. So only Cloudflare's own resolver is asked (over HTTPS: nothing cached on the Mac or the phone,
+// and it stops saying "no such name" as soon as the name exists), and the link goes to the phone once it resolves.
+const READY_WAIT = 30_000;
+async function reachable(url) {
+  const name = new URL(url).hostname, end = Date.now() + READY_WAIT;
+  while (Date.now() < end) {
+    const known = await fetch(`https://cloudflare-dns.com/dns-query?name=${name}&type=A`, { headers: { accept: 'application/dns-json' }, signal: AbortSignal.timeout(3000) })
+      .then((x) => x.json()).then((j) => j.Status === 0 && j.Answer?.length > 0, () => false);
+    if (known) return;
+    await new Promise((res) => setTimeout(res, 800));
+  }
+}
 
 const listening = (port) => new Promise((resolve) => {
   const c = net.connect({ port, host: '127.0.0.1' });

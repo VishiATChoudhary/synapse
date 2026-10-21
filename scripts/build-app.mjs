@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { fetchCloudflared } from './fetch-cloudflared.mjs';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const args = process.argv.slice(2);
@@ -30,6 +31,9 @@ if (fs.existsSync(helper) && !(fs.statSync(helper).mode & 0o111)) {
   console.error(`build-app: ${path.relative(ROOT, helper)} is not executable; run \`npm install\` in app/ (its postinstall fixes it)`);
   process.exit(1);
 }
+
+// the phone's live links tunnel through cloudflared, shipped inside the app so nobody has to install it
+await fetchCloudflared();
 
 const identity = out('/usr/bin/security', ['find-identity', '-v', '-p', 'codesigning']).split('\n').find((l) => l.includes('Developer ID Application'));
 

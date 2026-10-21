@@ -11,3 +11,4 @@ promo/public/broll/
 dist/
 .signing/
 .superpowers/
+app/vendor/
