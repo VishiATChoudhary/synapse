@@ -22,7 +22,7 @@ jobs:
         shell: pwsh
         run: |
           $env:ELECTRON_RUN_AS_NODE = '1'
-          & app\node_modules\electron\dist\electron.exe app\tests\windows.mjs
+          & .\app\node_modules\electron\dist\electron.exe .\app\tests\windows.mjs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: build the installer
         run: node scripts/build-app.mjs --win
