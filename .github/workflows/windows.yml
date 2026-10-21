@@ -21,8 +21,7 @@ jobs:
       - name: smoke test
         shell: pwsh
         run: |
-          Push-Location app; $electron = node -p "require('electron')"; Pop-Location
-          Write-Output "electron: $electron"; Get-ChildItem app\node_modules\electron
+          Push-Location app; $electron = node -p "require('electron')" | Select-Object -Last 1; Pop-Location # the first require downloads it
           $env:ELECTRON_RUN_AS_NODE = '1'
           & $electron app\tests\windows.mjs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
