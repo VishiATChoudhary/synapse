@@ -24,8 +24,9 @@ jobs:
           Push-Location app; $electron = node -p "require('electron')" | Select-Object -Last 1; Pop-Location # the first require downloads it
           $env:ELECTRON_RUN_AS_NODE = '1'
           $env:SYNAPSE_TEST_LOG = "$env:RUNNER_TEMP\smoke.log"
-          & $electron app\tests\windows.mjs
-          $code = $LASTEXITCODE
+          # started on its own, without this console, like the app itself: a console event here would end it too
+          $t = Start-Process -FilePath $electron -ArgumentList 'app\tests\windows.mjs' -PassThru -Wait -WindowStyle Hidden
+          $code = $t.ExitCode; Write-Output "exit code $code"
           Get-Content $env:SYNAPSE_TEST_LOG
           if ($code -or !(Select-String -Path $env:SYNAPSE_TEST_LOG -Pattern 'windows suite passed' -Quiet)) { exit 1 }
       - name: build the installer
