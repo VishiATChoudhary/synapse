@@ -190,11 +190,11 @@ export function externalLinks() {
   const out = [];
   for (const e of readJSON(FILES.edges, [])) {
     if (e.mirrored) {
-      out.push({ direction: 'in', owner: e.owner || ownerOf(e.remote), agent: { id: e.from, name: e.fromName, kind: e.fromKind || kindIn(e.remote, e.from) }, local: { id: e.to, name: e.toName }, edgeId: e.id });
+      out.push({ direction: 'in', owner: e.owner || ownerOf(e.remote), handle: cfg.peers[e.remote]?.handle || '', mode: e.mode || 'sync', agent: { id: e.from, name: e.fromName, kind: e.fromKind || kindIn(e.remote, e.from) }, local: { id: e.to, name: e.toName }, edgeId: e.id });
       continue;
     }
     const m = machines.find((x) => e.to.startsWith(remoteId(x, '')));
-    if (m) out.push({ direction: 'out', owner: ownerOf(m), agent: { id: e.to, name: e.toName, kind: e.toKind || kindIn(m, e.to) }, local: { id: e.from, name: e.fromName }, edgeId: e.id });
+    if (m) out.push({ direction: 'out', owner: ownerOf(m), handle: cfg.peers[m]?.handle || '', mode: e.mode || 'sync', agent: { id: e.to, name: e.toName, kind: e.toKind || kindIn(m, e.to) }, local: { id: e.from, name: e.fromName }, edgeId: e.id });
   }
   return out;
 }

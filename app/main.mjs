@@ -10,11 +10,12 @@ import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
 import { git, listChoices, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
 import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork } from '../lib.mjs';
-import { createEdge, allowTalkRequest, dismissTalkRequest } from '../ops.mjs';
+import { createEdge, allowTalkRequest, dismissTalkRequest, setMode, removeEdge } from '../ops.mjs';
 import { openRequests, talkPerHour, talkModel, clampPerHour } from '../talk.mjs';
 import { isConnected } from '../remote.mjs';
 import { createUpdater, bundleOf, MANIFEST_URL } from './updater.mjs';
 import * as phone from './phone.mjs';
+import { collect as collectActivity } from './activity.mjs';
 
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
 const SHELL = process.env.SHELL || '/bin/zsh';
@@ -750,6 +751,19 @@ async function pollRequests() {
   notifyTrust(feed.incomingTrust || []);
   win?.webContents.send('requests', feed);
 }
+// A person's access, from settings: how one of my shares with them works (read only or read and ask), or stop it.
+// Answers with the fresh links so the card redraws from what is true now. The fake feed edits its file instead.
+async function changeShare(id, change) {
+  if (FAKE) {
+    const f = fake();
+    f.links = f.links.flatMap((l) => (l.edgeId !== id ? [l] : change === 'remove' ? [] : [{ ...l, mode: change }]));
+    writeJSON(FAKE, f);
+  } else if (change === 'remove') removeEdge(id);
+  else setMode(id, change);
+  await pollRequests();
+  return feed.links;
+}
+
 // Someone added me as a trusted person: one notification per person, ever (remembered in app.json), not one per poll.
 const trustKey = (p) => (p.handle ? `@${p.handle}` : p.userId || p.id || '');
 function notifyTrust(list) {
@@ -841,6 +855,10 @@ handle('project:rename', ({ key, name }) => {
 });
 const settingsOut = (c) => ({ openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, talkPerHour: talkPerHour(), talkModel: talkModel() });
 handle('settings:get', () => settingsOut(config()));
+handle('share:mode', ({ id, mode }) => changeShare(id, mode === 'talk' ? 'talk' : 'sync'));
+handle('share:remove', ({ id }) => changeShare(id, 'remove'));
+// the activity view: GitHub, commits and prompts over the last year; the first count reads every transcript, so it reports progress
+handle('activity:get', () => collectActivity({ repos: config().workspaces, cacheFile: path.join(DATA, 'activity.json'), env: cleanEnv(), onProgress: (p) => win?.webContents.send('activity:progress', p) }));
 handle('talk:usage', () => talkHistory('api/talks/usage'));
 handle('settings:set', (patch) => {
   const c = config();
