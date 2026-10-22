@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('synapse', {
   state: () => call('state'),
   flags: () => call('flags'),
   onState: (fn) => on('state', fn),
+  notify: { done: (a) => call('notify:done', a), onOpen: (fn) => on('notify:open', fn) },
   pty: {
     spawn: (a) => call('pty:spawn', a),
     restore: (a) => call('pty:restore', a),
@@ -74,6 +75,8 @@ contextBridge.exposeInMainWorld('synapse', {
     list: () => call('requests:list'),
     agents: () => call('requests:agents'),
     accept: (id, agents, talk = true) => call('requests:accept', { id, agents, talk }),
+    acceptOffer: (id, receiver) => call('requests:acceptOffer', { id, receiver }),
+    offer: (to, agent, mode) => call('share:offer', { to, agent, mode }),
     deny: (id) => call('requests:deny', { id }),
     cancel: (id) => call('requests:cancel', { id }),
     onChange: (fn) => on('requests', fn),

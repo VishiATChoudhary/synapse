@@ -10,7 +10,7 @@ import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
 import { git, listChoices, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
-import { DATA, FILES, WIN, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork } from '../lib.mjs';
+import { DATA, FILES, WIN, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, readAgentMessages } from '../lib.mjs';
 import { createEdge, allowTalkRequest, dismissTalkRequest, setMode, removeEdge } from '../ops.mjs';
 import { openRequests, talkPerHour, talkModel, clampPerHour } from '../talk.mjs';
 import { isConnected } from '../remote.mjs';
@@ -765,7 +765,8 @@ async function pollRequests() {
   if (notified && Notification.isSupported() && !process.env.SYNAPSE_SHOT) {
     for (const r of pending) {
       if (notified.has(r.id)) continue;
-      const n = new Notification({ title: 'Synapse', body: `${r.from?.name || r.from?.handle || 'Someone'} wants to synapse with your agents` });
+      const who = r.from?.name || r.from?.handle || 'Someone';
+      const n = new Notification({ title: 'Synapse', body: r.kind === 'offer' ? `${who} shared ${r.agent?.name || 'an agent'} with you` : `${who} wants to synapse with your agents` });
       n.on('click', () => { if (!win) return; win.show(); win.focus(); win.webContents.send('requests:open'); });
       n.show();
     }
@@ -908,8 +909,27 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, talkPerHour: talkPerHour(), talkModel: talkModel() });
+const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, notifyDone: c.notifyDone !== false, talkPerHour: talkPerHour(), talkModel: talkModel() });
 handle('settings:get', () => settingsOut(config()));
+// an agent finished a turn while Synapse was in the background (the renderer decides when): say so, with the
+// start of its last reply; a click brings that session to the front
+const lastReply = (pty) => {
+  const id = agentsByPty()[pty]?.synapseId, a = id && listAgents().find((x) => x.id === id);
+  if (!a) return '';
+  const said = readAgentMessages(a, null, { tailBytes: 262144 }).messages.filter((m) => m.role === 'assistant' && !m.tool).at(-1)?.text || '';
+  const t = said.replace(/\s+/g, ' ').trim();
+  return t.length > 140 ? t.slice(0, 139) + '…' : t;
+};
+handle('notify:done', ({ pty, title, took }) => {
+  if (config().notifyDone === false || !Notification.isSupported() || process.env.SYNAPSE_SHOT) return false;
+  const mins = Math.round(took / 60_000);
+  let body = '';
+  try { body = lastReply(pty); } catch {}
+  const n = new Notification({ title: `${title} is done${mins >= 1 ? ` · ${mins} min` : ''}`, body: body || 'Its turn is over. Click to open it.' });
+  n.on('click', () => { if (!win) return; win.show(); win.focus(); win.webContents.send('notify:open', pty); });
+  n.show();
+  return true;
+});
 handle('share:mode', ({ id, mode }) => changeShare(id, mode === 'talk' ? 'talk' : 'sync'));
 handle('share:remove', ({ id }) => changeShare(id, 'remove'));
 // the activity view: GitHub, commits and prompts over the last year; the first count reads every transcript, so it reports progress
@@ -947,6 +967,7 @@ handle('settings:set', (patch) => {
   }
   if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink;
   if ('autoSendFork' in patch) c.autoSendFork = !!patch.autoSendFork;
+  if ('notifyDone' in patch) c.notifyDone = !!patch.notifyDone;
   if ('openAtLogin' in patch) setLoginOpen(patch.openAtLogin);
   if ('talkPerHour' in patch) c.talkPerHour = clampPerHour(patch.talkPerHour);
   if ('talkModel' in patch) c.talkModel = ['opus', 'sonnet', 'haiku'].includes(patch.talkModel) ? patch.talkModel : 'agent';
@@ -1048,6 +1069,28 @@ async function decide(id, fn, extra = {}) {
   await pollRequests();
 }
 // talk: let their agent ask the shared agents questions too (the accept popover's checkbox, ticked by default)
+// Share: the open agent goes to a trusted person as an offer; they pick which of their agents receives it
+handle('share:offer', async ({ to, agent, mode }) => {
+  const a = listAgents().find((x) => x.id === agent && !x.remote);
+  if (!a) throw new Error('open the agent you want to share first');
+  let out;
+  if (FAKE) {
+    const f = fake(), p = (f.people || []).find((x) => x.handle === to || x.id === to);
+    out = { id: `o-${Date.now()}`, kind: 'offer', mode: mode === 'talk' ? 'talk' : 'sync', status: 'pending', to: { handle: p?.handle || to, name: p?.name || to }, agent: { id: a.id, name: a.name, kind: a.kind } };
+    f.outgoing = [out, ...(f.outgoing || [])];
+    writeJSON(FAKE, f);
+  } else out = await (await acct()).sendOffer({ to, agent: a, mode });
+  await pollRequests();
+  return out;
+});
+// an offer to me: it goes into the agent of mine picked here
+handle('requests:acceptOffer', async ({ id, receiver }) => {
+  if (FAKE) {
+    const f = fake(), r = f.incoming.find((x) => x.id === id), mine = listAgents().find((x) => x.id === receiver);
+    if (r) { f.incoming = f.incoming.filter((x) => x !== r); f.links.push({ direction: 'in', owner: r.from?.name, handle: r.from?.handle, mode: r.mode || 'sync', agent: r.agent, local: { id: receiver, name: mine?.name || receiver }, edgeId: `fake-${id}` }); (f.accepted ||= []).push({ id, receiver }); writeJSON(FAKE, f); }
+  } else await (await acct()).acceptOffer(id, receiver);
+  await pollRequests();
+});
 handle('requests:accept', async ({ id, agents, talk = true }) => { const out = FAKE ? null : await (await acct()).accept(id, agents, { talk: !!talk }); await decide(id, 'accept', { agents, talk: !!talk }); return out; });
 // a friend's agent asked one of mine over a read-only share: Allow switches that share to talk, Not now waits a day
 handle('talkreq:allow', ({ id }) => { const out = allowTalkRequest(id); win?.webContents.send('state', state()); return out; });

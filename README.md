@@ -155,6 +155,63 @@ agent connects, unlinks or messages you:
 
 Run it with `claude --plugin-dir ./claude-mod`. Its test runs with `claude plugin test claude-mod`.
 
+## Multiplayer: share agents with friends
+
+Link your agents with a friend's, across machines. Their agents show up on your canvas in dashed
+frames marked `⇄ NAME · PROJECT`, and you can share any of your agents with any of theirs.
+
+```bash
+synapse invite                  # prints a code; send it to your friend
+synapse join <code>             # your friend runs this (or pastes the code under FRIENDS on the canvas)
+synapse friends                 # who you are connected with, and whether they are online
+synapse unfriend <friend>
+```
+
+The FRIENDS button in the canvas top bar does the same: pick the name friends see, create an invite,
+paste one, and remove friends.
+
+- **Only the owner shares.** Drag from one of your agents onto a friend's agent and that agent can read
+  yours. They can't link your agents to theirs, and removing the link on either side stops the sharing.
+- **Reading works like on one machine.** Their agent gets your agent's new activity with each prompt
+  (Claude Code, Codex) and through `synapse_read`, labelled with your name. As your agent keeps working,
+  its new activity is sent over, and their canvas pulses the link.
+- **Agents on different machines don't message each other.** `synapse send` stays local.
+- **What leaves your machine:** the names, kinds, projects and status of your running agents (so friends
+  can pick one to link to), and the recent conversation of the agents you share, clipped like local context.
+  Nothing else.
+- **The relay** is a tiny mailbox at `relay/`. It keeps nothing on disk and only passes items between
+  paired machines. Identities, invites and pairings are signed tokens kept in `~/.synapse/remote.json`.
+  The canvas syncs every 3 seconds, and the prompt hook and `synapse read` sync once before they look.
+  Run your own with `cd relay && RELAY_SECRET=... npm start`, and point Synapse at it with `SYNAPSE_RELAY`.
+
+## Agent talk
+
+When someone adds you as a trusted person, the app shows "@x added you: Trust back / Ignore" and, if your email
+is verified, you get one email. Both of you must trust each other before requests work. When you accept a request, "Let their agent ask
+questions too" is ticked by default (`synapse accept <id> --no-talk` to leave it off), and you can flip it later
+with `synapse talk <agent> on|off` or the edge popover.
+
+Their agent can then ask yours questions:
+
+```bash
+synapse ask api@sam "How does the session refresh work?"   # waits up to 90 s
+synapse ask api@sam "And when does it expire?" --conversation <id>
+synapse end <conversation>
+```
+
+Agents get the same as `synapse_ask` and `synapse_end`. On a read-only share made through a request, `ask` returns
+status `requested` and the owner gets Allow / Not now (or, if their Synapse is too old for that, says talk is off). Answers that miss the 90 s wait, or questions to a friend who is offline,
+come back through `synapse_inbox`, each delivered once.
+
+The answer comes from a copy of your agent with no tools: a native fork for Claude, and for Codex, Gemini,
+OpenCode and Cursor a tool-less Claude that reads the conversation. Copilot and Amp answer "unavailable" for
+now. It cannot run commands or read files, and it is told not to share secrets. Answers use your Claude usage.
+Settings has questions per hour per person (default 60), the answering model (agent, opus, sonnet or haiku)
+and usage for today and this week. You see "asked by @x" forks and a thread panel with End, Switch to sync and
+Disconnect. Turn on "Open Synapse at login" so questions get answered while you work (the app opens with its
+window). Limits: questions up to 4000 characters, answers up to 8000, 20 turns per conversation, and a
+conversation ends after 30 minutes of silence.
+
 ## Let agents do it themselves
 
 Every agent gets the same six operations, as MCP tools (`synapse_peers`, `synapse_link`, `synapse_unlink`,
@@ -167,7 +224,8 @@ synapse read codex-api              # their latest conversation
 synapse send codex-api "Did the rate limiter land? I'm about to touch auth."
 synapse inbox                       # what other agents sent me
 synapse rename "auth refactor"     # rename yourself (or: synapse rename <agent> <name>)
-synapse ui                          # start the canvas
+synapse rename-project synapse "Synapse canvas"   # rename a project frame
+synapse ui                          # start the workspace
 ```
 
 The installer puts the launcher at `~/.synapse/bin/synapse` and adds a **`/synapse` skill** to Claude
@@ -183,6 +241,7 @@ Code and Codex, so you can just say *"connect to the codex agent and ask what it
 | drag a project frame | move the whole project; other frames step aside so they never overlap |
 | click a node | details, links, messages, recent activity |
 | double-click a node (or **rename** in its panel) | rename it. Empty name goes back to the generated one |
+| double-click a project frame | rename the project. Empty name goes back to the folder name |
 | hover a link, click × (or select it and press ⌫) | remove the link |
 | scroll, drag the background | zoom, pan |
 | F, or double-click the background | fit everything on screen |
@@ -202,10 +261,33 @@ Code and Codex, so you can just say *"connect to the codex agent and ask what it
 | `mcp.mjs` | dependency-free stdio MCP server |
 | `cli.mjs`, `skill/` | the `synapse` CLI and the `/synapse` skill |
 | `claude-mod/` | Claude Code band and toasts |
+| `remote.mjs` | multiplayer: invite, join, friends, and the sync with friends' machines |
+| `relay/` | the multiplayer relay (zero dependencies, deploys anywhere Node runs) |
+| `test/` | end-to-end multiplayer tests: `npm test` (`SYNAPSE_RELAY=<url> npm test` runs them against a deployed relay) |
 | `install.mjs` | idempotent installer. `--dry-run` shows what it would change |
 | `promo/` | the Remotion source of the video above |
 
-Settings: `PORT`, `SYNAPSE_HOME` (state folder, default `~/.synapse`), `SYNAPSE_BUDGET` (characters per link per prompt), `SYNAPSE_AGENT` (force an identity).
+Settings: `PORT`, `SYNAPSE_HOME` (state folder, default `~/.synapse`), `SYNAPSE_BUDGET` (characters per link per prompt), `SYNAPSE_AGENT` (force an identity), `SYNAPSE_RELAY` (multiplayer relay URL), `SYNAPSE_SYNC_MS` (how often the canvas syncs with friends).
+
+## Desktop packaging
+
+`npm install && npm run app:install` packages the checkout into `Synapse.app` (Apple Silicon), copies it to
+`/Applications` and opens it. Settings has "Open Synapse at login" (off until you turn it on) and the agent talk limits. That build is ad-hoc signed: it runs on the machine that built it, and on another
+Mac only after right-click → Open (or `xattr -dr com.apple.quarantine Synapse.app`).
+
+`npm run app:build` (and `npm run release`) build into `dist/` together with a `.dmg`, signed with the hardened
+runtime and notarized by Apple, so Gatekeeper opens it without the "Apple could not verify" dialog. One-time setup
+on the release machine, with an Apple Developer Program membership:
+
+1. Create a "Developer ID Application" certificate at developer.apple.com → Certificates and install it in the
+   login keychain (double-click the `.cer`). `security find-identity -v -p codesigning` must list it.
+2. Store notary credentials under the profile name `synapse`: `xcrun notarytool store-credentials synapse
+   --apple-id you@example.com --team-id TEAMID` with an app-specific password from appleid.apple.com, or
+   `--key AuthKey.p8 --key-id KEYID --issuer ISSUER` with an App Store Connect API key.
+
+Without the certificate `scripts/build-app.mjs` falls back to the ad-hoc build and says so; with the certificate
+but no credentials it stops, since a signed but unnotarized app still trips Gatekeeper. `--ad-hoc` forces the
+quick local build.
 
 ## Good to know
 

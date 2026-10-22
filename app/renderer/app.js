@@ -405,6 +405,7 @@ function renderLaunch() {
 function render() {
   if (!workspaceOpen) {
     renderLaunch();
+    renderShareBar();
     // Keep the live input (and an outside click target) intact through state refreshes.
     if (!nameEdit && !namePointer) { renderTree(); renderDeck(); }
     renderBar();
@@ -1492,6 +1493,13 @@ async function openSettings() {
       try { M.autoSendFork = (await synapse.settings.set({ autoSendFork: fcb.checked })).autoSendFork; toast(fcb.checked ? 'forks send their question right away' : 'a fork\'s question waits in its prompt for you'); }
       catch (e) { fcb.checked = !fcb.checked; toast(e.message, true); }
     };
+    const doneRow = el('label', 'opt set'), dcb = el('input');
+    dcb.type = 'checkbox'; dcb.checked = s.notifyDone !== false;
+    doneRow.append(dcb, el('span', 'k', 'notify when done'), el('span', 'c', 'a notification when an agent finishes while Synapse is in the background, a toast when you are looking at another one'));
+    dcb.onchange = async () => {
+      try { dcb.checked = (await synapse.settings.set({ notifyDone: dcb.checked })).notifyDone; toast(dcb.checked ? 'agents tell you when they are done' : 'no notifications when agents finish'); }
+      catch (e) { dcb.checked = !dcb.checked; toast(e.message, true); }
+    };
     const loginRow = el('label', 'opt set'), lcb = el('input');
     lcb.type = 'checkbox'; lcb.checked = !!s.openAtLogin;
     loginRow.append(lcb, el('span', 'k', 'Open Synapse at login'), el('span', 'c', 'so friends\' questions get answered while you work'));
@@ -1515,7 +1523,7 @@ async function openSettings() {
     const tourRow = el('div', 'opt set'), tourBtn = el('button', 'btn', 'replay');
     tourRow.append(el('span', 'k', 'tour'), el('span', 'c', 'the five steps a new install starts with'), tourBtn);
     tourBtn.onclick = () => { close(); showOnboarding(false); };
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow, loginRow, updRow, tourRow);
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow, doneRow, loginRow, updRow, tourRow);
     const commands = el('div', 'agent-commands'), commandInputs = new Map();
     for (const [kind, profile] of Object.entries(s.profiles || {})) {
       const row = el('label', 'opt set'), input = el('input');
@@ -1584,9 +1592,10 @@ synapse.onLoginSuggest(() => {
 });
 
 let toastTimer = null;
-function toast(text, sig = false) {
-  const t = $('#toast'); t.textContent = text; t.className = 'toast' + (sig ? ' sig' : ''); t.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 2600);
+function toast(text, sig = false, onClick = null) {
+  const t = $('#toast'); t.textContent = text; t.className = 'toast' + (sig ? ' sig' : '') + (onClick ? ' act' : ''); t.hidden = false;
+  t.onclick = onClick && (() => { t.hidden = true; onClick(); });
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), onClick ? 6000 : 2600);
 }
 
 // ---------------------------------------------------------------- keys
@@ -1898,12 +1907,41 @@ function apply(st) {
     const a = M.agents[x.pty];
     if (a?.synapseId && (a.transcript || !x.resume)) x.resume = { synapseId: a.synapseId, transcript: a.transcript || null };
     if (a && agentWorking(a)) x.ran = true; // noted here, not on draw, so a folded workspace's agents count too
+    if (a) watchTurn(x, a);
     if (a && x.named === false) { x.named = true; nameForkAgent(x); }
   }
   refreshPullRequests();
   render();
 }
 synapse.onState(apply);
+
+// An agent that finishes a turn while you look elsewhere says so: a toast when Synapse is in front, a
+// notification when it is not. A turn has to have run a few seconds and then stayed quiet for two checks, so
+// the pause between two steps of one turn is not a finish.
+const TURN_MIN = 5000;
+function watchTurn(x, a) {
+  if (agentWorking(a)) { x.turnSince ||= Date.now(); x.quiet = 0; return; }
+  if (!x.turnSince || ++x.quiet < 2) return;
+  const long = Date.now() - x.turnSince;
+  x.turnSince = 0;
+  if (long < TURN_MIN || x.exited) return;
+  const s = M.slots.find((sl) => sl.sessions.includes(x));
+  const looking = document.hasFocus() && !canvasOpen && $('#modal').hidden && s && focusedSlot() === s && top(s) === x;
+  if (looking) return;
+  // a tab still called just "codex" says little with three of them open; the agent's name says which
+  const name = x.title && x.title !== x.kind ? x.title : a.name || x.title;
+  if (document.hasFocus()) toast(`✓ ${name} is done · open`, false, () => openTurn(x.pty));
+  else synapse.notify.done({ pty: x.pty, title: name, took: long });
+}
+function openTurn(pty) {
+  const s = M.slots.find((sl) => sl.sessions.some((x) => x.pty === pty));
+  if (!s) return;
+  M.focused = s.id; focusPath(s, s.sessions.find((x) => x.pty === pty).id);
+  if (canvasOpen) toggleCanvas();
+  render();
+  top(s)?.term.focus();
+}
+synapse.notify.onOpen(openTurn);
 synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { requestId, parentPty }));
 
 // ---------------------------------------------------------------- account, trusted people, synapse requests
@@ -2007,6 +2045,168 @@ function talkRequestRow(r) {
   return box;
 }
 
+// ---------------------------------------------------------------- friends and share
+// Top right, under fork. Friends lists the trusted people and what flows between you, with anything waiting on you
+// on top. Share offers the open agent to one of them, read only or read and ask; they pick which of their agents
+// receives it, and once they accept, this Mac links the two.
+const openAgent = () => { const s = top(focusedSlot()), a = s && M.agents[s.pty]; return a?.synapseId ? { id: a.synapseId, name: a.name, kind: a.kind } : null; };
+const offersIn = () => (ACC.feed.incoming || []).filter((r) => r.kind === 'offer' && r.status === 'pending');
+const offersOut = (p) => (ACC.feed.outgoing || []).filter((r) => r.kind === 'offer' && r.status === 'pending' && (r.to?.handle ? r.to.handle === p.handle : r.to?.name === p.name));
+let people = [], peopleAt = 0;
+async function loadPeople(force = false) {
+  if (!ACC.user) { people = []; return people; }
+  if (!force && Date.now() - peopleAt < 15_000) return people;
+  try { const r = await synapse.people.list(); people = Array.isArray(r) ? r : r?.trusted || []; peopleAt = Date.now(); } catch {}
+  return people;
+}
+function renderShareBar() {
+  const a = openAgent(), b = $('#btn-share'), n = offersIn().length + pendingTrust().length, c = $('#friends-count');
+  b.classList.toggle('off', !a);
+  b.title = a ? `share ${a.name} with a friend` : 'open an agent to share it with a friend';
+  c.hidden = !n; c.textContent = n ? String(n) : '';
+}
+
+// "Mara shares api-auth with you": it goes into the agent of mine picked here. In the friends list and the circle.
+function offerRow(r, done) {
+  const box = el('div', 'req offer-in');
+  const who = el('div', 'req-who');
+  who.append(avatar(r.from), el('b', '', personName(r.from)));
+  if (r.from?.handle && r.from?.name) who.append(el('span', 'h', `@${r.from.handle}`));
+  const what = el('div', 'req-what');
+  what.append('shares ', el('span', 'ag', `${r.agent?.kind || 'agent'} · ${r.agent?.name || '?'}`), ` with you, ${r.mode === 'talk' ? 'read and ask' : 'read only'}`);
+  box.append(who, what, el('div', 'req-note', 'Pick which of your agents gets it: that one can read it' + (r.mode === 'talk' ? ' and ask it questions.' : '.')));
+  const pick = el('select', 'req-pick');
+  pick.setAttribute('aria-label', 'which of your agents gets it');
+  if (!ACC.agents.length) { const o = el('option', '', 'start an agent to receive it'); o.value = ''; pick.append(o); pick.disabled = true; }
+  else for (const a of ACC.agents) { const o = el('option', '', `${a.kind} · ${a.name}${a.project ? `  (${a.project})` : ''}`); o.value = a.id; pick.append(o); }
+  const open = openAgent(); // the agent on screen is the likely one to receive it
+  pick.value = ACC.choice[r.id] || (open && ACC.agents.some((a) => a.id === open.id) ? open.id : pick.value);
+  pick.onchange = () => { ACC.choice[r.id] = pick.value; };
+  const row = el('div', 'req-row'), no = el('button', 'btn', 'Not now'), yes = el('button', 'btn sig', 'Accept');
+  yes.disabled = !ACC.agents.length;
+  no.onclick = async () => { no.disabled = yes.disabled = true; try { await synapse.requests.deny(r.id); toast(`declined ${personName(r.from)}'s ${r.agent?.name || 'agent'}`); done?.(); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; } };
+  yes.onclick = async () => {
+    no.disabled = yes.disabled = true;
+    try { await synapse.requests.acceptOffer(r.id, pick.value); toast(`${personName(r.from)}'s ${r.agent?.name || 'agent'} now shares with your ${ACC.agents.find((a) => a.id === pick.value)?.name || 'agent'}`); done?.(); }
+    catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
+  };
+  row.append(pick, no, yes);
+  box.append(row);
+  return box;
+}
+
+async function openFriends() {
+  const pop = $('#friends-pop');
+  pop.hidden = false;
+  renderFriends();
+  const r = $('#btn-friends').getBoundingClientRect(), w = pop.offsetWidth || 380;
+  pop.style.top = `${Math.round(r.bottom + 6)}px`;
+  pop.style.left = `${Math.round(Math.max(8, Math.min(innerWidth - w - 8, r.right - w)))}px`;
+  await Promise.all([loadPeople(true), synapse.requests.agents().then((a) => { ACC.agents = a; }).catch(() => {})]);
+  if (!pop.hidden) renderFriends();
+}
+const closeFriends = () => { $('#friends-pop').hidden = true; };
+$('#btn-friends').onclick = (e) => { e.stopPropagation(); if ($('#friends-pop').hidden) openFriends(); else closeFriends(); };
+$('#btn-share').onclick = () => openShare();
+addEventListener('mousedown', (e) => { if (!$('#friends-pop').hidden && !e.target.closest('#friends-pop, #btn-friends')) closeFriends(); });
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#friends-pop').hidden) closeFriends(); });
+
+function renderFriends() {
+  const pop = $('#friends-pop');
+  pop.replaceChildren();
+  if (!ACC.user) {
+    pop.append(el('div', 'pop-sec', 'friends'), el('div', 'friends-empty', 'Sign in to share agents with people you trust, and see what they share with you.'));
+    const b = el('button', 'btn sig friends-cta', 'sign in');
+    b.onclick = () => { closeFriends(); showLogin(); };
+    pop.append(b);
+    return;
+  }
+  const offers = offersIn(), trusts = pendingTrust();
+  if (offers.length) { pop.append(el('div', 'pop-sec', `shared with you · ${offers.length}`)); for (const r of offers) pop.append(offerRow(r, renderFriends)); }
+  if (trusts.length) { pop.append(el('div', 'pop-sec', `added you · ${trusts.length}`)); for (const p of trusts) pop.append(trustRow(p, () => { loadPeople(true).then(renderFriends); })); }
+  pop.append(el('div', 'pop-sec', `trusted people · ${people.length}`));
+  if (!people.length) pop.append(el('div', 'friends-empty', 'Nobody yet. Add someone by email or @handle; once they add you back, you can share agents with each other.'));
+  const open = openAgent();
+  for (const p of people) {
+    const links = linksOf(p), out = links.filter((l) => l.direction === 'out'), inn = links.filter((l) => l.direction === 'in');
+    const row = el('div', 'friend'), head = el('div', 'friend-head');
+    head.append(avatar(p), el('b', '', p.name || p.handle || p.email || '?'), el('span', 'h', p.handle ? `@${p.handle}` : ''));
+    const share = el('button', 'btn', 'share');
+    share.disabled = !p.trustsYou || !!p.pending;
+    share.title = p.pending ? 'they have not joined Synapse yet' : !p.trustsYou ? 'they have not added you back yet' : open ? `offer ${open.name} to ${p.name || p.handle}` : 'pick which agent to share';
+    share.onclick = () => { closeFriends(); openShare(p); };
+    head.append(share);
+    const meta = el('div', 'friend-meta', p.pending ? 'invited, not on Synapse yet' : !p.trustsYou ? 'has not added you back yet' : out.length || inn.length ? `sees ${out.length} of your agents · you see ${inn.length} of theirs` : 'nothing shared yet');
+    row.append(head, meta);
+    for (const l of out) row.append(el('div', 'friend-flow', `your ${l.local?.name || 'agent'} → their ${l.agent?.name || 'agent'} · ${l.mode === 'talk' ? 'read and ask' : 'read only'}`));
+    for (const l of inn) row.append(el('div', 'friend-flow in', `their ${l.agent?.name || 'agent'} → your ${l.local?.name || 'agent'} · ${l.mode === 'talk' ? 'read and ask' : 'read only'}`));
+    for (const o of offersOut(p)) row.append(el('div', 'friend-flow wait', `offered ${o.agent?.name || 'an agent'} · waiting for them to accept`));
+    pop.append(row);
+  }
+  const add = el('div', 'people-add'), inp = el('input'), go = el('button', 'btn', 'add');
+  inp.placeholder = 'add someone: email or @handle'; inp.spellcheck = false;
+  const submit = async () => {
+    const who = inp.value.trim(); if (!who) return;
+    go.disabled = true;
+    try { await synapse.people.add(who); inp.value = ''; toast(`${who} is trusted · they can add you back`); await loadPeople(true); renderFriends(); }
+    catch (e) { toast(e.message, true); go.disabled = false; }
+  };
+  go.onclick = submit;
+  inp.onkeydown = (e) => { if (e.key === 'Enter') { e.stopPropagation(); submit(); } };
+  add.append(inp, go);
+  const more = el('button', 'friends-link', 'manage in settings');
+  more.onclick = () => { closeFriends(); openSettings(); };
+  pop.append(add, more);
+}
+
+// Share the open agent: pick a friend who trusts you back and how (read only or read and ask), then offer it.
+async function openShare(preset) {
+  if (!ACC.user) return showLogin();
+  const a = openAgent();
+  if (!a) return toast('open the agent you want to share first', true);
+  await loadPeople(true);
+  const ok = people.filter((p) => p.trustsYou && !p.pending && p.handle);
+  let pick = ok.find((p) => p.handle === preset?.handle)?.handle || ok[0]?.handle, mode = 'talk';
+  modal(`share ${a.name}`, (body, close) => {
+    if (!ok.length) {
+      body.append(el('div', 'share-empty', people.length ? 'None of your trusted people has added you back yet. Once they do, you can share with them.' : 'Add someone you trust first: friends, at the top right.'));
+      const row = el('div', 'row'), b = el('button', 'btn sig', 'open friends');
+      b.onclick = () => { close(); openFriends(); };
+      row.append(b); body.append(row);
+      return;
+    }
+    body.append(el('div', 'hint', 'with'));
+    const list = el('div', 'share-people');
+    const draw = () => list.replaceChildren(...ok.map((p) => {
+      const r = el('button', `share-person${p.handle === pick ? ' on' : ''}`), already = linksOf(p).find((l) => l.direction === 'out' && l.local?.id === a.id);
+      r.append(avatar(p), el('b', '', p.name || p.handle), el('span', 'h', `@${p.handle}`), el('span', 'note', already ? `sees it · ${already.mode === 'talk' ? 'read and ask' : 'read only'}` : offersOut(p).some((o) => o.agent?.id === a.id) ? 'offered · waiting' : ''));
+      r.onclick = () => { pick = p.handle; draw(); };
+      return r;
+    }));
+    draw();
+    const seg = el('div', 'seg'), explain = el('div', 'hint share-explain');
+    const say = () => { explain.textContent = mode === 'talk' ? 'Their agent can read this one and ask it questions; a copy with no tools answers. Nobody can type into your agent.' : 'Their agent can read what this one is doing. Nothing else.'; };
+    for (const [v, label] of [['sync', 'read only'], ['talk', 'read and ask']]) {
+      const b = el('button', v === mode ? 'on' : '', label);
+      b.onclick = () => { mode = v; [...seg.children].forEach((x) => x.classList.toggle('on', x === b)); say(); };
+      seg.appendChild(b);
+    }
+    say();
+    const row = el('div', 'row'), cancel = el('button', 'btn', 'cancel'), go = el('button', 'btn sig', 'share');
+    cancel.onclick = close;
+    go.onclick = async () => {
+      go.disabled = true;
+      const p = ok.find((x) => x.handle === pick);
+      try { await synapse.requests.offer(pick, a.id, mode); toast(`offered ${a.name} to ${p?.name || pick} · they pick which of their agents gets it`); close(); }
+      catch (e) { toast(e.message, true); go.disabled = false; }
+    };
+    row.append(cancel, go);
+    body.append(list, el('div', 'hint', 'how'), seg, explain, el('div', 'hint share-note', 'They pick which of their agents receives it. Change or stop it any time under friends or Settings.'), row);
+    body.tabIndex = 0; body.onkeydown = (e) => { if (e.key === 'Escape') close(); };
+  });
+  $('#modal-body').focus();
+}
+
 function renderPop() {
   const pop = $('#syn-pop'), dot = $('#syn-dot');
   pop.replaceChildren();
@@ -2022,6 +2222,7 @@ function renderPop() {
   if (reqs.length) {
     pop.append(el('div', 'pop-sec', `requests · ${reqs.length}`));
     for (const r of reqs) {
+      if (r.kind === 'offer') { pop.append(offerRow(r)); continue; }
       const box = el('div', 'req');
       const who = el('div', 'req-who');
       who.append(avatar(r.from), el('b', '', personName(r.from)));
@@ -2282,7 +2483,7 @@ synapse.account.onChange((u) => {
   ACC.user = u; renderMe();
   if (u && !$('#login').hidden) { hideLogin(); if (!was) toast(`signed in as ${personName(u)}`); }
 });
-synapse.requests.onChange((f) => { ACC.feed = f || ACC.feed; renderDot(); });
+synapse.requests.onChange((f) => { ACC.feed = f || ACC.feed; renderDot(); renderShareBar(); if (!$('#friends-pop').hidden) renderFriends(); });
 synapse.requests.onOpen(() => openPop(true));
 
 // ---- updates: the packaged app fetches new versions itself (updater.mjs); this only shows where it is

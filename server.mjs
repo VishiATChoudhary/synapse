@@ -193,7 +193,9 @@ async function handleRequest(req, res) {
     const live = agents();
     const src = live.find((a) => a.id === from), dst = live.find((a) => a.id === to);
     if (!src || !dst || from === to) return json(res, 400, { error: 'bad endpoints' });
-    const { edge, created } = createEdge(src, dst);
+    let made;
+    try { made = createEdge(src, dst); } catch (error) { return json(res, 400, { error: error.message }); }
+    const { edge, created } = made;
     if (!created) return json(res, 409, { error: 'exists' });
     lastSig = '';
     broadcast('state', state());

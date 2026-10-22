@@ -1,6 +1,4 @@
 node_modules/
-dist/
-app/vendor/
 promo/out/
 .DS_Store
 *.log
@@ -10,3 +8,7 @@ promo/public/music/
 promo/public/render/
 promo/public/stock/
 promo/public/broll/
+dist/
+.signing/
+.superpowers/
+app/vendor/
