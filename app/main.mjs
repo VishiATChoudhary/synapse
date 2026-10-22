@@ -1,25 +1,31 @@
 // Synapse desktop: Electron main process.
 // Owns the PTYs, reads Synapse state from ~/.synapse through lib.mjs, watches fork requests
 // filed by the prompt hook, and pushes everything to the renderer over IPC.
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, screen, shell, systemPreferences } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, screen, shell, systemPreferences } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
 import { git, listChoices, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
-import { DATA, FILES, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, readAgentMessages } from '../lib.mjs';
+import { DATA, FILES, WIN, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, readAgentMessages } from '../lib.mjs';
 import { createEdge, allowTalkRequest, dismissTalkRequest, setMode, removeEdge } from '../ops.mjs';
 import { openRequests, talkPerHour, talkModel, clampPerHour } from '../talk.mjs';
 import { isConnected } from '../remote.mjs';
 import { createUpdater, bundleOf, MANIFEST_URL } from './updater.mjs';
 import * as phone from './phone.mjs';
 import { collect as collectActivity, lastWeek } from './activity.mjs';
+import { createDiscovery } from '../discovery.mjs';
 
-const ROOT = path.dirname(new URL(import.meta.url).pathname);
-const SHELL = process.env.SHELL || '/bin/zsh';
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
+if (process.env.SYNAPSE_USER_DATA) app.setPath('userData', path.resolve(process.env.SYNAPSE_USER_DATA));
+// Windows: shell tabs are PowerShell, agents run through cmd.exe so npm's .cmd shims resolve
+const SHELL = WIN ? 'powershell.exe' : process.env.SHELL || '/bin/zsh';
 const DEMO = process.argv.includes('--demo');
+const discovery = createDiscovery({ projects: true });
+await discovery.refresh();
 // A new install has no app.json yet: only this app creates it, so its absence at launch means a first run.
 const FIRST_RUN = !fs.existsSync(FILES.app);
 // What the app showed once (the intro, the onboarding), in a file nothing else writes. In app.json a settings
@@ -31,12 +37,12 @@ const markSeen = (key) => writeJSON(SEEN, { ...seen(), [key]: Date.now() });
 // Launch profiles, mirroring Superset's defaults. Editable in ~/.synapse/app.json.
 const DEFAULT_PROFILES = {
   shell: { command: '', label: 'shell' },
-  claude: { command: 'claude --dangerously-skip-permissions', label: 'Claude Code' },
-  codex: { command: 'codex --dangerously-bypass-approvals-and-sandbox', label: 'Codex' },
-  gemini: { command: 'gemini --approval-mode=auto_edit', label: 'Gemini CLI' },
+  claude: { command: 'claude', label: 'Claude Code' },
+  codex: { command: 'codex', label: 'Codex' },
+  gemini: { command: 'gemini', label: 'Gemini CLI' },
   opencode: { command: 'opencode', label: 'OpenCode' },
   'cursor-agent': { command: 'cursor-agent', label: 'Cursor Agent' },
-  copilot: { command: 'copilot --allow-tool=write', label: 'Copilot CLI' },
+  copilot: { command: 'copilot', label: 'Copilot CLI' },
   amp: { command: 'amp', label: 'Amp' },
 };
 
@@ -57,12 +63,12 @@ function config() {
 const FAKE_LOGIN = process.env.SYNAPSE_DEMO ? process.env.SYNAPSE_FAKE_LOGIN_ITEMS || '' : '';
 function loginOpen() {
   if (FAKE_LOGIN) return !!readJSON(FAKE_LOGIN, {}).openAtLogin;
-  return !!app.getLoginItemSettings().openAtLogin;
+  return !!app.getLoginItemSettings(WIN ? { args: ['--hidden'] } : undefined).openAtLogin;
 }
 // macOS 13+ (Darwin 22+) registers login items through SMAppService, where Electron ignores openAsHidden and
 // wasOpenedAsHidden is always false: the app opens its window at login. Older macOS still honours both.
 const modernLogin = process.platform === 'darwin' && parseInt(os.release(), 10) >= 22;
-const loginPayload = (on) => (modernLogin ? { openAtLogin: on, type: 'mainAppService' } : { openAtLogin: on, openAsHidden: true });
+const loginPayload = (on) => (modernLogin ? { openAtLogin: on, type: 'mainAppService' } : WIN ? { openAtLogin: on, args: ['--hidden'] } : { openAtLogin: on, openAsHidden: true });
 function setLoginOpen(on) {
   on = !!on;
   if (FAKE_LOGIN) { const f = readJSON(FAKE_LOGIN, {}); (f.calls ||= []).push(loginPayload(on)); f.openAtLogin = on; writeJSON(FAKE_LOGIN, f); }
@@ -90,26 +96,7 @@ function suggestLogin(edges) {
 // ---------------------------------------------------------------- git
 
 // A workspace is a checkout you added (a repo or one of its worktrees). The sidebar groups them by repo.
-function projects() {
-  const groups = new Map();
-  const c = config();
-  for (const ws of c.workspaces) {
-    if (!fs.existsSync(ws)) continue;
-    const p = projectOf(ws);
-    let g = groups.get(p.key);
-    if (!g) { g = { key: p.key, label: p.label, path: p.key.startsWith('project:') ? ws : p.key, color: colorOf(p.key), worktrees: [] }; groups.set(p.key, g); }
-    let branch = '';
-    try { branch = git(ws, ['rev-parse', '--abbrev-ref', 'HEAD']); } catch {}
-    let real = ws;
-    try { real = fs.realpathSync(ws); } catch {}
-    g.worktrees.push({ path: ws, branch, name: c.worktreeNames?.[ws] || path.basename(ws), home: ws === g.path || real === g.path }); // the repo's own folder, not a worktree
-  }
-  // the order they were dragged into in the sidebar, then the rest by name
-  const order = config().projectOrder || [];
-  // a repo's own folder used to be keyed project:<name>; an order saved then still counts
-  const rank = (g) => { let i = order.indexOf(g.key); if (i < 0) i = order.indexOf(`project:${path.basename(g.key)}`); return i < 0 ? Infinity : i; };
-  return [...groups.values()].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
-}
+function projects() { return discovery.projects; }
 
 // Repos Synapse makes for you (cloned or created from a name) live here, and workspaces added from
 // elsewhere get a symlink here, so the library tab of "+ workspace" can bring any of them back.
@@ -309,6 +296,7 @@ const INHERITED = /^(CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_P
 let shellPath;
 function userPath() {
   if (shellPath !== undefined) return shellPath;
+  if (WIN) return (shellPath = null); // Windows hands GUI apps the same PATH a terminal gets
   try {
     const out = execFileSync(SHELL, ['-ilc', 'printf "\\0%s\\0" "$PATH"'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, TERM: 'dumb' } });
     shellPath = out.split('\0')[1] || null;
@@ -318,9 +306,10 @@ function userPath() {
 function cleanEnv() {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !INHERITED.test(k)));
   const seen = new Set();
-  env.PATH = [...(userPath() || '').split(':'), ...(env.PATH || '').split(':')]
+  const key = WIN ? Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'Path' : 'PATH';
+  env[key] = [...(userPath() || '').split(path.delimiter), ...(env[key] || '').split(path.delimiter)]
     // Superset's PATH wrappers report to Superset; agents started here should run as themselves
-    .filter((p) => p && !p.includes('/.superset/bin') && !seen.has(p) && seen.add(p)).join(':');
+    .filter((p) => p && !p.includes('/.superset/bin') && !seen.has(p) && seen.add(p)).join(path.delimiter);
   return env;
 }
 
@@ -330,21 +319,32 @@ function spawnPty({ cwd, kind, command, cols = 120, rows = 36, extraEnv = {} }) 
     ...cleanEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'synapse', LANG: process.env.LANG || 'en_US.UTF-8',
     SYNAPSE_APP: '1', SYNAPSE_SESSION: id, ...extraEnv,
   };
-  // exec so the pty's pid is the agent's own pid, which is how Synapse identifies it
-  const args = command ? ['-lc', `exec ${command}`] : ['-l'];
-  const p = pty.spawn(SHELL, args, { name: 'xterm-256color', cols, rows, cwd, env });
+  // exec so the pty's pid is the agent's own pid, which is how Synapse identifies it. Windows has no exec:
+  // the agent is a child of cmd.exe there, matched back to this terminal through ptys.json (lib.mjs hostPid)
+  const p = WIN
+    ? (command ? pty.spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', command], { name: 'xterm-256color', cols, rows, cwd, env, useConpty: true })
+      : pty.spawn(SHELL, ['-NoLogo'], { name: 'xterm-256color', cols, rows, cwd, env, useConpty: true }))
+    : pty.spawn(SHELL, command ? ['-lc', `exec ${command}`] : ['-l'], { name: 'xterm-256color', cols, rows, cwd, env });
   ptys.set(id, { p, cwd, kind, pid: p.pid });
+  savePtys();
   p.onData((data) => win?.webContents.send('pty:data', { id, data }));
-  p.onExit(({ exitCode }) => { ptys.delete(id); if (!quitting) win?.webContents.send('pty:exit', { id, code: exitCode }); });
+  p.onExit(({ exitCode }) => { ptys.delete(id); savePtys(); if (!quitting) win?.webContents.send('pty:exit', { id, code: exitCode }); });
   return { id, pid: p.pid };
 }
 
+// Windows only: which folder each terminal runs in, by pid, for agent discovery there (no lsof to ask)
+function savePtys() {
+  if (WIN) try { writeJSON(FILES.ptys, Object.fromEntries([...ptys.values()].map((t) => [t.pid, t.cwd]))); } catch {}
+}
+// the pid of the terminal an agent runs in (on Windows a cmd.exe above the agent, elsewhere the agent itself)
+const hostOf = (a) => a.hostPid ?? a.pid;
+
 // Which Synapse agent runs in which pty, by pid.
 function agentsByPty() {
-  const agents = listAgents();
+  const agents = discovery.agents;
   const out = {};
   for (const [id, t] of ptys) {
-    const a = agents.find((x) => x.pid === t.pid);
+    const a = agents.find((x) => hostOf(x) === t.pid);
     if (a) out[id] = { synapseId: a.id, name: a.name, kind: a.kind, status: a.status, transcript: a.transcript };
   }
   return out;
@@ -459,7 +459,7 @@ function pumpForks() {
 // The per-kind fork adapters: how to start a child that inherits the parent's conversation.
 // Without a question the child starts idle and the question is typed into its prompt for the human to send.
 function forkCommand(kind, agent, question, profiles) {
-  const q = question ? JSON.stringify(question) : '';
+  const q = question ? (WIN ? '"' + question.replace(/"/g, '""') + '"' : "'" + question.replace(/'/g, "'\\''") + "'") : '';
   const flags = (profiles[kind]?.command || kind).split(' ').slice(1).join(' ');
   switch (kind) {
     // a session with no turns yet has no transcript, so there is nothing to inherit: start fresh with the question
@@ -539,7 +539,7 @@ function startPhone() {
   phone.start({
     projects,
     kinds: () => Object.keys(config().profiles).filter((k) => k !== 'shell'),
-    ptyOf: (pid) => [...ptys].find(([, t]) => t.pid === pid)?.[0] || null,
+    ptyOf: (pid) => { const a = WIN && listAgents().find((x) => x.pid === pid); const host = a ? hostOf(a) : pid; return [...ptys].find(([, t]) => t.pid === host)?.[0] || null; },
     write: (id, data) => ptys.get(id)?.p.write(data),
     submit,
     spawn: ({ req, cwd, kind, prompt }) => {
@@ -561,23 +561,27 @@ function startPhone() {
 
 // The canvas is Synapse's own web UI, served by this checkout's server on a port of its own: a server started
 // from another checkout would serve a canvas that does not know how to talk to the app.
-const CANVAS_PORT = Number(process.env.SYNAPSE_APP_PORT || 4757);
-let canvasProc = null;
-const canvasUp = () => new Promise((resolve) => {
-  const req = http.get({ host: '127.0.0.1', port: CANVAS_PORT, path: '/', timeout: 800 }, (r) => { r.resume(); resolve(r.statusCode < 500); });
-  req.on('error', () => resolve(false));
-  req.on('timeout', () => { req.destroy(); resolve(false); });
-});
+const CANVAS_PORT = Number(process.env.SYNAPSE_APP_PORT || 0);
+let canvasProc = null, canvasStart = null;
 async function ensureCanvas() {
-  if (await canvasUp()) return `http://127.0.0.1:${CANVAS_PORT}/`;
-  if (!canvasProc) {
+  if (canvasStart) return canvasStart;
+  canvasStart = new Promise((resolve, reject) => {
     canvasProc = spawn(process.execPath, [path.join(ROOT, '..', 'server.mjs')], {
-      env: { ...cleanEnv(), ELECTRON_RUN_AS_NODE: '1', PORT: String(CANVAS_PORT), NO_OPEN: '1' }, stdio: 'ignore',
+      env: { ...process.env, SYNAPSE_HOME: DATA, ELECTRON_RUN_AS_NODE: '1', PORT: String(CANVAS_PORT), NO_OPEN: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
-    canvasProc.on('exit', () => { canvasProc = null; });
-  }
-  for (let i = 0; i < 30; i++) { if (await canvasUp()) return `http://127.0.0.1:${CANVAS_PORT}/`; await new Promise((r) => setTimeout(r, 200)); }
-  throw new Error('the Synapse canvas server did not start');
+    const timer = setTimeout(() => { canvasProc?.kill(); reject(new Error('The local Synapse server did not start.')); }, 15000);
+    let output = '';
+    canvasProc.stdout.on('data', (data) => {
+      output += data;
+      const port = output.match(/synapse running at http:\/\/localhost:(\d+)/)?.[1];
+      if (port) { clearTimeout(timer); resolve(`http://127.0.0.1:${port}/`); }
+    });
+    canvasProc.stderr.on('data', (data) => { if (process.env.SYNAPSE_DEBUG) console.error(String(data)); });
+    canvasProc.on('error', (error) => { clearTimeout(timer); reject(error); });
+    canvasProc.on('exit', () => { clearTimeout(timer); canvasProc = null; canvasStart = null; reject(new Error('The local Synapse server stopped.')); });
+  }).catch((error) => { canvasStart = null; throw error; });
+  return canvasStart;
 }
 // The canvas server also syncs with friends and answers their agents' questions, so a connected machine (signed
 // in, or with friends) runs it from launch, not from the first canvas open. Others start it lazily as before.
@@ -592,9 +596,10 @@ function createWindow({ show = !startedHidden() } = {}) {
   win = new BrowserWindow({
     show,
     width: 1440, height: 900, minWidth: 900, minHeight: 560,
-    titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 },
+    ...(WIN ? { titleBarStyle: 'hidden', titleBarOverlay: { color: '#00000000', symbolColor: nativeTheme.shouldUseDarkColors ? '#E8E6E1' : '#1A1A1A', height: 48 } }
+      : { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 } }),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0B0B0B' : '#F1EFE9',
-    webPreferences: { preload: path.join(ROOT, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
+    webPreferences: { preload: path.join(ROOT, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
   });
   win.loadFile(path.join(ROOT, 'renderer', 'index.html'));
   if (process.env.SYNAPSE_SHOT || process.env.SYNAPSE_DEBUG) {
@@ -604,7 +609,7 @@ function createWindow({ show = !startedHidden() } = {}) {
   // ⌘G toggles the canvas even while focus is inside it (the canvas is a separate page, its keys never reach ours)
   win.webContents.on('before-input-event', (e, i) => {
     // ⌘Tab belongs to macOS (the app switcher never lets it through), so the node view also toggles on ⌃Tab
-    const g = i.meta && !i.shift && !i.alt && i.key.toLowerCase() === 'g';
+    const g = (WIN ? i.control && i.shift : i.meta && !i.shift) && !i.alt && i.key.toLowerCase() === 'g';
     const tab = i.control && !i.meta && !i.alt && i.key === 'Tab';
     if (i.type === 'keyDown' && (g || tab)) { e.preventDefault(); win.webContents.send('canvas:toggle'); }
   });
@@ -613,15 +618,16 @@ function createWindow({ show = !startedHidden() } = {}) {
     if (command === 'browser-backward') win?.webContents.send('canvas:back');
     if (command === 'browser-forward' && win?.webContents.navigationHistory.canGoForward()) win.webContents.navigationHistory.goForward();
   });
-  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  win.webContents.on('will-navigate', (event) => event.preventDefault());
+  win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//.test(url)) shell.openExternal(url); return { action: 'deny' }; });
 }
 
 // ---------------------------------------------------------------- first launch
 
 // A packaged app opened from the DMG or Downloads offers to move itself to /Applications (macOS relaunches it).
 function offerMove() {
-  if (!app.isPackaged || process.platform !== 'darwin' || app.isInApplicationsFolder()) return;
-  const { response } = dialog.showMessageBoxSync({
+  if (!app.isPackaged || process.env.SYNAPSE_HOME || process.platform !== 'darwin' || app.isInApplicationsFolder()) return;
+  const response = dialog.showMessageBoxSync({
     type: 'question', buttons: ['Move to Applications', 'Not now'], defaultId: 0, cancelId: 1,
     message: 'Move Synapse to your Applications folder?', detail: 'It keeps Synapse in one place and lets it update itself.',
   });
@@ -634,7 +640,7 @@ function offerMove() {
 const FORCE_INTRO = process.env.SYNAPSE_INTRO === '1';
 function wantsIntro() {
   if (FORCE_INTRO) return true;
-  if (!app.isPackaged || startedHidden() || process.env.SYNAPSE_SHOT) return false;
+  if (!app.isPackaged || process.env.SYNAPSE_HOME || startedHidden() || process.env.SYNAPSE_SHOT) return false;
   if (systemPreferences.getAnimationSettings?.().prefersReducedMotion) return false;
   return !seen().intro && !readJSON(FILES.app, {}).introPlayed;
 }
@@ -660,6 +666,7 @@ function playIntro() {
 }
 
 app.whenReady().then(() => {
+  if (WIN) Menu.setApplicationMenu(null); // its accelerators (Ctrl+W closes the window, Ctrl+R reloads) belong to the terminals
   offerMove();
   if (wantsIntro()) {
     createWindow({ show: false });
@@ -670,7 +677,14 @@ app.whenReady().then(() => {
   serveFriends(); setInterval(serveFriends, TALK_CHECK);
   startPhone();
   if (UPDATES) { setTimeout(() => updater.check(), UPDATE_DELAY); setInterval(() => updater.check(), UPDATE_EVERY); }
-  setInterval(() => { if (win) { const st = state(); win.webContents.send('state', st); notifyTalks(st.talks); notifyTalkRequests(st.talkRequests); suggestLogin(st.edges); pumpForks(); } }, 1000);
+  let refreshing = false;
+  setInterval(async () => {
+    if (!win || refreshing || quitting) return;
+    refreshing = true;
+    try { await discovery.refresh(); if (win && !quitting) { const st = state(); win.webContents.send('state', st); notifyTalks(st.talks); notifyTalkRequests(st.talkRequests); suggestLogin(st.edges); pumpForks(); } }
+    catch (error) { if (!quitting) console.error('State refresh:', error.message); }
+    finally { refreshing = false; }
+  }, 1000);
   if (process.env.SYNAPSE_SHOT) {
     setTimeout(async () => {
       win.show(); win.focus();
@@ -690,6 +704,7 @@ app.on('window-all-closed', () => app.quit());
 // only once node-pty has seen them all exit: its exit-watcher threads otherwise block or crash Node's shutdown.
 let quitting = false;
 app.on('before-quit', (e) => {
+  discovery.close();
   phone.stopShares(); // no tunnel outlives the app
   try { canvasProc?.kill(); } catch {}
   if (updater.state.state === 'ready') updater.install({ relaunch: false, open: UPDATE_OPEN }); // swaps in once we are gone
@@ -704,7 +719,7 @@ app.on('before-quit', (e) => {
 // ---------------------------------------------------------------- updates (see updater.mjs)
 
 // Only the packaged app updates itself; SYNAPSE_UPDATE_URL / SYNAPSE_UPDATE_BUNDLE point a test at a fake release.
-const UPDATES = app.isPackaged || !!process.env.SYNAPSE_UPDATE_URL;
+const UPDATES = (app.isPackaged && !app.getVersion().includes('-')) || !!process.env.SYNAPSE_UPDATE_URL;
 const UPDATE_DELAY = Number(process.env.SYNAPSE_UPDATE_DELAY || 20_000);
 const UPDATE_EVERY = Number(process.env.SYNAPSE_UPDATE_EVERY || 4 * 3600_000);
 const UPDATE_OPEN = process.env.SYNAPSE_UPDATE_OPEN || '/usr/bin/open';
@@ -824,9 +839,12 @@ function localAgentList() {
 
 // ---------------------------------------------------------------- ipc
 
-const handle = (ch, fn) => ipcMain.handle(ch, async (_e, a) => { try { return { ok: true, value: await fn(a || {}) }; } catch (e) { return { ok: false, error: e.message }; } });
-handle('state', () => state());
-handle('flags', () => ({ demo: DEMO, shot: process.env.SYNAPSE_SHOT_VIEW || '', steps: JSON.parse(process.env.SYNAPSE_SHOT_STEPS || '[]'), cwd: process.cwd(), home: os.homedir() }));
+const handle = (ch, fn) => ipcMain.handle(ch, async (event, a) => {
+  if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame) return { ok: false, error: 'Untrusted app frame.' };
+  try { return { ok: true, value: await fn(a || {}) }; } catch (e) { return { ok: false, error: e.message }; }
+});
+handle('state', async () => { await discovery.refresh(); return state(); });
+handle('flags', () => ({ demo: DEMO, packaged: app.isPackaged, view: process.env.SYNAPSE_DESKTOP_VIEW || '', shot: process.env.SYNAPSE_SHOT_VIEW || '', steps: JSON.parse(process.env.SYNAPSE_SHOT_STEPS || '[]'), cwd: process.cwd(), home: os.homedir() }));
 handle('pty:spawn', (a) => {
   const r = spawnPty(a);
   if (a.phoneReq) { // a terminal the phone asked for: its first prompt goes in once the agent is ready
@@ -842,6 +860,11 @@ handle('phone:remove', ({ id }) => phone.remove(id));
 handle('phone:shares', () => phone.liveShares());
 handle('phone:unshare', ({ id }) => phone.stopShare(id));
 handle('pty:write', ({ id, data }) => { ptys.get(id)?.p.write(data); });
+handle('pty:submit', ({ id, text }) => {
+  if (!ptys.has(id)) throw new Error('This session has ended.');
+  if (typeof text !== 'string' || !text.trim() || text.length > 12000) throw new Error('Write a prompt between 1 and 12,000 characters.');
+  submit(id, text);
+});
 handle('pty:resize', ({ id, cols, rows }) => { try { ptys.get(id)?.p.resize(cols, rows); } catch {} });
 handle('pty:kill', ({ id }) => { ptys.get(id)?.p.kill(); });
 handle('fork:spawn', (a) => spawnFork(a));
@@ -852,7 +875,29 @@ handle('pty:restore', ({ cwd, kind, resume, cols, rows }) => {
 // the open sessions, so a restart (or a rebuilt app) can bring them back; the renderer owns the shape
 handle('sessions:load', () => readJSON(SESSIONS, null));
 handle('sessions:save', (data) => writeJSON(SESSIONS, data));
+const UI_STATE = path.join(DATA, 'workspace-ui.json');
+const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed']);
+handle('workspace:load', () => readJSON(UI_STATE, {}));
+handle('workspace:save', ({ key, value }) => {
+  if (!UI_KEYS.has(key) || typeof value !== 'string' || value.length > 768 * 1024) throw new Error('Invalid workspace preference.');
+  writeJSON(UI_STATE, { ...readJSON(UI_STATE, {}), [key]: value });
+});
 handle('canvas', () => ensureCanvas());
+function setupIntegrations(dry) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(ROOT, '..', 'install.mjs'), ...(dry ? ['--dry-run'] : [])], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', PATH: userPath() || process.env.PATH, SYNAPSE_HOME: DATA }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let report = '', errors = '';
+    const timer = setTimeout(() => { child.kill(); reject(new Error('Agent setup timed out. Try again.')); }, 30000);
+    child.stdout.on('data', (data) => { report += data; });
+    child.stderr.on('data', (data) => { errors += data; });
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    child.on('close', (code) => { clearTimeout(timer); code === 0 ? resolve(report) : reject(new Error(errors || report || 'Agent setup failed.')); });
+  });
+}
+handle('integrations:preview', () => setupIntegrations(true));
+handle('integrations:install', () => setupIntegrations(false));
 handle('project:add', ({ path: p }) => addWorkspace(p));
 handle('project:create', ({ name }) => createWorkspace(name));
 handle('project:clone', ({ url, name }) => cloneWorkspace(url, name));
@@ -865,7 +910,7 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-const settingsOut = (c) => ({ openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, notifyDone: c.notifyDone !== false, talkPerHour: talkPerHour(), talkModel: talkModel() });
+const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, notifyDone: c.notifyDone !== false, talkPerHour: talkPerHour(), talkModel: talkModel() });
 handle('settings:get', () => settingsOut(config()));
 // an agent finished a turn while Synapse was in the background (the renderer decides when): say so, with the
 // start of its last reply; a click brings that session to the front
@@ -915,6 +960,12 @@ handle('board:leave', async () => {
 handle('talk:usage', () => talkHistory('api/talks/usage'));
 handle('settings:set', (patch) => {
   const c = config();
+  if (patch.profiles) {
+    for (const [kind, profile] of Object.entries(patch.profiles)) {
+      if (!Object.hasOwn(c.profiles, kind) || typeof profile.command !== 'string' || profile.command.length > 2048 || /\0/.test(profile.command) || (kind !== 'shell' && !profile.command.trim())) throw new Error('Enter a valid command for each agent.');
+    }
+    for (const [kind, profile] of Object.entries(patch.profiles)) c.profiles[kind] = { ...c.profiles[kind], command: profile.command.trim() };
+  }
   if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink;
   if ('autoSendFork' in patch) c.autoSendFork = !!patch.autoSendFork;
   if ('notifyDone' in patch) c.notifyDone = !!patch.notifyDone;
@@ -946,7 +997,7 @@ handle('agent:kill', ({ pid }) => {
 // a tab renamed in the sidebar renames the Synapse agent in its pty, so the node view shows the same name
 handle('agent:rename', ({ pty, name }) => {
   const t = ptys.get(pty);
-  const a = t && listAgents().find((x) => x.pid === t.pid);
+  const a = t && listAgents().find((x) => hostOf(x) === t.pid);
   if (!a) return null;
   return renameAgent(a, name);
 });

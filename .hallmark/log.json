@@ -1,0 +1,11 @@
+[
+  {
+    "date": "2026-10-21",
+    "macrostructure": "Workbench",
+    "theme": "Existing Synapse",
+    "nav": "Project sidebar",
+    "footer": "Inline workspace status",
+    "enrichment": "none",
+    "brief": "A restrained desktop-style workspace for Synapse sessions and shared context"
+  }
+]

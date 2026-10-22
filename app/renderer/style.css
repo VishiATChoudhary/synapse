@@ -123,6 +123,9 @@ body.sidebar-collapsed { --side: 0px; }
 body.sidebar-collapsed .side { display: none; }
 body.sidebar-collapsed .main { grid-column: 2; }
 body.sidebar-collapsed .main > .top { padding-left: 86px; }
+/* Windows: no traffic lights on the left, the window controls sit over the top right instead */
+body.win .side-head, body.win.sidebar-collapsed .main > .top { padding-left: 0; }
+body.win .main > .top { padding-right: 140px; }
 .top-right { display: flex; align-items: stretch; flex: none; }
 
 /* Every visible parent and child is a stable, directly clickable tab. */

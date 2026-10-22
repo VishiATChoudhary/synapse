@@ -26,7 +26,8 @@ const which = (() => {
   const found = new Map();
   return (name) => {
     if (process.env.SYNAPSE_NO_FFMPEG && /^ff/.test(name)) return null; // tests: the path without ffmpeg
-    if (!found.has(name)) found.set(name, ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'].map((d) => path.join(d, name)).find((p) => fs.existsSync(p)) || null);
+    const dirs = process.platform === 'win32' ? (process.env.PATH || process.env.Path || '').split(path.delimiter).filter(Boolean) : ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'];
+    if (!found.has(name)) found.set(name, dirs.map((d) => path.join(d, process.platform === 'win32' ? `${name}.exe` : name)).find((p) => fs.existsSync(p)) || null);
     return found.get(name);
   };
 })();
@@ -214,7 +215,7 @@ async function convert(id, file) {
       if (attempt === 2) throw Object.assign(new Error('still too big'), { userMessage: 'could not make this video small enough' });
     }
   } else {
-    if (/\.webm$/i.test(file)) throw Object.assign(new Error('no ffmpeg'), { userMessage: 'install ffmpeg on your computer to preview webm videos' });
+    if (/\.webm$/i.test(file) || process.platform === 'win32') throw Object.assign(new Error('no ffmpeg'), { userMessage: `install ffmpeg on your computer to preview ${process.platform === 'win32' ? '' : 'webm '}videos` });
     let fits = false;
     for (const preset of ['Preset1280x720', 'Preset960x540', 'Preset640x480']) {
       await run('/usr/bin/avconvert', ['--source', file, '--preset', preset, '--output', tmp, '--replace']);

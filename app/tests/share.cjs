@@ -50,6 +50,7 @@ const friend = (name) => `[...document.querySelectorAll('#friends-pop .friend')]
   assert.equal(await js(`document.querySelector('#btn-share').classList.contains('off')`), true, 'nothing open: share is dimmed');
 
   // open the stand-in codex: share wakes up for it
+  await until(() => js(`[...document.querySelectorAll('#launch .launch-item')].some((b) => b.textContent.trim() === 'Codex')`), 'the Codex launcher is ready');
   await js(`[...document.querySelectorAll('#launch .launch-item')].find((b) => b.textContent.trim() === 'Codex').click()`);
   await until(() => js(`!document.querySelector('#btn-share').classList.contains('off')`), 'the open codex is an agent share can offer', 20000);
   const agentName = await js(`document.querySelector('#btn-share').title.replace(/^share (.*) with a friend$/, '$1')`);

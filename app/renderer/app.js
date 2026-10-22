@@ -4,6 +4,9 @@ import { Terminal } from '../node_modules/@xterm/xterm/lib/xterm.mjs';
 import { FitAddon } from '../node_modules/@xterm/addon-fit/lib/addon-fit.mjs';
 
 const $ = (s) => document.querySelector(s);
+// Windows has no ⌘: the app's shortcuts are Ctrl+Shift+key there (Alt adds what ⇧ adds on a Mac), and every
+// title and hint written with Mac glyphs is rewritten to say so (winKeys below)
+const WIN = navigator.userAgent.includes('Windows');
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
 // Small inline SVGs inherit the current theme and need no image dependency.
@@ -68,7 +71,7 @@ function selectSession(s, id = top(s)?.id) {
   if (id != null) focusPath(s, id);
   closeCanvas();
   render();
-  if ($('#modal').hidden && !fanOpen) top(s)?.term.focus();
+  if (!workspaceOpen && $('#modal').hidden && !fanOpen) top(s)?.term.focus();
 }
 
 function statusOf(x) {
@@ -96,7 +99,7 @@ const termTheme = () => {
   };
 };
 
-async function makeSession(s, { kind, title, question = null, parent = null, spawn }) {
+async function makeSession(s, { kind, title, question = null, parent = null, key = null, spawn }) {
   const wrap = el('div', 'term');
   $('#stage').appendChild(wrap);
   const term = new Terminal({
@@ -112,27 +115,30 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
   // app shortcuts pass through; the macOS editing keys xterm drops or mis-sends become their readline
   // bytes (⌘⌫ clears the line, ⌘← / ⌘→ jump to its ends); everything else goes to the pty as is
   term.attachCustomKeyEventHandler((e) => {
-    // xterm otherwise sends plain Enter for Shift+Enter. Match Option+Enter for multiline prompts.
+    // Shells keep Enter; agents receive the enhanced-keyboard newline sequence.
     if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey && !e.isComposing) {
-      e.preventDefault(); term.input('\x1b\r'); return false;
+      e.preventDefault(); term.input(kind === 'shell' ? '\r' : '\x1b[13;2u'); return false;
     }
     if (e.type === 'keydown' && agentKey(e)) return false; // ⌃1-9 launch agents, never reach the pty
-    // ⇧Enter is a newline in agent prompts: Claude Code and Codex read the CSI u form their own terminal
-    // setup installs in iTerm2 and VS Code. A shell gets a plain Enter; the sequence would only echo there.
-    if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey && kind !== 'shell') { e.preventDefault(); term.input('\x1b[13;2u'); return false; }
-    if (!e.metaKey || e.type !== 'keydown') return true;
+    if (WIN && e.type === 'keydown' && e.ctrlKey && !e.altKey) { // Windows terminal habits: Ctrl+V pastes, Ctrl+Shift+C/V copy and paste
+      if (!e.shiftKey && e.code === 'KeyV') return false; // the browser's paste event reaches xterm
+      if (e.shiftKey && e.code === 'KeyC') { e.preventDefault(); const sel = term.getSelection(); if (sel) navigator.clipboard.writeText(sel); return false; }
+      if (e.shiftKey && e.code === 'KeyV') { e.preventDefault(); navigator.clipboard.readText().then((t) => t && term.paste(t)); return false; }
+      if (!e.shiftKey && e.code === 'KeyC' && term.hasSelection()) { e.preventDefault(); navigator.clipboard.writeText(term.getSelection()); term.clearSelection(); return false; }
+    }
+    if (!appMod(e) || e.type !== 'keydown') return true;
     if (APP_KEYS.has(keyName(e))) return false;
-    const bytes = !e.shiftKey && !e.altKey && !e.ctrlKey && META_EDIT[e.key];
+    const bytes = (WIN ? !e.altKey : !e.shiftKey && !e.altKey && !e.ctrlKey) && META_EDIT[e.key];
     if (!bytes) return true;
     e.preventDefault(); term.input(bytes); return false;
   });
   fit.fit();
   if (!wasVisible) wrap.classList.remove('visible'); // renderStage() decides what is shown
-  let pty;
-  try { ({ id: pty } = await spawn(term.cols, term.rows)); }
+  let pty, pid;
+  try { ({ id: pty, pid } = await spawn(term.cols, term.rows)); }
   catch (error) { term.dispose(); wrap.remove(); throw error; }
   synapse.pty.resize(pty, term.cols, term.rows); // whatever the spawner defaulted to, the pty and the view agree from the first frame
-  const x = { id: nextId++, pty, kind, title, question, parent, exited: false, term, fit, el: wrap };
+  const x = { id: nextId++, key: /^[\w-]{1,80}$/.test(key || '') ? key : crypto.randomUUID(), pty, pid, updatedAt: Date.now(), kind, title, question, parent, exited: false, term, fit, el: wrap };
   wrap.addEventListener('pointerdown', () => { if (M.focused !== s.id) selectSession(s, x.id); });
   wrap.addEventListener('focusin', () => { if (M.focused !== s.id) selectSession(s, x.id); });
   term.onData(sforkFilter(() => x));
@@ -142,7 +148,7 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
   return x;
 }
 
-synapse.pty.onData(({ id, data }) => { for (const s of M.slots) for (const x of s.sessions) if (x.pty === id) x.term.write(data); });
+synapse.pty.onData(({ id, data }) => { for (const s of M.slots) for (const x of s.sessions) if (x.pty === id) { x.updatedAt = Date.now(); x.term.write(data); } });
 synapse.pty.onExit(({ id, code }) => {
   for (const s of M.slots) for (const x of s.sessions) if (x.pty === id) { x.exited = true; x.term.write(`\r\n\x1b[2m[exited ${code}]\x1b[0m\r\n`); }
   render();
@@ -167,7 +173,7 @@ function sforkFilter(get) {
       if (t === '\x7f' || t === '\b') line = line.slice(0, -1);
       else if (t === '\x15' || t === '\x03') line = '';
       else if (t === '\x17') line = line.replace(/\S+\s*$/, '');
-      else if (t === '\x1b\r') line = null; // multiline editing cannot be tracked by the single-line /sfork shortcut
+      else if (t === '\x1b\r' || t === '\x1b[13;2u') line = null; // multiline input cannot be tracked by /sfork
       else if (/^[^\x00-\x1f\x7f]+$/.test(t)) line += t;
       // keys that move the cursor make the line unknowable; terminal reports (focus, cursor position,
       // device attributes) also arrive here and are ignored
@@ -320,7 +326,7 @@ function snapshot() {
       let p = x.parent;
       while (p != null && !index.has(p)) p = sess(s, p)?.parent;
       index.set(x.id, sessions.length);
-      sessions.push({ kind: x.kind, title: x.title, question: x.question, parent: p == null ? null : index.get(p), resume: x.resume || null });
+      sessions.push({ key: x.key, kind: x.kind, title: x.title, question: x.question, parent: p == null ? null : index.get(p), resume: x.resume || null });
     }
     if (!sessions.length) continue;
     const t = [...s.path].reverse().find((id) => index.has(id));
@@ -351,7 +357,7 @@ async function restoreSessions(saved) {
       const parent = x.parent == null ? null : ids[x.parent] ?? null;
       try {
         const made = await makeSession(s, {
-          kind: x.kind, title: x.title, question: x.question, parent,
+          kind: x.kind, title: x.title, question: x.question, parent, key: x.key,
           spawn: (cols, rows) => synapse.pty.restore({ cwd: sv.worktree, kind: x.kind, resume: x.resume, cols, rows }),
         });
         made.resume = x.resume;
@@ -397,14 +403,17 @@ function renderLaunch() {
 }
 
 function render() {
-  renderLaunch();
-  renderShareBar();
-  // Keep the live input (and an outside click target) intact through state refreshes.
-  if (!nameEdit && !namePointer) { renderTree(); renderDeck(); }
+  if (!workspaceOpen) {
+    renderLaunch();
+    renderShareBar();
+    // Keep the live input (and an outside click target) intact through state refreshes.
+    if (!nameEdit && !namePointer) { renderTree(); renderDeck(); }
+    renderBar();
+  }
   renderStage();
-  renderBar();
   scheduleSave();
   syncCanvasBranches();
+  syncWorkspace();
 }
 
 // ---------------------------------------------------------------- drag to rearrange
@@ -854,7 +863,7 @@ function renderStage() {
   if (layout != null) place(layout);
   // grab focus only when a different session comes to the front, so the 1 s state refresh never steals it from a dialog
   const changed = t !== shownSession; shownSession = t;
-  if (t) requestAnimationFrame(() => { for (const x of visible) if (x.el.isConnected) x.fit.fit(); if (changed && top(focusedSlot()) === t && t.el.isConnected && !nameEdit && $('#modal').hidden && !fanOpen && !canvasOpen) t.term.focus(); });
+  if (t) requestAnimationFrame(() => { for (const x of visible) if (x.el.isConnected) x.fit.fit(); if (!workspaceOpen && changed && top(focusedSlot()) === t && t.el.isConnected && !nameEdit && $('#modal').hidden && !fanOpen && !canvasOpen) t.term.focus(); });
 }
 
 function renderBar() {
@@ -989,7 +998,7 @@ function modal(title, build) {
   m.querySelector('.modal-card').dataset.kind = title;
   body.replaceChildren();
   body.onkeydown = null;
-  build(body, () => { m.hidden = true; top(focusedSlot())?.term.focus(); });
+  build(body, () => { m.hidden = true; if (workspaceOpen) workspaceFrame.focus(); else top(focusedSlot())?.term.focus(); });
   m.hidden = false;
   const inp = body.querySelector('input, textarea'); if (inp) inp.focus();
 }
@@ -1456,6 +1465,16 @@ async function openSettings() {
   let s = {};
   try { s = await synapse.settings.get(); } catch {}
   modal('settings', (body, close) => {
+    const setup = el('div', 'opt set'), setupButton = el('button', 'btn', 'Set up');
+    const setupReport = el('pre', 'setup-report'); setupReport.hidden = true;
+    setup.append(el('span', 'k', 'Agent integrations'), el('span', 'c', 'Add Synapse tools and prompt hooks to your agent settings. Existing files are backed up.'), setupButton);
+    setupButton.onclick = async () => {
+      setupButton.disabled = true; setupButton.textContent = 'Setting up…';
+      try { setupReport.textContent = await synapse.integrations.install(); setupReport.hidden = false; setupButton.textContent = 'Set up again'; }
+      catch (e) { setupReport.textContent = e.message; setupReport.hidden = false; setupButton.textContent = 'Try again'; }
+      finally { setupButton.disabled = false; }
+    };
+    body.append(setup, setupReport);
     const themeRow = el('div', 'opt set'), themeBtn = el('button', 'btn');
     const showTheme = () => (themeBtn.textContent = document.documentElement.dataset.theme === 'night' ? '◐ night' : '◐ signal');
     themeRow.append(el('span', 'k', 'theme'), el('span', 'c', 'signal is light, night is dark'), themeBtn); showTheme();
@@ -1491,7 +1510,7 @@ async function openSettings() {
     const updRow = el('div', 'opt set'), updVal = el('span', 'c'), updBtn = el('button', 'btn', 'check now');
     const showUpd = (u) => {
       const at = `version ${u.current || '?'}`;
-      updVal.textContent = !u.enabled ? `${at} · running from source, updates come with git pull`
+      updVal.textContent = !u.enabled ? `${at} · ${u.current?.includes('-') ? 'preview build, install updates manually' : 'running from source, updates come with git pull'}`
         : u.state === 'checking' ? `${at} · checking…`
         : u.state === 'error' ? `${at} · last check failed: ${u.error}`
         : ['downloading', 'ready', 'manual', 'installing'].includes(u.state) ? `${at} · ${u.version} available`
@@ -1505,6 +1524,20 @@ async function openSettings() {
     tourRow.append(el('span', 'k', 'tour'), el('span', 'c', 'the five steps a new install starts with'), tourBtn);
     tourBtn.onclick = () => { close(); showOnboarding(false); };
     body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow, doneRow, loginRow, updRow, tourRow);
+    const commands = el('div', 'agent-commands'), commandInputs = new Map();
+    for (const [kind, profile] of Object.entries(s.profiles || {})) {
+      const row = el('label', 'opt set'), input = el('input');
+      input.value = profile.command; input.spellcheck = false; input.setAttribute('aria-label', `${profile.label || kind} command`);
+      row.append(el('span', 'k', profile.label || kind), input); commands.append(row); commandInputs.set(kind, input);
+    }
+    const saveCommands = el('button', 'btn', 'Save commands');
+    saveCommands.onclick = async () => {
+      saveCommands.disabled = true;
+      try { const result = await synapse.settings.set({ profiles: Object.fromEntries([...commandInputs].map(([kind, input]) => [kind, { command: input.value }])) }); M.profiles = result.profiles; render(); toast('Commands saved. New sessions use these commands.'); }
+      catch (e) { toast(e.message, true); }
+      finally { saveCommands.disabled = false; }
+    };
+    commands.append(saveCommands); body.append(el('div', 'sub', 'Agent commands'), commands);
     const phones = el('div', 'phones');
     body.append(el('div', 'sub', 'phone'), phones);
     drawPhones(phones);
@@ -1567,7 +1600,10 @@ function toast(text, sig = false, onClick = null) {
 
 // ---------------------------------------------------------------- keys
 
-const keyName = (e) => (e.shiftKey ? 'shift+' : '') + e.key.toLowerCase();
+const appMod = (e) => (WIN ? e.ctrlKey && e.shiftKey && !e.metaKey : e.metaKey);
+// on Windows Shift is part of the modifier, so e.key is the shifted character: name the physical key instead
+const winKey = (e) => (/^(Key|Digit)/.test(e.code) ? e.code.slice(-1).toLowerCase() : { BracketLeft: '[', BracketRight: ']', Comma: ',' }[e.code] || e.key.toLowerCase());
+const keyName = (e) => (WIN ? (e.altKey ? 'shift+' : '') + winKey(e) : (e.shiftKey ? 'shift+' : '') + e.key.toLowerCase());
 // ⌃1 ⌃2 … start the nth agent (claude, codex, …; the shell is not in this list) in the focused worktree
 const agentProfiles = () => profileOrder().filter((k) => k !== 'shell');
 const agentKey = (e) => (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key) ? agentProfiles()[e.key - 1] : null);
@@ -1585,7 +1621,7 @@ window.addEventListener('keydown', (e) => {
   if (fanOpen && e.key === 'Backspace') { const s = focusedSlot(); const t = top(s); if (t?.parent != null) requestCloseSession(s, t.id); return; }
   const agent = agentKey(e);
   if (agent) { e.preventDefault(); const wt = focusedSlot()?.worktree || M.projects[0]?.worktrees[0]?.path; if (wt) newSlot(wt, agent); else toast('add a workspace first', true); return; }
-  if (!e.metaKey) return;
+  if (!appMod(e)) return;
   const k = keyName(e);
   if (!APP_KEYS.has(k)) return;
   e.preventDefault();
@@ -1636,7 +1672,7 @@ async function openCanvas() {
   const f = $('#canvas-frame');
   if (!f.src) $('#canvas').classList.add('loading');
   try {
-    canvasReady ||= synapse.canvas().then((url) => { f.src = url; }).catch((e) => { canvasReady = null; throw e; });
+    canvasReady ||= synapse.canvas().then((url) => { f.src = new URL('canvas', url).href; }).catch((e) => { canvasReady = null; throw e; });
     await canvasReady;
     if (version === canvasVersion && canvasOpen && $('#modal').hidden) f.focus();
   } catch (e) {
@@ -1657,7 +1693,7 @@ function closeCanvas(fromHistory = false) {
   }
 }
 
-function toggleCanvas() { if (canvasOpen || reopenCanvas) closeCanvas(); else openCanvas(); }
+function toggleCanvas() { if (workspaceOpen) showWorkspace(false); if (canvasOpen || reopenCanvas) closeCanvas(); else openCanvas(); }
 addEventListener('popstate', () => {
   const reopen = reopenCanvas;
   canvasBackPending = false; reopenCanvas = false;
@@ -2713,20 +2749,191 @@ async function drawTalkHistory(box) {
 }
 const ageOf = (t) => { const m = Math.max(0, Math.round((Date.now() - (t || 0)) / 60000)); return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
 
+
+// The GUI and terminal renderer keep one session model and one PTY per session.
+// Only this packaged renderer owns native capabilities; the local page gets an allowlisted bridge.
+let workspaceOpen = false, workspaceReady = null, workspaceLive = false, workspaceSignature = '';
+const workspaceFrame = $('#workspace-frame');
+const workspacePost = (data) => {
+  if (workspaceLive && workspaceFrame.src) workspaceFrame.contentWindow.postMessage(data, new URL(workspaceFrame.src).origin);
+};
+function workspaceState() {
+  return {
+    projects: M.projects, profiles: M.profiles, theme: document.documentElement.dataset.theme,
+    active: top(focusedSlot()) ? `desktop-${top(focusedSlot()).key}` : null,
+    sessions: M.slots.flatMap((s) => s.sessions.map((x) => ({
+      id: `desktop-${x.key}`, pty: x.pty, pid: x.pid, backendId: M.agents[x.pty]?.synapseId || null,
+      name: M.agents[x.pty]?.name || x.title, kind: x.kind, cwd: s.worktree,
+      projectKey: worktreeOf(s.worktree)?.project.key || s.worktree,
+      project: worktreeOf(s.worktree)?.project.label || s.worktree.split('/').pop(),
+      status: x.exited ? 'exited' : statusOf(x) === 'working' ? 'busy' : statusOf(x),
+      lastActivity: x.updatedAt, parent: x.parent == null ? null : `desktop-${sess(s, x.parent)?.key}`,
+      exited: x.exited,
+    }))),
+  };
+}
+function syncWorkspace(force = false) {
+  if (!workspaceLive || !workspaceOpen) return;
+  const state = workspaceState(), signature = JSON.stringify(state);
+  if (!force && signature === workspaceSignature) return;
+  workspaceSignature = signature;
+  workspacePost({ type: 'synapse:desktop-state', state });
+}
+function showWorkspace(open) {
+  workspaceOpen = open;
+  workspacePost({ type: 'synapse:desktop-visibility', visible: open });
+  $('#desktop-workspace').hidden = !open;
+  document.body.classList.toggle('gui-mode', open);
+  $('#mode-gui').setAttribute('aria-pressed', String(open));
+  $('#mode-terminal').setAttribute('aria-pressed', String(!open));
+  localStorage.setItem('synapse-desktop-view', open ? 'gui' : 'terminal');
+  if (open) { closeCanvas(); if (activityOpen) showActivity(false); syncWorkspace(true); }
+  else { render(); top(focusedSlot())?.term.focus(); }
+}
+async function openWorkspace() {
+  showWorkspace(true);
+  try {
+    workspaceReady ||= synapse.canvas().then((url) => { workspaceFrame.src = `${url}?desktop=1`; }).catch((e) => { workspaceReady = null; throw e; });
+    await workspaceReady;
+  } catch (e) { showWorkspace(false); toast(e.message, true); }
+}
+const ownSession = (id) => {
+  for (const s of M.slots) {
+    const x = s.sessions.find((x) => `desktop-${x.key}` === id);
+    if (x) return { s, x };
+  }
+  throw new Error('This session is no longer open.');
+};
+async function desktopAction(action, args) {
+  switch (action) {
+    case 'state': return workspaceState();
+    case 'preference': return synapse.workspace.save(args.key, args.value);
+    case 'new-session': {
+      if (!M.projects.some((p) => p.worktrees.some((w) => w.path === args.cwd))) throw new Error('Choose an open project.');
+      if (!Object.hasOwn(M.profiles, args.kind)) throw new Error('Choose an installed agent profile.');
+      const before = new Set(M.slots.map((s) => s.id));
+      await newSlot(args.cwd, args.kind);
+      const made = M.slots.find((s) => !before.has(s.id));
+      if (!made?.sessions[0]) throw new Error('The session could not start. Check the agent command in Settings.');
+      return { id: `desktop-${made.sessions[0].key}` };
+    }
+    case 'select': { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); render(); return; }
+    case 'terminal': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } showWorkspace(false); return; }
+    case 'submit': { const { x } = ownSession(args.id); if (x.exited) throw new Error('This session has ended.'); return synapse.pty.submit(x.pty, args.text); }
+    case 'output': {
+      const { x } = ownSession(args.id), buffer = x.term.buffer.active, lines = [];
+      for (let i = Math.max(0, buffer.length - 500); i < buffer.length; i++) lines.push(buffer.getLine(i)?.translateToString(true) || '');
+      return { terminal: lines.join('\n').trimEnd(), messages: [], chat: [], hasMore: buffer.length > 500 };
+    }
+    case 'rename': {
+      const { x } = ownSession(args.id);
+      const name = String(args.name || '').trim().slice(0, 48);
+      return renameTab(x, name);
+    }
+    case 'fork': {
+      const { s, x } = ownSession(args.id), before = s.sessions.length;
+      if (typeof args.question !== 'string' || !args.question.trim() || args.question.length > 12000) throw new Error('Write a question for the fork.');
+      if (!M.demo && !['claude', 'codex'].includes(x.kind)) throw new Error('Native conversation forks are supported for Claude Code and Codex.');
+      await fork(args.question.trim(), { parentPty: x.pty });
+      if (s.sessions.length === before) throw new Error('The agent is not ready to fork yet. Send its first prompt, then try again.');
+      return { id: `desktop-${top(s).key}` };
+    }
+    case 'close': { const { s, x } = ownSession(args.id); requestCloseSession(s, x.id); return; }
+    case 'add-project': return promptProject();
+    case 'worktree': {
+      const p = M.projects.find((p) => p.key === args.key);
+      if (!p) throw new Error('Choose an open project.');
+      return promptWorktree(p);
+    }
+    case 'project-menu': {
+      const p = M.projects.find((p) => p.key === args.key);
+      if (!p) throw new Error('Choose an open project.');
+      const rename = (title, current, save) => {
+        promptText(title, 'Enter a new name', current, async (name) => { try { await save(name); await refresh(); } catch (e) { toast(e.message, true); } });
+        const input = $('#modal-body input'); input.value = current; input.select();
+      };
+      const worktrees = p.worktrees.map((w) => ({ label: w.name, sub: [
+        { label: 'New session', sub: agentMenu(w.path) },
+        { label: 'Rename', run: () => rename('Rename worktree', w.name, (name) => synapse.worktree.rename(w.path, name)) },
+        ...(!w.home ? [{ label: 'Delete worktree', danger: true, run: () => removeWorktreeAsk(p, w) }] : []),
+      ] }));
+      contextMenu([
+        { label: 'New worktree', run: () => promptWorktree(p) },
+        { label: 'Worktrees', sub: worktrees },
+        { label: 'Rename project', run: () => rename('Rename project', p.label, (name) => synapse.project.rename(p.key, name)) },
+        '-', { label: 'Remove from sidebar', danger: true, run: () => removeFromSidebar(p.worktrees.map((w) => w.path), p.label) },
+      ], Math.max(0, Number(args.x) || 0), Math.max(48, (Number(args.y) || 0) + 48));
+      return;
+    }
+    case 'settings': return openSettings();
+    case 'account': return openAccount();
+    case 'canvas': showWorkspace(false); return openCanvas();
+    case 'activity': showWorkspace(false); return showActivity(true);
+    case 'fork-tree': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } showWorkspace(false); return openFan(); }
+    case 'split': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } showWorkspace(false); return splitShell(args.direction === 'down' ? 'down' : 'right'); }
+    case 'theme': { if (['night', 'signal'].includes(args.theme)) { document.documentElement.dataset.theme = args.theme; localStorage.setItem('synapse-mode', args.theme); for (const s of M.slots) for (const x of s.sessions) x.term.options.theme = termTheme(); sendTheme(); } return; }
+    default: throw new Error('Unknown workspace action.');
+  }
+}
+addEventListener('message', async (event) => {
+  if (!workspaceFrame.src || event.source !== workspaceFrame.contentWindow || event.origin !== new URL(workspaceFrame.src).origin) return;
+  if (event.data?.type === 'synapse:desktop-bootstrap') {
+    const preferences = await synapse.workspace.load().catch(() => ({}));
+    event.source.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, event.origin);
+    return;
+  }
+  if (event.data?.type === 'synapse:desktop-ready') { workspaceLive = true; syncWorkspace(true); return; }
+  const { type, request, action, args = {} } = event.data || {};
+  if (type !== 'synapse:desktop-call' || typeof request !== 'string' || request.length > 80) return;
+  try {
+    const value = await desktopAction(action, args);
+    workspacePost({ type: 'synapse:desktop-reply', request, value });
+    if (action !== 'preference') syncWorkspace(true);
+  } catch (e) { workspacePost({ type: 'synapse:desktop-reply', request, error: e.message }); }
+});
+$('#mode-gui').onclick = openWorkspace;
+$('#mode-terminal').onclick = () => showWorkspace(false);
+$('#desktop-settings').onclick = openSettings;
+
 // ---------------------------------------------------------------- boot
+
+// ---------------------------------------------------------------- Windows: say Ctrl, not ⌘
+
+const winKeys = (t) => t.replace(/⇧⌘/g, 'Ctrl+Shift+Alt+').replace(/⌘/g, 'Ctrl+Shift+').replace(/⌃/g, 'Ctrl+').replace(/⌥/g, 'Alt+')
+  .replace(/⇧/g, 'Shift+').replace(/⌫/g, 'Backspace').replace(/\bthis Mac\b/g, 'this PC').replace(/\byour Mac\b/g, 'your PC');
+const MAC_GLYPHS = /[⌘⌃⌥⇧⌫]|\b(this|your) Mac\b/;
+function winText(root) {
+  if (root.nodeType === Node.TEXT_NODE) { if (MAC_GLYPHS.test(root.data) && !root.parentElement?.closest('.xterm')) root.data = winKeys(root.data); return; }
+  if (root.nodeType !== Node.ELEMENT_NODE || root.closest('.xterm')) return;
+  for (const e of [root, ...root.querySelectorAll('[title], [aria-label]')]) for (const a of ['title', 'aria-label']) { const v = e.getAttribute(a); if (v && MAC_GLYPHS.test(v)) e.setAttribute(a, winKeys(v)); }
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) if (MAC_GLYPHS.test(n.data) && !n.parentElement?.closest('.xterm')) n.data = winKeys(n.data);
+}
+if (WIN) {
+  document.body.classList.add('win');
+  winText(document.body);
+  new MutationObserver((list) => {
+    for (const m of list) {
+      if (m.target.nodeType === Node.ELEMENT_NODE && m.target.closest('.xterm')) continue;
+      if (m.type === 'attributes' || m.type === 'characterData') winText(m.target);
+      else m.addedNodes.forEach(winText);
+    }
+  }).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['title', 'aria-label'] });
+}
 
 (async () => {
   const flags = await synapse.flags();
   M.home = flags.home || '';
   await refresh();
   // first run: the checkout we were started from is the sample workspace
-  if (!M.projects.length) { try { await synapse.project.add(flags.cwd); await refresh(); } catch {} }
+  if (!M.projects.length && !flags.packaged && flags.cwd !== '/' && flags.cwd !== flags.home) { try { await synapse.project.add(flags.cwd); await refresh(); } catch {} }
   const here = M.projects.flatMap((p) => p.worktrees).find((w) => flags.cwd.startsWith(w.path)) || M.projects[0]?.worktrees[0];
   const keep = !flags.demo && !flags.shot;
   const restored = keep ? await restoreSessions(await synapse.sessions.load().catch(() => null)) : 0;
   if (!restored && here) { M.open.add(worktreeOf(here.path)?.project.key); await newSlot(here.path, 'shell'); }
   persist = keep;
   render();
+  if ((flags.view || localStorage.getItem('synapse-desktop-view') || 'gui') === 'gui') await openWorkspace();
   if (flags.demo && here) {
     // a ready-made tree so the deck and the fan-out can be felt without running an agent
     await fork('why not just <= ?');

@@ -1,13 +1,13 @@
 {
   "name": "synapse-app",
-  "version": "0.5.9",
+  "version": "0.6.0-gui.1",
   "private": true,
   "description": "Synapse desktop: projects, worktrees, agent terminals and fork stacks",
   "main": "main.mjs",
   "type": "module",
   "scripts": {
     "start": "electron .",
-    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true",
+    "postinstall": "node -e \"for (const d of ['darwin-arm64', 'darwin-x64']) try { require('fs').chmodSync('node_modules/node-pty/prebuilds/' + d + '/spawn-helper', 0o755) } catch {}\"",
     "test:worktrees": "node tests/worktrees.mjs && node tests/worktrees-ui.cjs",
     "test:navigation": "node tests/navigation.cjs",
     "test:keys": "electron tests/keys.cjs",

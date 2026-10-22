@@ -4,10 +4,10 @@
 
 # synapse
 
-**Every coding agent on your machine, on one canvas. Draw a line between two of them and they share context.**
+**Every coding agent on your machine, in one workspace. Read their conversations, connect them, and let them share context.**
 
 <img alt="Node 18+" src="https://img.shields.io/badge/node-%E2%89%A518-16130F?style=flat-square&labelColor=F1EFE9">
-<img alt="Zero dependencies" src="https://img.shields.io/badge/dependencies-0-16130F?style=flat-square&labelColor=F1EFE9">
+<img alt="Dependency-free core" src="https://img.shields.io/badge/core_dependencies-0-16130F?style=flat-square&labelColor=F1EFE9">
 <img alt="MCP" src="https://img.shields.io/badge/MCP-stdio-16130F?style=flat-square&labelColor=F1EFE9">
 <img alt="MIT" src="https://img.shields.io/badge/license-MIT-FF4400?style=flat-square&labelColor=F1EFE9">
 
@@ -22,26 +22,65 @@ Claude Code · Codex · Gemini CLI · OpenCode · Cursor Agent · Amp · Copilot
 You have five agents open. One just figured out the auth bug, another is about to touch the same file,
 and the only way they find out about each other is you copy-pasting between terminals.
 
-Synapse puts every live agent on a canvas as a pulsing node. **Drag from one agent to another and the
-second one can see what the first is doing.** Linked agents can also message each other, whichever
-CLI they run in.
+Synapse puts every live agent in a desktop-style workspace, grouped by project. Follow a conversation,
+connect two agents to share context, or leave a message without switching terminals. Linked agents can
+also message each other, whichever CLI they run in. The original interactive canvas is one click away.
 
 <div align="center">
-<img src="assets/canvas.gif" alt="The Synapse canvas: agents pulse, context flows along the links" width="1000">
+<img src="assets/workspace.png" alt="The Synapse workspace: project sessions, a live conversation, and connected agents in a light desktop-style interface" width="1000">
 </div>
 
-## Quick start
+## Desktop app
+
+One macOS app contains **GUI** and **Terminal** modes. Switch at the top of the window; both views use
+the same live processes, worktrees and fork trees. Switching never restarts an agent.
+
+- Start Claude Code, Codex, Gemini, OpenCode, Cursor, Copilot, Amp or a shell from **New session**.
+- Send prompts in the GUI; use **Open in Terminal** for sign-in, approvals and interactive CLI controls.
+- Add, create or clone projects, open Git branches/worktrees, and fork conversations (Claude Code and Codex).
+- Use Terminal mode for split panes, fork-tree navigation, drag ordering and the complete keyboard controls.
+- Configure commands and install context-sharing tools from **Settings**. The installer backs up existing
+  agent settings and includes its own Node runtime. Agent CLIs still need to be installed and signed in.
+- Canvas, account/sharing, phone access and activity remain available in the same app.
+
+```bash
+npm run app:setup
+npm run app
+```
+
+Build the Apple Silicon DMG with `npm run app:build`. The build uses the Developer ID certificate and
+notary credentials in the local keychain, then validates Apple's acceptance. For local development
+without signing credentials: `npm run app:build -- --ad-hoc`.
+
+<img src="assets/desktop.png" alt="Synapse desktop with GUI and Terminal modes sharing one workspace" width="1000">
+
+## Browser quick start
 
 ```bash
 git clone https://github.com/VishiATChoudhary/synapse && cd synapse
 node install.mjs     # wires Synapse into every agent CLI it finds (backs up each config first)
-npm start            # canvas at http://localhost:4747
+npm start            # workspace at http://localhost:4747
 ```
 
-No `npm install`: Synapse is plain Node 18+ with zero dependencies.
+The browser workspace and CLI run on plain Node 18+ without runtime dependencies. The desktop app adds Electron and a native terminal runtime.
 
-Just want to look around? `npm run demo` opens a canvas full of made-up agents on
+Just want to look around? `npm run demo` opens a workspace full of clearly labelled sample agents on
 http://localhost:4848 and leaves your real sessions alone.
+
+## The workspace
+
+- **Project sidebar.** Switch between sessions, collapse projects, or search names, folders, and agent types with **⌘K / Ctrl+K**.
+- **Conversations.** Read live transcripts with markdown, code blocks, copy controls, and a separate messages view. Your scroll position stays put when new activity arrives.
+- **Shared context.** Add one-way or two-way connections from session details. Remove a connection with an undo action.
+- **Messages.** In the desktop app, prompts go straight to sessions the app owns. For agents running elsewhere, messages remain queued until the next prompt or inbox check.
+- **Light and dark.** Bundled fonts, keyboard navigation, saved drafts, and layouts for small screens. The appearance button switches themes.
+- **Canvas.** Open **Canvas** in the sidebar, or go directly to `http://localhost:4747/canvas`, for the original graph and its drag-to-link controls.
+
+Agent discovery runs in a background worker. The workspace uses one SSE connection, updates existing
+session rows, and fetches only the selected conversation. It adds no runtime dependencies and makes
+no third-party requests for the local UI. The desktop app can launch agents; the standalone browser workspace monitors agents started in other tools.
+
+Run `npm test` for the core, workspace and local API checks; `npm run test:desktop` exercises real PTYs, both desktop views, launching, forking, worktrees and integration setup. Tests use isolated state and fake agent commands.
 
 ## What you get
 
@@ -92,8 +131,8 @@ flowchart LR
 | Claude Code | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Codex | ✓ | ✓ | ✓ | ✓ | |
 | Gemini CLI | ✓ | ✓ | ✓ (MCP) | | |
-| OpenCode | ✓ | | ✓ (MCP) | | |
-| Cursor Agent | ✓ | | ✓ (MCP) | | |
+| OpenCode | ✓ | ✓ | ✓ (MCP) | | |
+| Cursor Agent | ✓ | ✓ | ✓ (MCP) | | |
 | Amp | ✓ | | ✓ (MCP) | | |
 | Copilot CLI | ✓ | | ✓ (MCP) | | |
 | Superset CLI | ✓ | | ✓ (CLI) | | |
@@ -186,7 +225,7 @@ synapse send codex-api "Did the rate limiter land? I'm about to touch auth."
 synapse inbox                       # what other agents sent me
 synapse rename "auth refactor"     # rename yourself (or: synapse rename <agent> <name>)
 synapse rename-project synapse "Synapse canvas"   # rename a project frame
-synapse ui                          # start the canvas
+synapse ui                          # start the workspace
 ```
 
 The installer puts the launcher at `~/.synapse/bin/synapse` and adds a **`/synapse` skill** to Claude
@@ -213,9 +252,11 @@ Code and Codex, so you can just say *"connect to the codex agent and ask what it
 
 | | |
 |---|---|
-| `lib.mjs` | discovery, transcript parsers (Claude, Codex, Gemini), projects and colours, message store |
+| `lib.mjs` | discovery, transcript parsers, projects and colours, message store |
+| `app/` | desktop shell, PTYs, worktrees, fork stacks, phone access and updater |
 | `ops.mjs` | peers, link, unlink, read, send, inbox. Everything below calls these |
-| `server.mjs` + `public/` | the canvas: one HTML file, canvas 2D, live over SSE |
+| `server.mjs`, `discovery.mjs` + `public/` | desktop-style workspace and original canvas, live over SSE with background discovery |
+| `tokens.css` | shared workspace colors, type, spacing, and light/dark themes |
 | `hook.mjs` | `SessionStart` and `UserPromptSubmit` hook for Claude Code and Codex |
 | `mcp.mjs` | dependency-free stdio MCP server |
 | `cli.mjs`, `skill/` | the `synapse` CLI and the `/synapse` skill |
@@ -228,7 +269,7 @@ Code and Codex, so you can just say *"connect to the codex agent and ask what it
 
 Settings: `PORT`, `SYNAPSE_HOME` (state folder, default `~/.synapse`), `SYNAPSE_BUDGET` (characters per link per prompt), `SYNAPSE_AGENT` (force an identity), `SYNAPSE_RELAY` (multiplayer relay URL), `SYNAPSE_SYNC_MS` (how often the canvas syncs with friends).
 
-## Desktop app
+## Desktop packaging
 
 `npm install && npm run app:install` packages the checkout into `Synapse.app` (Apple Silicon), copies it to
 `/Applications` and opens it. Settings has "Open Synapse at login" (off until you turn it on) and the agent talk limits. That build is ad-hoc signed: it runs on the machine that built it, and on another
@@ -250,16 +291,17 @@ quick local build.
 
 ## Good to know
 
-- Messages are pulled, not pushed: an agent sees them with its next prompt or inbox check.
+- Context-sharing messages are pulled on the next prompt or inbox check. Desktop prompts are sent directly to the selected PTY.
 - Agents that are already running pick up the MCP server and hooks after a restart.
 - Plain `codex` asks you once to trust the new hook. Gemini only loads MCP servers in folders you have trusted.
 - Shared context is labelled as coming from peers, and agents are told not to treat it as instructions from you.
-- Everything stays on your machine until you add a friend. Without friends Synapse makes no network calls.
+- Local sessions and transcripts stay on your machine. Cloud sign-in, remote sharing, phone features, and update checks use network services when enabled.
 
 ## Roadmap
 
-- Push delivery, so an idle agent wakes up when a message arrives.
-- Readable transcripts for OpenCode, Amp and Copilot.
+- Native conversation forks for additional agent CLIs.
+- Readable transcripts for Amp and Copilot.
+- Broader desktop platform packaging.
 
 ## License
 

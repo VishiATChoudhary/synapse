@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en" data-theme="signal">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f6f5f3">
+  <title>Synapse · Your workspace</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='17' width='12' height='12' rx='3' fill='%232c2925'/%3E%3Crect x='17' y='3' width='12' height='12' rx='3' fill='%23ec642d'/%3E%3Cpath d='m13 19 6-6' stroke='%232c2925' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/workspace.css">
+  <script>
+    try {
+      const saved = localStorage.getItem('synapse-mode');
+      document.documentElement.dataset.theme = ['night', 'signal'].includes(saved) ? saved : matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'signal';
+    } catch {}
+  </script>
+  <script type="module" src="/workspace.mjs"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to workspace</a>
+  <div class="workspace" id="workspace" data-sidebar="open" data-inspector="closed">
+    <button class="sidebar-scrim" id="sidebar-scrim" aria-label="Close navigation" tabindex="-1"></button>
+    <aside class="sidebar" id="sidebar" aria-label="Workspace navigation">
+      <div class="brand-row">
+        <a href="/" class="brand" aria-label="Synapse home">
+          <svg class="brand-symbol" width="26" height="26" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="m13 19 6-6" stroke="currentColor" stroke-width="2"/><rect x="3" y="17" width="12" height="12" rx="3" fill="currentColor"/><rect x="17" y="3" width="12" height="12" rx="3" class="brand-accent"/></svg>
+          <span>Synapse</span>
+        </a>
+        <button class="icon-button sidebar-close" id="sidebar-close" aria-label="Close navigation"><span data-icon="panel-left"></span></button>
+      </div>
+      <nav class="primary-nav" aria-label="Workspace">
+        <button class="nav-item" id="connect-agent"><span data-icon="plus"></span><span>Connect an agent</span></button>
+        <button class="nav-item desktop-only" id="add-project"><span data-icon="folder"></span><span>Add project</span></button>
+        <button class="nav-item" id="open-search"><span data-icon="search"></span><span>Search sessions</span><kbd>⌘ K</kbd></button>
+        <button class="nav-item" data-view="overview"><span data-icon="grid"></span><span>Overview</span></button>
+        <button class="nav-item" data-view="connections"><span data-icon="network"></span><span>Connections</span><span class="nav-count" id="connection-count">0</span></button>
+      </nav>
+      <div class="projects-heading"><span>Projects</span><span class="count" id="project-count"></span></div>
+      <div class="project-list" id="project-list"><p class="sidebar-placeholder">Finding your sessions…</p></div>
+      <div class="sidebar-bottom">
+        <button class="nav-item desktop-only" id="desktop-activity"><span data-icon="grid"></span><span>Activity</span></button>
+        <button class="nav-item desktop-only" id="desktop-account"><span data-icon="monitor"></span><span>Account &amp; sharing</span></button>
+        <a href="/canvas" class="nav-item canvas-link"><span data-icon="canvas"></span><span>Open canvas</span><span data-icon="external" class="trailing-icon"></span></a>
+        <div class="local-workspace">
+          <span class="local-icon" data-icon="monitor"></span>
+          <div class="local-label"><strong>Local workspace</strong><span id="local-status">Connecting…</span></div>
+          <span class="connection-dot" id="connection-dot" aria-hidden="true"></span>
+        </div>
+        <div class="sidebar-footer"><span class="quiet-label">Made for working together</span><button class="icon-button" id="theme-toggle" aria-label="Switch color theme" title="Switch color theme"><span data-icon="sun"></span></button><button class="icon-button" id="help-button" aria-label="Help and keyboard shortcuts" title="Help and shortcuts"><span data-icon="help"></span></button></div>
+      </div>
+    </aside>
+    <main class="main" id="main" tabindex="-1">
+      <header class="topbar">
+        <button class="icon-button" id="sidebar-toggle" aria-label="Toggle navigation" aria-controls="sidebar" aria-expanded="true" title="Toggle navigation"><span data-icon="panel-left"></span></button>
+        <div class="breadcrumbs" id="breadcrumbs"><span>Your workspace</span></div>
+        <div class="topbar-actions" id="session-actions" hidden>
+          <span class="session-status" id="session-status"></span>
+          <button class="icon-button" id="rename-agent" aria-label="Rename session" title="Rename session"><span data-icon="edit"></span></button>
+          <button class="icon-button desktop-only" id="open-terminal" aria-label="Open session in Terminal mode" title="Open in Terminal mode"><span data-icon="monitor"></span></button>
+          <button class="icon-button desktop-only" id="fork-session" aria-label="Fork conversation" title="Fork conversation"><span data-icon="network"></span></button>
+          <button class="icon-button desktop-only" id="session-menu" aria-label="Session actions" title="Session actions"><span data-icon="chevron-down"></span></button>
+          <span class="toolbar-divider"></span>
+          <button class="icon-button" id="context-toggle" aria-label="Toggle session details" aria-controls="inspector" aria-expanded="false" title="Session details"><span data-icon="panel-right"></span></button>
+        </div>
+      </header>
+      <div class="connection-banner" id="connection-banner" role="status" hidden>Reconnecting to your local server. Your draft is saved in this browser.</div>
+      <div class="demo-banner" id="demo-banner" hidden><span class="demo-dot"></span><span>Demo workspace <span class="demo-description">· Sample agents and conversations</span></span><button id="demo-help" class="text-button">How it works <span data-icon="arrow-right"></span></button></div>
+      <div class="content-area">
+        <section class="thread-view" id="thread-view" aria-label="Session conversation" hidden>
+          <div class="thread-topline"><div class="thread-tabs" role="tablist" aria-label="Conversation type"><button id="conversation-tab" role="tab" aria-selected="true" aria-controls="thread-scroll" data-tab="conversation">Conversation</button><button id="messages-tab" role="tab" aria-selected="false" aria-controls="thread-scroll" data-tab="messages">Messages<span class="count" id="message-count">0</span></button></div><span class="provider-label" id="provider-label"></span></div>
+          <div class="thread-scroll" id="thread-scroll" tabindex="0" role="tabpanel" aria-labelledby="conversation-tab" aria-busy="true">
+            <div class="message-list" id="message-list"></div>
+          </div>
+          <div class="composer-region">
+            <button class="jump-button" id="jump-latest" hidden><span data-icon="arrow-down"></span>Jump to latest</button>
+            <form class="composer" id="composer">
+              <label class="sr-only" for="message-input">Message this agent</label>
+              <textarea id="message-input" rows="2" maxlength="12000" placeholder="Message your agent…" aria-describedby="delivery-note" required></textarea>
+              <div class="composer-toolbar"><span class="composer-channel"><span data-icon="network"></span>Via Synapse</span><span class="composer-shortcut">Enter to send</span><button class="send-button" id="send-message" type="submit" aria-label="Send message" title="Send message" disabled><span data-icon="arrow-up"></span></button></div>
+            </form>
+            <p class="delivery-note" id="delivery-note">Delivered on the agent’s next prompt or inbox check.</p>
+            <p class="form-error" id="send-error" role="alert" hidden></p>
+          </div>
+        </section>
+        <section class="overview-view page-view" id="overview-view" aria-labelledby="overview-title" hidden>
+          <div class="page-heading"><div><p class="page-kicker">A place for all your agents</p><h1 id="overview-title">Your workspace</h1><p class="page-description" id="overview-summary">Finding your sessions…</p></div><button class="button secondary" data-action="connect"><span data-icon="plus"></span>Connect agent</button></div>
+          <div class="overview-toolbar"><div class="segmented-control" aria-label="Filter sessions"><button data-filter="all" aria-pressed="true">All sessions <span id="all-count" class="count">0</span></button><button data-filter="busy" aria-pressed="false">Working <span id="busy-count" class="count">0</span></button><button data-filter="idle" aria-pressed="false">Idle</button></div><span class="live-label"><span class="connection-dot"></span>Live</span></div>
+          <div id="overview-list" class="overview-list"></div>
+        </section>
+        <section class="connections-view page-view" id="connections-view" aria-labelledby="connections-title" hidden>
+          <div class="page-heading"><div><p class="page-kicker">Context, shared</p><h1 id="connections-title">Connections</h1><p class="page-description">Give your agents the context they need from each other.</p></div><button class="button secondary" id="new-connection"><span data-icon="plus"></span>Add connection</button></div>
+          <div id="connections-list" class="connections-list"></div>
+        </section>
+        <aside class="inspector" id="inspector" aria-label="Session details" hidden></aside>
+      </div>
+    </main>
+  </div>
+  <dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
+    <h2 class="sr-only" id="search-title">Search sessions</h2>
+    <div class="search-input-row"><span data-icon="search"></span><input id="search-input" placeholder="Search agents, projects, or folders…" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="search-results" aria-autocomplete="list"><button class="key-button" id="close-search" aria-label="Close search">Esc</button></div>
+    <div class="search-results" id="search-results" role="listbox" aria-label="Sessions"></div>
+    <div class="search-footer"><span><kbd>↑</kbd><kbd>↓</kbd> to navigate</span><span><kbd>↵</kbd> to open</span><span id="search-count"></span></div>
+  </dialog>
+  <dialog class="action-dialog" id="action-dialog" aria-labelledby="dialog-title">
+    <form id="action-form">
+      <div class="dialog-heading"><h2 id="dialog-title"></h2><button type="button" class="icon-button" id="close-dialog" aria-label="Close dialog"><span data-icon="x"></span></button></div>
+      <div id="dialog-content"></div>
+      <p id="dialog-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-footer"><button class="button secondary" type="button" id="cancel-dialog">Cancel</button><button class="button primary" type="submit" id="dialog-submit">Save</button></div>
+    </form>
+  </dialog>
+  <div class="toast" id="toast" role="status" hidden><span id="toast-text"></span><button class="text-button" id="toast-action" hidden>Undo</button></div>
+  <noscript><p class="noscript">Enable JavaScript to view your local Synapse workspace.</p></noscript>
+</body>
+</html>

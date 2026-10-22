@@ -13,6 +13,7 @@ import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { DATA, readJSON, writeJSON } from '../lib.mjs';
 
 export const TTL = 15 * 60_000;
@@ -63,7 +64,8 @@ function savePids() { writeJSON(PIDS, [...shares.values()].map((s) => s.proc?.pi
 // tunnels a previous run left behind (a crash, a force quit): stop them before anything else
 export function sweep() {
   for (const pid of readJSON(PIDS, [])) {
-    try { if (/cloudflared/.test(execFileSync('/bin/ps', ['-p', String(Number(pid)), '-o', 'comm='], { encoding: 'utf8' }))) process.kill(Number(pid)); } catch {} // gone already, or reused by something else
+    const comm = process.platform === 'win32' ? ['tasklist', ['/FI', `PID eq ${Number(pid)}`, '/NH', '/FO', 'CSV']] : ['/bin/ps', ['-p', String(Number(pid)), '-o', 'comm=']];
+    try { if (/cloudflared/.test(execFileSync(comm[0], comm[1], { encoding: 'utf8', windowsHide: true }))) process.kill(Number(pid)); } catch {} // gone already, or reused by something else
   }
   writeJSON(PIDS, []);
 }
@@ -136,8 +138,9 @@ export async function share(target, { cwd, cloudflared = which('cloudflared'), r
 
 // the copy shipped inside the app first (Contents/Resources), then the one scripts/fetch-cloudflared.mjs put in
 // app/vendor when running from source, then one the user installed
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 function which(name) {
+  if (process.platform === 'win32') name += '.exe';
   const shipped = [process.resourcesPath && path.join(process.resourcesPath, name), path.join(HERE, 'vendor', name)];
   return [process.env.SYNAPSE_CLOUDFLARED, ...shipped, ...['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'].map((d) => path.join(d, name))].find((p) => p && fs.existsSync(p)) || null;
 }

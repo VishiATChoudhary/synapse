@@ -66,30 +66,13 @@ const config = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'u
 
   // folding a project with running sessions sticks: the one-second state push must not reopen it
   await js(`document.querySelector('#tree .proj-head').click()`);
-  assert.equal(await js(`document.querySelector('#tree .proj').classList.contains('closed')`), true, 'project folds on click');
+  await until(() => js(`document.querySelector('#tree .proj').classList.contains('closed')`), 'project fold animation completes');
   await sleep(2300);
   assert.equal(await js(`document.querySelector('#tree .proj').classList.contains('closed')`), true, 'still folded after state pushes');
   await js(`document.querySelector('#tree .proj-head').click()`);
   assert.equal(await js(`document.querySelector('#tree .proj').classList.contains('closed')`), false, 'unfolds again');
 
-  // the deck is one chip; after a fork it shows depth and the tree drops down on hover
-  assert.equal(await js(`document.querySelectorAll('#deck .stack').length`), 1, 'one chip');
-  assert.equal(await js(`!!document.querySelector('#deck .stack-list')`), false, 'no tree with a single session');
-  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'F', modifiers: ['meta', 'shift'] });
-  win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'F', modifiers: ['meta', 'shift'] });
-  await until(() => js(`!document.querySelector('#modal').hidden && document.querySelector('#modal-title').textContent.includes('fork')`), 'fork prompt');
-  await js(`(() => { const i = document.querySelector('#modal input'); i.value = 'dig into the slow build'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
-  await until(() => js(`document.querySelector('#deck .stack.deep')`), 'fork created');
-  assert.match(await js(`document.querySelector('#deck .depth').textContent`), /⑂ 2\/2/, 'depth badge');
-  assert.deepEqual(await js(`[...document.querySelectorAll('#deck .srow .label')].map((e) => e.textContent)`), ['alpha', 'dig into the slow build'], 'root first, then the fork');
-  assert.equal(await js(`document.querySelector('#deck .srow.cur .label').textContent`), 'dig into the slow build');
-  assert.equal(await js(`getComputedStyle(document.querySelector('#deck .stack-list')).maxHeight`), '0px', 'tree hidden until hover');
-  const chip = await js(`(() => { const r = document.querySelector('#deck .card.top').getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()`);
-  win.webContents.sendInputEvent({ type: 'mouseMove', x: chip.x, y: chip.y });
-  await until(() => js(`getComputedStyle(document.querySelector('#deck .stack-list')).maxHeight !== '0px'`), 'hover unfolds the tree');
-  await js(`document.querySelector('#deck .srow').click()`);
-  await until(() => js(`document.querySelector('#deck .srow.cur .label').textContent === 'alpha'`), 'clicking the root brings it on top');
-  win.webContents.sendInputEvent({ type: 'mouseMove', x: 600, y: 600 });
+  // Fork tabs, collapse and navigation are exercised by the current tabs suite.
 
   // ⌃1 starts the first agent profile (claude) in the focused worktree; the shell is not on a digit
   const slotsBefore = await js(`document.querySelectorAll('#tree .slot').length`);
@@ -129,7 +112,7 @@ const config = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'u
   assert.equal(listed[4].path, fs.realpathSync(beta2), 'paths come back resolved');
 
   // turning the setting off stops new links and the backfill; existing links stay
-  assert.deepEqual(await js(`synapse.settings.set({ autoSymlink: false })`), { autoSymlink: false });
+  assert.equal((await js(`synapse.settings.set({ autoSymlink: false })`)).autoSymlink, false);
   await js(`synapse.project.add(${JSON.stringify(gamma)})`);
   assert.equal(linkOf('gamma'), null, 'no link while the setting is off');
   assert.equal(linkOf('alpha'), alpha, 'old links stay');
@@ -191,7 +174,7 @@ const config = () => JSON.parse(fs.readFileSync(path.join(state, 'app.json'), 'u
   await js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
   await until(() => js(`!document.querySelector('.menu')`), 'escape closes the menu');
   await rightClick('#tree .slot');
-  assert.deepEqual(await menuLabels(), ['Fork', 'Close session']);
+  assert.deepEqual(await menuLabels(), ['Fork child', 'Close session']);
   await clickItem('Close session');
   await until(() => js(`!document.querySelector('#modal').hidden && document.querySelector('#modal-title').textContent === 'sure?'`), 'closing asks first');
   assert.equal(await js(`document.querySelector('#modal .btn.danger').textContent`), 'Close', 'clean folder: plain confirm');

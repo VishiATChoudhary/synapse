@@ -76,7 +76,7 @@ function ask(question, { hidden = false } = {}) {
 async function deviceLogin() {
   const d = await account.deviceStart();
   console.error(`Open ${d.url} and approve this Mac (code ${d.userCode}).`);
-  try { (await import('node:child_process')).execFile('open', [d.url], () => {}); } catch {}
+  try { (await import('node:child_process')).execFile(process.platform === 'win32' ? 'explorer.exe' : 'open', [d.url], () => {}); } catch {}
   const end = Date.now() + d.expiresIn * 1000;
   while (Date.now() < end) {
     await new Promise((r) => setTimeout(r, (d.interval || 2) * 1000));
