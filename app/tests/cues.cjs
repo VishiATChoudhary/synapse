@@ -54,6 +54,7 @@ const heard = () => js(`window.__tones.splice(0)`);
   assert.ok(fs.existsSync(path.join(home, '.codex', 'skills', 'synapse')), 'and for Codex');
   assert.match(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'), /hook\.mjs/, 'the Claude hook');
   assert.match(fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8'), /\[mcp_servers\.synapse\]/, 'the Codex MCP server');
+  for (const absent of ['.cursor', '.gemini', '.copilot', '.config']) assert.ok(!fs.existsSync(path.join(home, absent)), `nothing written for a tool that is not installed (${absent})`);
   await until(() => fs.existsSync(calls) && /mcp add -s user synapse/.test(fs.readFileSync(calls, 'utf8')), 'claude mcp add');
   await until(() => JSON.parse(fs.readFileSync(path.join(state, 'seen.json'), 'utf8')).setup, 'setup remembered for this version');
   await until(() => js(`window.__toasts.some((t) => /set up in your agents/.test(t))`), 'the app says it set up');

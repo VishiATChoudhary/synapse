@@ -51,6 +51,14 @@ function editJSON(label, file, mutate) {
 }
 
 const stdio = { command: NODE, args: [MCP] };
+// Only tools that are on this machine (their config folder exists): no ~/.cursor for someone without Cursor.
+// Install one later, and the next setup (Settings, or the app's own after an update) wires it in.
+const CODEX = process.env.CODEX_HOME || path.join(HOME, '.codex');
+function installed(label, dir) {
+  if (fs.existsSync(dir)) return true;
+  report.push(`skip  ${label}: not installed (${dir} is missing)`);
+  return false;
+}
 
 // Claude Code: MCP server (user scope), prompt hook, skill
 // (via the CLI: ~/.claude.json is rewritten constantly by running sessions)
@@ -80,11 +88,11 @@ function addHooks(d, events) {
     }
   }
 }
-editJSON('claude hooks', path.join(HOME, '.claude', 'settings.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart']));
-editJSON('codex hooks', path.join(process.env.CODEX_HOME || path.join(HOME, '.codex'), 'hooks.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart']));
+if (installed('claude hooks', path.join(HOME, '.claude'))) editJSON('claude hooks', path.join(HOME, '.claude', 'settings.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart']));
+if (installed('codex hooks', CODEX)) editJSON('codex hooks', path.join(CODEX, 'hooks.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart']));
 
 // Codex: TOML, append a table if missing
-{
+if (installed('codex mcp', CODEX)) {
   const file = path.join(process.env.CODEX_HOME || path.join(HOME, '.codex'), 'config.toml');
   const toml = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   if (/^\[mcp_servers\.synapse\]/m.test(toml)) report.push('ok    codex mcp: already configured');
@@ -98,13 +106,13 @@ editJSON('codex hooks', path.join(process.env.CODEX_HOME || path.join(HOME, '.co
   }
 }
 
-editJSON('gemini mcp', path.join(HOME, '.gemini', 'settings.json'), (d) => { (d.mcpServers ||= {}).synapse = stdio; });
-editJSON('cursor mcp', path.join(HOME, '.cursor', 'mcp.json'), (d) => { (d.mcpServers ||= {}).synapse = stdio; });
-editJSON('copilot mcp', path.join(HOME, '.copilot', 'mcp-config.json'), (d) => {
+if (installed('gemini mcp', path.join(HOME, '.gemini'))) editJSON('gemini mcp', path.join(HOME, '.gemini', 'settings.json'), (d) => { (d.mcpServers ||= {}).synapse = stdio; });
+if (installed('cursor mcp', path.join(HOME, '.cursor'))) editJSON('cursor mcp', path.join(HOME, '.cursor', 'mcp.json'), (d) => { (d.mcpServers ||= {}).synapse = stdio; });
+if (installed('copilot mcp', path.join(HOME, '.copilot'))) editJSON('copilot mcp', path.join(HOME, '.copilot', 'mcp-config.json'), (d) => {
   (d.mcpServers ||= {}).synapse = { type: 'local', ...stdio, tools: ['*'] };
 });
-editJSON('amp mcp', path.join(HOME, '.config', 'amp', 'settings.json'), (d) => { (d['amp.mcpServers'] ||= {}).synapse = stdio; });
-editJSON('opencode mcp', path.join(HOME, '.config', 'opencode', 'opencode.json'), (d) => {
+if (installed('amp mcp', path.join(HOME, '.config', 'amp'))) editJSON('amp mcp', path.join(HOME, '.config', 'amp', 'settings.json'), (d) => { (d['amp.mcpServers'] ||= {}).synapse = stdio; });
+if (installed('opencode mcp', path.join(HOME, '.config', 'opencode'))) editJSON('opencode mcp', path.join(HOME, '.config', 'opencode', 'opencode.json'), (d) => {
   (d.mcp ||= {}).synapse = { type: 'local', command: [NODE, MCP], enabled: true };
 });
 
