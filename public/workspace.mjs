@@ -30,6 +30,11 @@ export function renderMarkdown(value) {
       try { safe = ['https:', 'http:'].includes(new URL(url).protocol); } catch {}
       return keep(safe ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>` : `<span title="${escapeHtml(url)}">${escapeHtml(label)}</span>`);
     });
+    // bare web addresses link too; a trailing full stop or bracket belongs to the sentence
+    result = result.replace(/\bhttps?:\/\/[^\s<>"'`\]\u0001]+/g, (raw) => {
+      const url = raw.replace(/[.,;:!?)]+$/, '');
+      return keep(`<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`) + raw.slice(url.length);
+    });
     return escapeHtml(result)
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|[^\w*])\*(?!\s)(.+?)\*(?!\w)/g, '$1<em>$2</em>')
@@ -66,6 +71,52 @@ export function renderMarkdown(value) {
   }
   endParagraph(); endList();
   return output.join('').replace(/\u0000(\d+)\u0000/g, (_, index) => blocks[index]);
+}
+
+// Paths an agent mentions ("lib.mjs:12", "app/main.mjs", "~/notes.md"). Only candidates: the server confirms
+// which exist, so version numbers and domains that merely look like paths stay plain text.
+const FILE_RE = /(?<![\w/.:@-])~?\/?[\w.@+-]+(?:\/[\w.@+-]+)*\/?(?::\d+(?:[-:]\d+)?|#L\d+(?:-L?\d+)?)?/g;
+export function filePaths(text) {
+  return [...String(text ?? '').matchAll(FILE_RE)].map((m) => ({ index: m.index, path: m[0].replace(/[.,;:)]+$/, '') }))
+    .filter(({ path }) => path.length > 2 && (path.includes('/') || /\.[A-Za-z]\w{0,7}(?::\d|#L|$)/.test(path)) && !/^\/+$/.test(path) && !/^\d+(\.\d+)+$/.test(path));
+}
+
+// "@handle" for each of your agents: its name made mention-safe, numbered when names repeat ("claude", "claude-2").
+// Friends keep their own handles, so an agent never takes one.
+export function agentHandles(agents, taken = []) {
+  const used = new Set(taken.map((h) => h.toLowerCase())), out = new Map();
+  for (const agent of agents) {
+    let base = String(agent.name || agent.kind || 'agent').replace(/[^\w-]+/g, '-').replace(/^[-_]+/, '').slice(0, 20).replace(/[-_]+$/, '') || 'agent';
+    if (base.length < 2) base += '-agent';
+    let handle = base, n = 2;
+    while (used.has(handle.toLowerCase())) handle = `${base}-${n++}`;
+    used.add(handle.toLowerCase()); out.set(handle, agent);
+  }
+  return out;
+}
+
+// What @ suggests: friends first, then agents in this project, and once you type, agents anywhere else
+export function mentionOptions({ friends = [], agents = new Map(), project = '', query = '' }) {
+  const q = query.toLowerCase(), starts = (...values) => !q || values.some((v) => String(v || '').toLowerCase().startsWith(q));
+  const contains = (...values) => values.some((v) => String(v || '').toLowerCase().includes(q));
+  const friendHits = friends.filter((p) => starts(p.handle, p.name)).map((p) => ({ type: 'friend', handle: p.handle, friend: p }));
+  const here = [], elsewhere = [];
+  for (const [handle, agent] of agents) {
+    const local = !!project && agent.projectKey === project;
+    if (local && (starts(handle, agent.name) || (q && contains(handle, agent.name)))) here.push({ type: 'agent', handle, agent, local });
+    else if (!local && q && contains(handle, agent.name, agent.project)) elsewhere.push({ type: 'agent', handle, agent, local });
+  }
+  const recent = (a, b) => (b.agent.lastActivity || 0) - (a.agent.lastActivity || 0);
+  return [...friendHits.slice(0, 4), ...here.sort(recent).slice(0, 5), ...elsewhere.sort(recent).slice(0, 5)];
+}
+
+// Your earlier prompts to an agent, oldest first: what Up in the composer steps back through
+export function promptHistory(data) {
+  const sent = [...(data?.messages || []).filter((m) => m.role === 'user').map((m) => ({ text: m.text, time: Date.parse(m.ts) || 0 })),
+    ...(data?.chat || []).filter((m) => m.from === 'synapse-user').map((m) => ({ text: m.text, time: m.t || 0 }))];
+  const out = [];
+  for (const { text } of sent.sort((a, b) => a.time - b.time)) { const t = String(text || '').trim(); if (t && out.at(-1) !== t) out.push(t); }
+  return out;
 }
 
 function wordScore(word, value) {
@@ -352,6 +403,7 @@ function initialize() {
 
   function syncInspector() {
     const visible = inspectorOpen && view === 'session' && !!byId.get(selectedId);
+    if (!visible) inspectorFile = null;
     $('inspector').hidden = !visible;
     $('workspace').dataset.inspector = visible ? 'open' : 'closed';
     $('context-toggle').setAttribute('aria-expanded', String(visible));
@@ -744,8 +796,100 @@ function initialize() {
     return [...peers.values()];
   }
 
+  // Paths in a reply become links once the server confirms them; they open in the right-hand pane
+  const fileSeen = new Map(); // cwd + path -> exists
+  async function linkFiles(elements, cwd) {
+    const nodes = [];
+    for (const element of elements) {
+      const walk = document.createTreeWalker(element.querySelector('.message-body') || element, NodeFilter.SHOW_TEXT,
+        { acceptNode: (n) => n.parentElement.closest('a, pre, .file-link, .slash-cmd, .mention') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+      while (walk.nextNode()) nodes.push(walk.currentNode);
+    }
+    const hits = nodes.map((n) => filePaths(n.data));
+    const unknown = [...new Set(hits.flat().map((h) => h.path))].filter((t) => !fileSeen.has(cwd + '\0' + t));
+    if (unknown.length) {
+      const found = await api('/api/files/exists', { method: 'POST', body: JSON.stringify({ cwd, paths: unknown }) }).catch(() => null);
+      if (!found) return;
+      for (const t of unknown) fileSeen.set(cwd + '\0' + t, !!found[t]);
+    }
+    nodes.forEach((n, k) => {
+      const ms = hits[k].filter((h) => fileSeen.get(cwd + '\0' + h.path));
+      if (!ms.length || !n.isConnected) return;
+      const frag = document.createDocumentFragment();
+      let at = 0;
+      for (const m of ms) {
+        frag.append(n.data.slice(at, m.index));
+        const link = document.createElement('button');
+        link.type = 'button'; link.className = 'file-link'; link.dataset.file = m.path; link.dataset.cwd = cwd || ''; link.textContent = m.path; link.title = `Open ${m.path}`;
+        frag.append(link); at = m.index + m.path.length;
+      }
+      frag.append(n.data.slice(at));
+      n.replaceWith(frag);
+    });
+  }
+
+  let inspectorFile = null, fileRequest = 0; // { agent, path, cwd, mode, stack }
+  const fileSize = (b) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
+  function openFile(path, cwd, { back = false } = {}) {
+    if (!byId.get(selectedId)) return;
+    const stack = back ? inspectorFile.stack : [...(inspectorFile?.agent === selectedId ? inspectorFile.stack : []), { path, cwd }];
+    inspectorFile = { agent: selectedId, path, cwd, mode: null, stack };
+    inspectorOpen = true; syncInspector();
+  }
+  async function renderFile() {
+    const pane = $('inspector'), file = inspectorFile, request = ++fileRequest;
+    pane.classList.add('file-mode');
+    const lineMatch = String(file.path).match(/(?::(\d+)(?:-(\d+))?(?::\d+)?|#L(\d+)(?:-L?(\d+))?)$/);
+    const from = lineMatch ? +(lineMatch[1] || lineMatch[3]) : 0, to = lineMatch ? +(lineMatch[2] || lineMatch[4] || from) : 0;
+    let f;
+    try { f = await api(`/api/file?${new URLSearchParams({ path: file.path, cwd: file.cwd || '' })}`); }
+    catch (error) { f = { error: error.message }; }
+    if (request !== fileRequest || inspectorFile !== file) return;
+    const head = (title, sub, tools = '') => `<div class="inspector-heading file-heading">${file.stack.length > 1 ? `<button class="icon-button" data-file-act="back" aria-label="Back" title="Back">${icon('arrow-left')}</button>` : ''}<div class="file-title"><h2>${escapeHtml(title)}</h2>${sub ? `<span>${escapeHtml(sub)}</span>` : ''}</div><button class="text-button" data-file-act="details">Details</button><button class="icon-button" data-action="close-inspector" aria-label="Close file" title="Close">${icon('x')}</button></div>${tools}`;
+    if (f.error) { pane.innerHTML = head(file.path.split('/').pop(), file.path) + `<p class="inspector-note">Synapse can't open this file: ${escapeHtml(f.error)}</p>`; return; }
+    const raw = `/api/file/raw?${new URLSearchParams({ path: f.path })}`;
+    const isMd = f.type === 'text' && /^(md|markdown|mdx)$/.test(f.ext);
+    const mode = file.mode || (isMd && !from ? 'rendered' : 'source');
+    const lines = f.type === 'text' ? f.text.split('\n') : [];
+    const facts = [f.type === 'dir' ? `${f.entries.length} items` : f.type === 'text' ? `${lines.length} lines` : f.ext || f.type, f.type !== 'dir' && fileSize(f.size), `edited ${relativeTime(f.mtime)} ago`, f.truncated && 'first 1 MB'].filter(Boolean);
+    const tools = `<div class="file-tools"><span>${facts.map(escapeHtml).join(' · ')}</span>${isMd ? `<button class="text-button" data-file-act="mode">${mode === 'rendered' ? 'Source' : 'Preview'}</button>` : ''}<button class="text-button" data-file-act="open">Open</button><button class="text-button" data-file-act="reveal">Show in Finder</button><button class="text-button" data-file-act="copy">Copy path</button></div>`;
+    let body;
+    if (f.type === 'dir') body = `<div class="file-dir">${f.entries.map((e) => `<button type="button" class="file-link" data-file="${escapeHtml(`${f.path}/${e.name}`)}">${escapeHtml(e.name)}${e.dir ? '/' : ''}</button>`).join('') || '<p class="inspector-note">Empty folder.</p>'}</div>`;
+    else if (f.type === 'image') body = `<div class="file-media"><img src="${raw}" alt="${escapeHtml(f.name)}"></div>`;
+    else if (f.type === 'video' || f.type === 'audio') body = `<div class="file-media"><${f.type} src="${raw}" controls></${f.type}></div>`;
+    else if (f.type === 'pdf') body = `<iframe class="file-pdf" src="${raw}" title="${escapeHtml(f.name)}"></iframe>`;
+    else if (f.type === 'binary') body = `<p class="inspector-note">Binary file. Open it in its own app instead.</p>`;
+    else if (mode === 'rendered') body = `<div class="file-md md">${renderMarkdown(f.text)}</div>`;
+    else body = `<div class="file-source">${lines.slice(0, 20000).map((l, i) => `<div class="file-line${i + 1 >= from && i + 1 <= to ? ' hit' : ''}"><span>${i + 1}</span><code>${escapeHtml(l) || ' '}</code></div>`).join('')}</div>`;
+    const dir = f.type === 'dir' ? f.path : f.path.replace(/\/[^/]*$/, '');
+    const root = (file.cwd || '').replace(/\/+$/, ''), inside = root && (dir === root || dir.startsWith(`${root}/`));
+    pane.innerHTML = head(f.name + (f.type === 'dir' ? '/' : ''), inside ? `${root.split('/').pop()}${dir.slice(root.length)}/` : dir.replace(/^\/Users\/[^/]+/, '~'), tools) + body;
+    pane.dataset.filePath = f.path;
+    const hit = pane.querySelector('.file-line.hit');
+    if (hit) hit.scrollIntoView({ block: 'center' });
+    else pane.scrollTop = 0;
+  }
+  document.addEventListener('click', (event) => {
+    const link = event.target.closest('[data-file]');
+    if (link) { event.preventDefault(); openFile(link.dataset.file, link.dataset.cwd || inspectorFile?.cwd || byId.get(selectedId)?.cwd); return; }
+    const act = event.target.closest('[data-file-act]')?.dataset.fileAct;
+    if (!act || !inspectorFile) return;
+    const path = $('inspector').dataset.filePath;
+    if (act === 'details') { inspectorFile = null; syncInspector(); }
+    else if (act === 'back') { inspectorFile.stack.pop(); const prev = inspectorFile.stack.at(-1); openFile(prev.path, prev.cwd, { back: true }); }
+    else if (act === 'mode') { inspectorFile.mode = event.target.textContent === 'Source' ? 'source' : 'rendered'; renderInspector(); }
+    else if (act === 'copy') navigator.clipboard.writeText(path).then(() => toast('Path copied.'), () => toast(path));
+    else if (path) api('/api/file/open', { method: 'POST', body: JSON.stringify({ path, reveal: act === 'reveal' }) }).catch((error) => toast(error.message));
+  });
+
   function renderInspector() {
     const agent = byId.get(selectedId); if (!agent) return;
+    if (inspectorFile?.agent === selectedId) {
+      const key = `file:${JSON.stringify([inspectorFile.path, inspectorFile.mode, inspectorFile.stack.length])}`;
+      if (key !== inspectorSignature) { inspectorSignature = key; renderFile(); }
+      return;
+    }
+    inspectorFile = null; $('inspector').classList.remove('file-mode'); delete $('inspector').dataset.filePath;
     const peers = relations(agent.id), chat = recentCache.get(agent.id)?.data.chat || [];
     const signature = JSON.stringify([agent.id, agent.name, agent.status, agent.lastActivity, peers, chat.slice(-3), Math.floor(Date.now() / 60000)]);
     if (signature === inspectorSignature) return;
@@ -853,6 +997,7 @@ function initialize() {
     if (tab === 'conversation' && data.hasMore && limit < 200) {
       const load = document.createElement('button'); load.className = 'text-button'; load.dataset.action = 'load-older'; load.textContent = 'Load earlier messages'; desired.push(load);
     }
+    const fresh = [];
     for (const message of records) {
       const user = message.role === 'user' || message.human, tool = message.tool;
       const messageSignature = `${message.key}:${message.delivered}:${agent.name}`;
@@ -860,6 +1005,7 @@ function initialize() {
       if (!element) { element = document.createElement(tool ? 'details' : 'article'); element.dataset.messageKey = message.key; }
       if (element.dataset.signature !== messageSignature) {
         element.dataset.signature = messageSignature;
+        if (!tool) fresh.push(element);
         const time = message.time ? new Date(message.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
         if (tool) {
           element.className = 'tool-message';
@@ -874,6 +1020,7 @@ function initialize() {
       desired.push(element);
     }
     syncChildren(list, desired);
+    if (fresh.length) linkFiles(fresh, agent.cwd);
     if (reset || nearBottom) { scroller.scrollTop = scroller.scrollHeight; $('jump-latest').hidden = true; }
     else { scroller.scrollTop = previousTop; $('jump-latest').hidden = false; }
   }
@@ -881,7 +1028,7 @@ function initialize() {
   async function loadRecent(force = false) {
     const agent = byId.get(selectedId); if (view !== 'session' || !agent || (!paneKey && paneFrames.size && !$('split-view').hidden)) return;
     const cached = recentCache.get(agent.id), revision = state.messageRevision, activity = agent.lastActivity;
-    if (!force && cached?.activity === activity && cached?.revision === revision && cached?.limit === limit) return;
+    if (!force && cached?.activity === activity && cached?.revision === revision && cached?.limit === limit && cached?.backend === agent.backendId) return; // a new session's transcript is found after it starts
     if (recentTarget === agent.id) { recentDirty = true; return; }
     recentController?.abort(); recentController = new AbortController();
     const request = ++recentRequest, id = agent.id, requestedLimit = limit;
@@ -891,7 +1038,7 @@ function initialize() {
         ? await desktopCall('output', { id })
         : await api(`/api/agents/${encodeURIComponent(agent.backendId || id)}/recent?limit=${requestedLimit}`, { signal: recentController.signal });
       if (agent.owned && !data.messages?.length && !data.chat?.length) Object.assign(data, await desktopCall('output', { id }));
-      recentCache.delete(id); recentCache.set(id, { data, activity, revision, limit: requestedLimit });
+      recentCache.delete(id); recentCache.set(id, { data, activity, revision, limit: requestedLimit, backend: agent.backendId });
       if (paneKey) parent.postMessage({ type: 'synapse:pane-recent', id, cached: recentCache.get(id) }, location.origin);
       if (recentCache.size > 30) recentCache.delete(recentCache.keys().next().value);
       if (request === recentRequest && selectedId === id && view === 'session') { renderTimeline(); renderInspector(); }
@@ -930,7 +1077,12 @@ function initialize() {
     if (!text) return;
     sending = true; updateComposer(); $('send-error').hidden = true;
     try {
-      const agent = byId.get(id);
+      const agent = byId.get(id), tagged = [...taggedAgents(text).values()].filter((a) => (!a.owned || a.backendId) && (!agent.owned || agent.backendId)); // a session Synapse has not matched to its agent yet can't be linked
+      if (tagged.length) {
+        const linked = new Set(relations(id).filter((p) => p.reads && p.shares).map((p) => p.agent.id));
+        for (const other of tagged.filter((a) => !linked.has(a.id))) { await createEdge(other.id, id); await createEdge(id, other.id); }
+        if (tagged.some((a) => !linked.has(a.id))) await reloadState();
+      }
       if (agent.owned) await desktopCall('submit', { id, text });
       else await api(`/api/agents/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
       if (selectedId === id && $('message-input').value === original) { $('message-input').value = ''; drafts[id] = ''; persistDraft(); resizeComposer(); }
@@ -1173,6 +1325,8 @@ function initialize() {
     friendsAt = Date.now();
     try { await loadFriends(); } catch { friendsAt = 0; }
   }
+  // your other live agents, by @handle; friends' handles come first so they never clash
+  const myAgents = () => agentHandles(state.agents.filter((a) => a.id !== selectedId && a.status !== 'exited' && a.kind !== 'shell').sort((a, b) => String(a.id).localeCompare(String(b.id))), knownFriends().map((p) => p.handle));
   const projectOf = (agent) => agent?.project || (agent?.cwd || '').split('/').filter(Boolean).pop() || '';
   // which of their agents already reach this one, and whether one of theirs works on this project
   function friendContext(p) {
@@ -1185,8 +1339,8 @@ function initialize() {
     const text = $('message-input').value, slash = slashCommand(text);
     let html = escapeHtml(text);
     if (slash) { const at = text.indexOf(slash.command); html = escapeHtml(text.slice(0, at)) + `<mark class="slash">${escapeHtml(slash.command)}</mark>` + escapeHtml(text.slice(at + slash.command.length)); }
-    const handles = new Set(knownFriends().map((p) => p.handle.toLowerCase()));
-    mirror.innerHTML = html.replace(MENTION, (all, pre, h) => handles.has(h.toLowerCase()) ? `${pre}<mark class="mention">@${h}</mark>` : all) + '\n';
+    const handles = new Set(knownFriends().map((p) => p.handle.toLowerCase())), mine = new Set([...myAgents().keys()].map((h) => h.toLowerCase()));
+    mirror.innerHTML = html.replace(MENTION, (all, pre, h) => handles.has(h.toLowerCase()) ? `${pre}<mark class="mention">@${h}</mark>` : mine.has(h.toLowerCase()) ? `${pre}<mark class="mention agent">@${h}</mark>` : all) + '\n';
     const input = $('message-input'), style = getComputedStyle(input);
     Object.assign(mirror.style, { top: `${input.offsetTop}px`, left: `${input.offsetLeft}px`, width: `${input.clientWidth}px`, height: `${input.clientHeight}px`, font: style.font, letterSpacing: style.letterSpacing, padding: style.padding });
     mirror.scrollTop = input.scrollTop;
@@ -1195,8 +1349,21 @@ function initialize() {
     const channel = $('composer').querySelector('.composer-channel');
     if (channel) channel.innerHTML = slash ? `<span class="slash-cmd">${escapeHtml(slash.command)}</span>${agent?.owned ? `Runs as a ${escapeHtml(kindName(agent))} command` : 'Sent as text: commands run in sessions opened in Synapse'}` : `${icon('network')}Via Synapse`;
   }
+  // the agents of yours tagged in a message; sending connects each of them with this agent both ways
+  function taggedAgents(text) {
+    const mine = myAgents(), out = new Map();
+    for (const m of String(text).matchAll(MENTION)) {
+      const hit = [...mine].find(([h]) => h.toLowerCase() === m[2].toLowerCase());
+      if (hit) out.set(hit[0], hit[1]);
+    }
+    return out;
+  }
   function paintMentionBar() {
     const text = $('message-input').value, seen = new Set(), rows = [];
+    const peers = new Set(relations(selectedId).filter((p) => p.reads && p.shares).map((p) => p.agent.id));
+    for (const [handle, agent] of taggedAgents(text)) {
+      rows.push(`<div class="mention-row"><span class="mention agent">@${escapeHtml(handle)}</span><span class="mention-text">${peers.has(agent.id) ? `<strong>${escapeHtml(agent.name)}</strong> is connected: this agent can read its work and message it.` : `Sending connects <strong>${escapeHtml(agent.name)}</strong>${agent.project ? ` (${escapeHtml(agent.project)})` : ''} with this agent, so they can read each other's work and message.`}</span></div>`);
+    }
     for (const m of text.matchAll(MENTION)) {
       const p = knownFriends().find((x) => x.handle.toLowerCase() === m[2].toLowerCase());
       if (!p || seen.has(p.handle)) continue;
@@ -1213,16 +1380,24 @@ function initialize() {
   }
   function paintMentionPop() {
     const hit = mentionQuery();
-    if (!hit || !friends?.signedIn) { mentionBox.hidden = true; mentionAt = -1; return; }
+    if (!hit) { mentionBox.hidden = true; mentionAt = -1; return; }
     mentionAt = hit.at;
     const rank = (p) => { const c = friendContext(p); return c.here ? 0 : c.related ? 1 : 2; };
-    mentionHits = knownFriends().filter((p) => !hit.q || p.handle.toLowerCase().startsWith(hit.q) || p.name.toLowerCase().startsWith(hit.q)).sort((a, b) => rank(a) - rank(b)).slice(0, 6);
+    const self = byId.get(selectedId);
+    mentionHits = mentionOptions({ friends: [...knownFriends()].sort((a, b) => rank(a) - rank(b)), agents: myAgents(), project: self?.projectKey, query: hit.q });
     if (!mentionHits.length) { mentionBox.hidden = true; return; }
     mentionIndex = Math.min(mentionIndex, mentionHits.length - 1);
-    mentionBox.innerHTML = `<p class="mention-head">Tag a friend to ask for one of their agents</p>` + mentionHits.map((p, i) => {
-      const c = friendContext(p);
-      return `<button type="button" class="mention-option" role="option" aria-selected="${i === mentionIndex}" data-mention-pick="${escapeHtml(p.handle)}"><strong>${escapeHtml(p.name)}</strong><span>@${escapeHtml(p.handle)}</span><small>${c.here ? `shares ${escapeHtml(c.here.agent?.name || 'an agent')} here` : c.related ? `has ${escapeHtml(c.related.agent.name)}` : c.project ? `ask for an agent on ${escapeHtml(c.project)}` : 'ask for an agent'}</small></button>`;
-    }).join('');
+    const heads = { friend: 'Friends', here: 'Agents in this project', elsewhere: 'Other agents' };
+    let last = '';
+    mentionBox.innerHTML = mentionHits.map((o, i) => {
+      const group = o.type === 'friend' ? 'friend' : o.local ? 'here' : 'elsewhere';
+      const head = group !== last ? `<p class="mention-head">${heads[group]}</p>` : '';
+      last = group;
+      const option = (name, extra) => `${head}<button type="button" class="mention-option" role="option" aria-selected="${i === mentionIndex}" data-mention-pick="${escapeHtml(o.handle)}"><strong>${escapeHtml(name)}</strong><span>@${escapeHtml(o.handle)}</span><small>${extra}</small></button>`;
+      if (o.type === 'agent') return option(o.agent.name, `${escapeHtml(kindName(o.agent))}${o.local ? '' : ` · ${escapeHtml(o.agent.project || '')}`} · ${activityLabel(o.agent).toLowerCase()}`);
+      const c = friendContext(o.friend);
+      return option(o.friend.name, c.here ? `shares ${escapeHtml(c.here.agent?.name || 'an agent')} here` : c.related ? `has ${escapeHtml(c.related.agent.name)}` : c.project ? `ask for an agent on ${escapeHtml(c.project)}` : 'ask for an agent');
+    }).join('') + (hit.q ? '' : '<p class="mention-foot">Type a name to search all your agents</p>');
     mentionBox.hidden = false;
   }
   function pickMention(handle) {
@@ -1261,6 +1436,31 @@ function initialize() {
     else if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); mentionBox.hidden = true; }
   });
 
+  // Up on the first line brings back your last prompt, again for the one before; Down returns to what you had typed
+  let recall = null; // { agent, index, draft }
+  $('message-input').addEventListener('keydown', (event) => {
+    if ((event.key !== 'ArrowUp' && event.key !== 'ArrowDown') || event.shiftKey || event.altKey || event.metaKey || event.ctrlKey || event.isComposing) return;
+    const input = $('message-input'), caret = input.selectionStart;
+    if (recall && (recall.agent !== selectedId || input.value !== recall.shown)) recall = null;
+    const up = event.key === 'ArrowUp';
+    if (up ? input.value.slice(0, caret).includes('\n') : input.value.slice(input.selectionEnd).includes('\n')) return;
+    if (!up && !recall) return;
+    if (up && !recall && input.value.trim()) return; // a draft of your own: Up moves the caret as usual
+    const history = promptHistory(recentCache.get(selectedId)?.data);
+    if (!history.length) return;
+    recall ||= { agent: selectedId, index: history.length, draft: input.value };
+    const index = Math.max(0, Math.min(history.length, recall.index + (up ? -1 : 1)));
+    if (index === recall.index) { if (up) event.preventDefault(); return; }
+    event.preventDefault();
+    recall.index = index;
+    input.value = index === history.length ? recall.draft : history[index];
+    recall.shown = input.value;
+    if (index === history.length) recall = null;
+    const end = up ? 0 : input.value.length;
+    input.setSelectionRange(end, end);
+    input.dispatchEvent(new Event('input'));
+    if (recall) recall.shown = input.value;
+  });
   $('composer').addEventListener('submit', sendMessage);
   $('message-input').addEventListener('input', () => {
     resizeComposer(); updateComposer(); $('send-error').hidden = true; $('message-input').removeAttribute('aria-invalid');
