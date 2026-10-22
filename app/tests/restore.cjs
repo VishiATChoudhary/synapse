@@ -9,7 +9,12 @@ const { pathToFileURL } = require('node:url');
 if (typeof electron === 'string') {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-restore-'));
   const state = path.join(fixture, 'state'); fs.mkdirSync(state);
-  fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], autoSymlink: false, skipLogin: true, profiles: { shell: { command: 'cat', label: 'Shell' } } }));
+  const opencode = path.join(fixture, 'opencode.sh');
+  fs.writeFileSync(opencode, '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$SYNAPSE_RESTORE_OPENCODE_ARGS"\nexec cat\n');
+  fs.writeFileSync(path.join(fixture, 'opencode.db'), 'fixture');
+  fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], autoSymlink: false, skipLogin: true, profiles: {
+    shell: { command: 'cat', label: 'Shell' }, opencode: { command: `/bin/sh ${opencode} --log-level error`, label: 'OpenCode' },
+  } }));
   fs.writeFileSync(path.join(state, 'sessions.json'), JSON.stringify({ version: 1, slots: [
     { worktree: fixture, top: 0, focused: false, sessions: [{ key: 'other', kind: 'shell', title: 'Other', parent: null }] },
     { worktree: fixture, top: 0, focused: true, sessions: [{ key: 'parent', kind: 'shell', title: 'Parent', parent: null }, { key: 'child', kind: 'shell', title: 'Child', parent: 0 }] },
@@ -25,7 +30,7 @@ if (typeof electron === 'string') {
 const { app, BrowserWindow } = electron;
 const fixture = process.env.SYNAPSE_RESTORE_FIXTURE;
 assert.ok(fixture);
-Object.assign(process.env, { SYNAPSE_HOME: path.join(fixture, 'state'), SYNAPSE_DEMO: '1', SYNAPSE_DESKTOP_VIEW: 'gui', SHELL: '/bin/sh' });
+Object.assign(process.env, { SYNAPSE_HOME: path.join(fixture, 'state'), SYNAPSE_DEMO: '1', SYNAPSE_DESKTOP_VIEW: 'gui', SHELL: '/bin/sh', SYNAPSE_RESTORE_OPENCODE_ARGS: path.join(fixture, 'opencode-args') });
 app.setPath('userData', path.join(fixture, 'electron'));
 process.chdir(fixture);
 let win, frame, failed = false;
@@ -42,6 +47,19 @@ const ui = (s) => frame.executeJavaScript(s, true);
   const phase = process.env.SYNAPSE_RESTORE_PHASE;
   await until(() => ui(`document.querySelectorAll('[data-agent^="desktop-"]').length === ${phase === 'save' ? 3 : 2}`), 'restored sessions');
   if (phase === 'save') {
+    for (const [transcript, expected] of [
+      [`${path.join(fixture, 'opencode.db')}#ses_fixture2`, ['--log-level', 'error', '--session', 'ses_fixture2']],
+      [`${path.join(fixture, 'missing.db')}#ses_fixture2`, ['--log-level', 'error']],
+      [`${path.join(fixture, 'opencode.db')}#invalid`, ['--log-level', 'error']],
+    ]) {
+      fs.rmSync(process.env.SYNAPSE_RESTORE_OPENCODE_ARGS, { force: true });
+      const args = { cwd: fixture, kind: 'opencode', resume: { transcript } };
+      const made = await win.webContents.executeJavaScript(`synapse.pty.restore(${JSON.stringify(args)})`, true);
+      await until(() => fs.existsSync(process.env.SYNAPSE_RESTORE_OPENCODE_ARGS), 'OpenCode launched');
+      assert.deepEqual(fs.readFileSync(process.env.SYNAPSE_RESTORE_OPENCODE_ARGS, 'utf8').trim().split('\n'), expected);
+      await win.webContents.executeJavaScript(`synapse.pty.kill(${JSON.stringify(made.id)})`, true);
+    }
+    console.log('PASS OpenCode restores its original session, preserves profile flags, and starts fresh for unavailable transcripts');
     await ui(`document.querySelector('[data-agent="desktop-child"]').click(); document.querySelector('#message-input').value = 'Draft across a restart'; document.querySelector('#message-input').dispatchEvent(new Event('input', { bubbles: true }));`);
     await until(() => JSON.parse(fs.readFileSync(path.join(fixture, 'state', 'sessions.json'))).slots[1].top === 1, 'selected fork saved');
     await ui(`document.querySelector('[data-agent="desktop-other"]').click(); document.querySelector('#session-menu').click(); document.querySelector('[data-session-action="close"]').click();`);

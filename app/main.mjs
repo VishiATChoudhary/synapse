@@ -486,6 +486,10 @@ function resumeCommand(kind, resume, profiles) {
       const m = /rollout-.*-([0-9a-f-]{36})\.jsonl$/.exec(resume?.transcript || '');
       return m && UUID.test(m[1]) ? `codex ${flags} resume ${m[1]}` : base;
     }
+    case 'opencode': {
+      const m = /#(ses_[a-zA-Z0-9]+)$/.exec(resume?.transcript || '');
+      return m && fs.existsSync(resume.transcript.slice(0, -m[0].length)) ? `${base} --session ${m[1]}` : base;
+    }
     default: return base;
   }
 }

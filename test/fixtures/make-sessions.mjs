@@ -35,6 +35,37 @@ export function buildOpenCode(home, cwd, now = Date.now()) {
   return file;
 }
 
+export const OC_V2_SESSION = 'ses_fixture2';
+
+export function buildOpenCodeV2(home, cwd, now = Date.now()) {
+  fs.mkdirSync(path.join(home, 'opencode'), { recursive: true });
+  const file = path.join(home, 'opencode', 'opencode.db');
+  const db = new DatabaseSync(file);
+  db.exec(`CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT, parent_id TEXT, time_created INTEGER, time_updated INTEGER);
+    CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER, time_updated INTEGER, data TEXT);`);
+  const session = db.prepare('INSERT INTO session_v2 VALUES (?,?,?,?,?)');
+  session.run(OC_V2_SESSION, cwd, null, now, now);
+  session.run('ses_v2child', cwd, OC_V2_SESSION, now, now + 100);
+  let seq = 0;
+  const msg = (type, data) => {
+    seq++;
+    db.prepare('INSERT INTO session_message VALUES (?,?,?,?,?,?,?)').run(`v2m${seq}`, OC_V2_SESSION, type, seq, now + seq, now + seq, JSON.stringify(data));
+  };
+  msg('system', { text: 'private system instructions' });
+  msg('user', { text: 'Please add a retry to the fetch helper', files: [], agents: [] });
+  msg('assistant', { content: [
+    { type: 'reasoning', text: 'private reasoning' },
+    { type: 'text', text: 'I will wrap fetch in a backoff loop.' },
+    { type: 'tool', name: 'shell', state: { status: 'completed', input: { command: 'rg fetchHelper src' }, content: [{ type: 'text', text: 'src/a.js' }] } },
+  ], time: { completed: now + 3 }, finish: 'tool-calls' });
+  msg('user', { text: 'Use three attempts' });
+  msg('assistant', { content: [{ type: 'tool', name: 'edit', state: { input: { file_path: 'src/fetch.js' } } }] });
+  msg('idle', { outcome: 'succeeded' });
+  msg('synthetic', { text: 'private injected context' });
+  db.close();
+  return file;
+}
+
 const sha = (s) => crypto.createHash('sha256').update(s).digest();
 
 // <home>/chats/<md5 cwd>/<chat id>/store.db; returns its path

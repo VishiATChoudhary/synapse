@@ -240,8 +240,13 @@ function windowFrom(all, from) {
   return { messages: all.slice(start), end: all.length };
 }
 
-// OpenCode: one opencode.db for every session. The transcript is "<db>#<session id>"; messages are rows
-// (data.role) and their text and tool calls are rows of `part`.
+function openCodeV2(db, id) {
+  try { return !!db.prepare('SELECT 1 FROM session_v2 WHERE id = ?').get(id); }
+  catch { return false; }
+}
+
+// OpenCode: one opencode.db for every session. V1 splits messages and parts; V2 keeps typed messages
+// with inline content in session_message. Both versions can coexist in the same database.
 function readOpenCode(transcript, from) {
   const file = transcriptFile({ transcript, format: 'opencode' });
   const id = transcript.slice(file.length + 1);
@@ -249,18 +254,23 @@ function readOpenCode(transcript, from) {
   if (!db || !id) return { messages: [], end: from };
   const all = [];
   try {
+    const v2 = openCodeV2(db, id);
     const parts = new Map();
-    for (const r of db.prepare('SELECT message_id, data FROM part WHERE session_id = ? ORDER BY time_created, id').all(id)) {
+    for (const r of v2 ? [] : db.prepare('SELECT message_id, data FROM part WHERE session_id = ? ORDER BY time_created, id').all(id)) {
       if (!parts.has(r.message_id)) parts.set(r.message_id, []);
       try { parts.get(r.message_id).push(JSON.parse(r.data)); } catch {}
     }
-    for (const r of db.prepare('SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created, id').all(id)) {
-      let role; try { role = JSON.parse(r.data).role; } catch { continue; }
-      const ps = parts.get(r.id) || [];
-      const text = ps.filter((p) => p.type === 'text' && !p.synthetic && !p.ignored).map((p) => p.text || '').join('\n').trim();
+    const rows = db.prepare(v2
+      ? 'SELECT type, time_created, data FROM session_message WHERE session_id = ? ORDER BY seq'
+      : 'SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created, id').all(id);
+    for (const r of rows) {
+      let d; try { d = JSON.parse(r.data); } catch { continue; }
+      const role = v2 ? r.type : d.role;
+      const ps = v2 ? d.content || [] : parts.get(r.id) || [];
+      const text = (v2 && role === 'user' ? d.text || '' : ps.filter((p) => p.type === 'text' && !p.synthetic && !p.ignored).map((p) => p.text || '').join('\n')).trim();
       if (role === 'user') { if (text && !NOISE.test(text)) all.push({ role, text, ts: r.time_created }); continue; }
       if (role !== 'assistant') continue;
-      const tools = ps.filter((p) => p.type === 'tool').map((p) => toolLine(p.tool, p.state?.input));
+      const tools = ps.filter((p) => p.type === 'tool').map((p) => toolLine(v2 ? p.name : p.tool, p.state?.input));
       if (text || tools.length) all.push({ role, text: [text, ...tools].filter(Boolean).join('\n'), ts: r.time_created, tool: !text });
     }
   } catch {} finally { try { db.close(); } catch {} }
@@ -564,16 +574,26 @@ function geminiTranscript(cwd, start) {
   return best?.p || null;
 }
 
-// OpenCode: the newest top-level session of this directory touched since the process started.
-export function opencodeTranscript(cwd, start, home = process.env.XDG_DATA_HOME || path.join(HOME, '.local', 'share')) {
+// OpenCode: an explicit resumed session, or the newest top-level session touched since this process started.
+export function opencodeTranscript(cwd, start, home = process.env.XDG_DATA_HOME || path.join(HOME, '.local', 'share'), cmd = '') {
   const file = path.join(home, 'opencode', 'opencode.db');
   if (!fs.existsSync(file)) return null;
   const db = openDb(file);
   if (!db) return null;
   try {
-    const row = db.prepare('SELECT id FROM session WHERE directory = ? AND parent_id IS NULL AND time_updated >= ? ORDER BY time_updated DESC LIMIT 1').get(cwd, start - 60_000);
-    return row ? `${file}#${row.id}` : null;
-  } catch { return null; } finally { try { db.close(); } catch {} }
+    const argv = words(cmd), at = argv.findIndex((a) => a === '--session' || a === '-s');
+    const id = at < 0 ? argv.find((a) => a.startsWith('--session='))?.slice(10) : argv[at + 1];
+    let best = null;
+    for (const table of ['session_v2', 'session']) {
+      try {
+        const row = id
+          ? db.prepare(`SELECT id, time_updated FROM ${table} WHERE directory = ? AND id = ?`).get(cwd, id)
+          : db.prepare(`SELECT id, time_updated FROM ${table} WHERE directory = ? AND parent_id IS NULL AND time_updated >= ? ORDER BY time_updated DESC LIMIT 1`).get(cwd, start - 60_000);
+        if (row && (!best || row.time_updated > best.time_updated)) best = row;
+      } catch { /* Older OpenCode installations only have the V1 tables. */ }
+    }
+    return best ? `${file}#${best.id}` : null;
+  } finally { try { db.close(); } catch {} }
 }
 
 // Cursor: chats/<md5 of the workspace path>/<chat id>/store.db; take the one written to since the process started.
@@ -629,9 +649,13 @@ export function turnBusy(src) {
     } else if (src.format === 'opencode') {
       const db = openDb(file);
       try {
-        const row = db?.prepare('SELECT data FROM message WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT 1').get(src.transcript.slice(file.length + 1));
+        const id = src.transcript.slice(file.length + 1), v2 = openCodeV2(db, id);
+        const row = db?.prepare(v2
+          ? "SELECT type, data FROM session_message WHERE session_id = ? AND type IN ('user', 'assistant', 'idle') ORDER BY seq DESC LIMIT 1"
+          : 'SELECT data FROM message WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT 1').get(id);
         const d = row ? JSON.parse(row.data) : null;
-        busy = !d ? null : d.role === 'user' || (d.role === 'assistant' && (!d.time?.completed || d.finish === 'tool-calls'));
+        const role = v2 ? row?.type : d?.role;
+        busy = !d ? null : role === 'user' || (role === 'assistant' && (!d.time?.completed || d.finish === 'tool-calls'));
       } finally { try { db?.close(); } catch {} }
     } else {
       const last = (readJSON(file, {}).messages || []).at(-1);
@@ -671,7 +695,7 @@ function processAgents() {
     const cwd = dirs.get(r.pid), id = `${r.kind}-${r.pid}`;
     const transcript = r.kind === 'codex' ? codexTranscript(id, cwd, r.start, r.cmd)
       : r.kind === 'gemini' ? geminiTranscript(cwd, r.start)
-      : r.kind === 'opencode' ? opencodeTranscript(cwd, r.start)
+      : r.kind === 'opencode' ? opencodeTranscript(cwd, r.start, undefined, r.cmd)
       : r.kind === 'cursor-agent' ? cursorTranscript(cwd, r.start) : null;
     const format = ['codex', 'gemini', 'opencode', 'cursor-agent'].includes(r.kind) ? r.kind : null;
     const src = { transcript, format }, cpu = treeCpu(r.pid), touched = transcriptTouched(src);
