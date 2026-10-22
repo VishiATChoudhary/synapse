@@ -1522,10 +1522,19 @@ async function openSettings() {
     updRow.append(el('span', 'k', 'updates'), updVal, updBtn);
     synapse.update.get().then(showUpd, () => {});
     updBtn.onclick = async () => { updBtn.disabled = true; updVal.textContent = 'checking…'; try { showUpd(await synapse.update.check()); } catch (e) { toast(e.message, true); } updBtn.disabled = false; };
+    // GUI or Terminal: one choice, kept here rather than in the toolbar
+    const viewRow = el('div', 'opt set'), viewSeg = el('div', 'seg view-seg');
+    for (const [v, label] of [['gui', 'GUI'], ['terminal', 'Terminal']]) {
+      const b = el('button', (v === 'gui') === workspaceOpen ? 'on' : '', label);
+      b.dataset.view = v;
+      b.onclick = () => { close(); if (v === 'gui') openWorkspace(); else showWorkspace(false); };
+      viewSeg.append(b);
+    }
+    viewRow.append(el('span', 'k', 'view'), el('span', 'c', 'GUI shows sessions, connections and friends as a workspace; Terminal is the raw terminals with forks'), viewSeg);
     const tourRow = el('div', 'opt set'), tourBtn = el('button', 'btn', 'replay');
     tourRow.append(el('span', 'k', 'tour'), el('span', 'c', 'the five steps a new install starts with'), tourBtn);
     tourBtn.onclick = () => { close(); showOnboarding(false); };
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow, doneRow, loginRow, updRow, tourRow);
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), viewRow, themeRow, linkRow, forkRow, doneRow, loginRow, updRow, tourRow);
     const commands = el('div', 'agent-commands'), commandInputs = new Map();
     for (const [kind, profile] of Object.entries(s.profiles || {})) {
       const row = el('label', 'opt set'), input = el('input');
@@ -1944,6 +1953,8 @@ function talkRequestRow(r) {
 // receives it, and once they accept, this Mac links the two.
 const openAgent = () => { const s = top(focusedSlot()), a = s && M.agents[s.pty]; return a?.synapseId ? { id: a.synapseId, name: a.name, kind: a.kind } : null; };
 const offersIn = () => (ACC.feed.incoming || []).filter((r) => r.kind === 'offer' && r.status === 'pending');
+const asksIn = () => pendingRequests().filter((r) => r.kind !== 'offer');
+const asksOut = (p) => (ACC.feed.outgoing || []).filter((r) => r.kind !== 'offer' && r.status === 'pending' && (r.to?.handle ? r.to.handle === p.handle : r.to?.name === p.name));
 const offersOut = (p) => (ACC.feed.outgoing || []).filter((r) => r.kind === 'offer' && r.status === 'pending' && (r.to?.handle ? r.to.handle === p.handle : r.to?.name === p.name));
 let people = [], peopleAt = 0;
 async function loadPeople(force = false) {
@@ -1953,7 +1964,7 @@ async function loadPeople(force = false) {
   return people;
 }
 function renderShareBar() {
-  const a = openAgent(), b = $('#btn-share'), n = offersIn().length + pendingTrust().length, c = $('#friends-count');
+  const a = openAgent(), b = $('#btn-share'), n = offersIn().length + asksIn().length + pendingTrust().length, c = $('#friends-count');
   b.classList.toggle('off', !a || ACC.feed.canOffer === false);
   b.title = ACC.feed.canOffer === false ? ACC.feed.offersLater : a ? `share ${a.name} with a friend` : 'open an agent to share it with a friend';
   c.hidden = !n; c.textContent = n ? String(n) : '';
@@ -2016,6 +2027,8 @@ function renderFriends() {
   }
   const offers = offersIn(), trusts = pendingTrust();
   if (offers.length) { pop.append(el('div', 'pop-sec', `shared with you · ${offers.length}`)); for (const r of offers) pop.append(offerRow(r, renderFriends)); }
+  const asks = asksIn();
+  if (asks.length) { pop.append(el('div', 'pop-sec', `wants yours · ${asks.length}`)); for (const r of asks) pop.append(askRow(r)); }
   if (trusts.length) { pop.append(el('div', 'pop-sec', `added you · ${trusts.length}`)); for (const p of trusts) pop.append(trustRow(p, () => { loadPeople(true).then(renderFriends); })); }
   pop.append(el('div', 'pop-sec', `trusted people · ${people.length}`));
   if (!people.length) pop.append(el('div', 'friends-empty', 'Nobody yet. Add someone by email or @handle; once they add you back, you can share agents with each other.'));
@@ -2028,12 +2041,17 @@ function renderFriends() {
     share.disabled = !p.trustsYou || !!p.pending || ACC.feed.canOffer === false;
     share.title = ACC.feed.canOffer === false ? ACC.feed.offersLater : p.pending ? 'they have not joined Synapse yet' : !p.trustsYou ? 'they have not added you back yet' : open ? `offer ${open.name} to ${p.name || p.handle}` : 'pick which agent to share';
     share.onclick = () => { closeFriends(); openShare(p); };
-    head.append(share);
+    const ask = el('button', 'btn', 'ask');
+    ask.disabled = !p.trustsYou || !!p.pending;
+    ask.title = p.pending ? 'they have not joined Synapse yet' : !p.trustsYou ? 'they have not added you back yet' : `ask ${p.name || p.handle} for one of their agents`;
+    ask.onclick = () => { closeFriends(); openAsk(p); };
+    head.append(ask, share);
     const meta = el('div', 'friend-meta', p.pending ? 'invited, not on Synapse yet' : !p.trustsYou ? 'has not added you back yet' : out.length || inn.length ? `sees ${out.length} of your agents · you see ${inn.length} of theirs` : 'nothing shared yet');
     row.append(head, meta);
     for (const l of out) row.append(el('div', 'friend-flow', `your ${l.local?.name || 'agent'} → their ${l.agent?.name || 'agent'} · ${l.mode === 'talk' ? 'read and ask' : 'read only'}`));
     for (const l of inn) row.append(el('div', 'friend-flow in', `their ${l.agent?.name || 'agent'} → your ${l.local?.name || 'agent'} · ${l.mode === 'talk' ? 'read and ask' : 'read only'}`));
     for (const o of offersOut(p)) row.append(el('div', 'friend-flow wait', `offered ${o.agent?.name || 'an agent'} · waiting for them to accept`));
+    for (const o of asksOut(p)) row.append(el('div', 'friend-flow wait', `asked for ${o.target || 'an agent'} into your ${o.agent?.name || 'agent'} · waiting for them`));
     pop.append(row);
   }
   const add = el('div', 'people-add'), inp = el('input'), go = el('button', 'btn', 'add');
@@ -2050,6 +2068,47 @@ function renderFriends() {
   const more = el('button', 'friends-link', 'manage in settings');
   more.onclick = () => { closeFriends(); openSettings(); };
   pop.append(add, more);
+}
+
+// Ask a friend for one of their agents: it comes into the agent of mine picked here (the open one by default) once
+// they accept and choose which of theirs.
+async function openAsk(preset) {
+  if (!ACC.user) return showLogin();
+  await Promise.all([loadPeople(true), synapse.requests.agents().then((a) => { ACC.agents = a; }).catch(() => {})]);
+  const ok = people.filter((p) => p.trustsYou && !p.pending && p.handle);
+  let pick = ok.find((p) => p.handle === preset?.handle)?.handle || ok[0]?.handle;
+  modal(preset?.name || preset?.handle ? `ask ${preset.name || preset.handle} for an agent` : 'ask a friend for an agent', (body, close) => {
+    if (!ok.length || !ACC.agents.length) {
+      body.append(el('div', 'share-empty', !ACC.agents.length ? 'Start an agent first: it is the one that receives theirs.' : 'None of your trusted people has added you back yet. Once they do, you can ask them.'));
+      return;
+    }
+    const list = el('div', 'share-people');
+    const draw = () => list.replaceChildren(...ok.map((p) => {
+      const r = el('button', `share-person${p.handle === pick ? ' on' : ''}`);
+      r.append(avatar(p), el('b', '', p.name || p.handle), el('span', 'h', `@${p.handle}`), el('span', 'note', asksOut(p).length ? 'asked · waiting' : ''));
+      r.onclick = () => { pick = p.handle; draw(); };
+      return r;
+    }));
+    draw();
+    const into = el('select', 'req-pick'), open = openAgent();
+    for (const a of ACC.agents) { const o = el('option', '', `${a.kind} · ${a.name}${a.project ? `  (${a.project})` : ''}`); o.value = a.id; into.append(o); }
+    if (open && ACC.agents.some((a) => a.id === open.id)) into.value = open.id;
+    const what = el('input', 'ask-what'); what.placeholder = 'what for? e.g. their api-auth agent, the payments work'; what.maxLength = 120; what.spellcheck = false;
+    const row = el('div', 'row'), cancel = el('button', 'btn', 'cancel'), go = el('button', 'btn sig', 'ask');
+    cancel.onclick = close;
+    go.onclick = async () => {
+      go.disabled = true;
+      const p = ok.find((x) => x.handle === pick);
+      try { await synapse.requests.ask(pick, into.value, what.value); toast(`asked ${p?.name || pick} · they pick which of their agents to share`); close(); }
+      catch (e) { toast(e.message, true); go.disabled = false; }
+    };
+    what.onkeydown = (e) => { if (e.key === 'Enter') { e.stopPropagation(); go.click(); } };
+    row.append(cancel, go);
+    body.append(el('div', 'hint', 'ask'), list, el('div', 'hint', 'into your agent'), into, el('div', 'hint', 'what you need (optional)'), what,
+      el('div', 'hint share-note', 'They choose which of their agents to share, and whether yours may ask it questions. You can read it once they accept.'), row);
+    body.tabIndex = 0; body.onkeydown = (e) => { if (e.key === 'Escape') close(); };
+  });
+  $('#modal-body').focus();
 }
 
 // Share the open agent: pick a friend who trusts you back and how (read only or read and ask), then offer it.
@@ -2101,6 +2160,51 @@ async function openShare(preset) {
   $('#modal-body').focus();
 }
 
+// "Mara wants your context for her web agent": pick which of mine she gets (or all), and whether hers may ask.
+// In the circle and the friends list.
+function askRow(r) {
+  const box = el('div', 'req');
+  const who = el('div', 'req-who');
+  who.append(avatar(r.from), el('b', '', personName(r.from)));
+  if (r.from?.handle && r.from?.name) who.append(el('span', 'h', `@${r.from.handle}`));
+  const what = el('div', 'req-what');
+  what.append('wants your context for ', el('span', 'ag', `${r.agent?.kind || 'agent'} · ${r.agent?.name || '?'}`));
+  if (r.agent?.project) what.append(` in ${r.agent.project}`);
+  box.append(who, what);
+  if (r.target || r.note) box.append(el('div', 'req-note', [r.target && `asks for: ${r.target}`, r.note].filter(Boolean).join(' · ')));
+  const pick = el('select', 'req-pick');
+  pick.setAttribute('aria-label', 'which of your agents to share');
+  if (!ACC.agents.length) { const o = el('option', '', 'no live agents on this Mac'); o.value = ''; pick.append(o); pick.disabled = true; }
+  else {
+    for (const a of ACC.agents) { const o = el('option', '', `${a.kind} · ${a.name}${a.project ? `  (${a.project})` : ''}`); o.value = a.id; pick.append(o); }
+    if (ACC.agents.length > 1) { const o = el('option', '', 'all live agents'); o.value = '*'; pick.append(o); }
+    pick.value = ACC.choice[r.id] || bestAgent(r);
+  }
+  pick.onchange = () => { ACC.choice[r.id] = pick.value; };
+  // ticked by default: their agent may ask the shared agent questions, not only read it
+  const talkBox = el('label', 'req-talk'), tick = el('input');
+  tick.type = 'checkbox';
+  tick.checked = ACC.talk[r.id] ?? true;
+  tick.onchange = () => { ACC.talk[r.id] = tick.checked; };
+  talkBox.append(tick, el('span', '', 'Let their agent ask questions too'));
+  box.append(talkBox);
+  const row = el('div', 'req-row');
+  const no = el('button', 'btn', 'Deny'), yes = el('button', 'btn sig', 'Accept');
+  yes.disabled = !ACC.agents.length;
+  no.onclick = async () => {
+    no.disabled = yes.disabled = true;
+    try { await synapse.requests.deny(r.id); toast(`denied ${personName(r.from)}`); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
+  };
+  yes.onclick = async () => {
+    const ids = pick.value === '*' ? ACC.agents.map((a) => a.id) : [pick.value];
+    no.disabled = yes.disabled = true;
+    try { await synapse.requests.accept(r.id, ids, tick.checked); toast(`synapsed with ${personName(r.from)}`); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
+  };
+  row.append(pick, no, yes);
+  box.append(row);
+  return box;
+}
+
 function renderPop() {
   const pop = $('#syn-pop'), dot = $('#syn-dot');
   pop.replaceChildren();
@@ -2116,47 +2220,7 @@ function renderPop() {
   if (reqs.length) {
     pop.append(el('div', 'pop-sec', `requests · ${reqs.length}`));
     for (const r of reqs) {
-      if (r.kind === 'offer') { pop.append(offerRow(r)); continue; }
-      const box = el('div', 'req');
-      const who = el('div', 'req-who');
-      who.append(avatar(r.from), el('b', '', personName(r.from)));
-      if (r.from?.handle && r.from?.name) who.append(el('span', 'h', `@${r.from.handle}`));
-      const what = el('div', 'req-what');
-      what.append('wants your context for ', el('span', 'ag', `${r.agent?.kind || 'agent'} · ${r.agent?.name || '?'}`));
-      if (r.agent?.project) what.append(` in ${r.agent.project}`);
-      box.append(who, what);
-      if (r.target || r.note) box.append(el('div', 'req-note', [r.target && `asks for: ${r.target}`, r.note].filter(Boolean).join(' · ')));
-      const pick = el('select', 'req-pick');
-      pick.setAttribute('aria-label', 'which of your agents to share');
-      if (!ACC.agents.length) { const o = el('option', '', 'no live agents on this Mac'); o.value = ''; pick.append(o); pick.disabled = true; }
-      else {
-        for (const a of ACC.agents) { const o = el('option', '', `${a.kind} · ${a.name}${a.project ? `  (${a.project})` : ''}`); o.value = a.id; pick.append(o); }
-        if (ACC.agents.length > 1) { const o = el('option', '', 'all live agents'); o.value = '*'; pick.append(o); }
-        pick.value = ACC.choice[r.id] || bestAgent(r);
-      }
-      pick.onchange = () => { ACC.choice[r.id] = pick.value; };
-      // ticked by default: their agent may ask the shared agent questions, not only read it
-      const talkBox = el('label', 'req-talk'), tick = el('input');
-      tick.type = 'checkbox';
-      tick.checked = ACC.talk[r.id] ?? true;
-      tick.onchange = () => { ACC.talk[r.id] = tick.checked; };
-      talkBox.append(tick, el('span', '', 'Let their agent ask questions too'));
-      box.append(talkBox);
-      const row = el('div', 'req-row');
-      const no = el('button', 'btn', 'Deny'), yes = el('button', 'btn sig', 'Accept');
-      yes.disabled = !ACC.agents.length;
-      no.onclick = async () => {
-        no.disabled = yes.disabled = true;
-        try { await synapse.requests.deny(r.id); toast(`denied ${personName(r.from)}`); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
-      };
-      yes.onclick = async () => {
-        const ids = pick.value === '*' ? ACC.agents.map((a) => a.id) : [pick.value];
-        no.disabled = yes.disabled = true;
-        try { await synapse.requests.accept(r.id, ids, tick.checked); toast(`synapsed with ${personName(r.from)}`); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
-      };
-      row.append(pick, no, yes);
-      box.append(row);
-      pop.append(box);
+      pop.append(r.kind === 'offer' ? offerRow(r) : askRow(r));
     }
   }
   // agent talk: a friend's agent asking mine, or mine asking theirs; a click opens the thread
@@ -2377,7 +2441,7 @@ synapse.account.onChange((u) => {
   ACC.user = u; renderMe();
   if (u && !$('#login').hidden) { hideLogin(); if (!was) toast(`signed in as ${personName(u)}`); }
 });
-synapse.requests.onChange((f) => { ACC.feed = f || ACC.feed; renderDot(); renderShareBar(); if (!$('#friends-pop').hidden) renderFriends(); });
+synapse.requests.onChange((f) => { ACC.feed = f || ACC.feed; workspacePost({ type: 'synapse:friends-changed' }); renderDot(); renderShareBar(); if (!$('#friends-pop').hidden) renderFriends(); });
 synapse.requests.onOpen(() => openPop(true));
 
 // ---- updates: the packaged app fetches new versions itself (updater.mjs); this only shows where it is
@@ -2711,6 +2775,20 @@ const ownSession = (id) => {
   }
   throw new Error('This session is no longer open.');
 };
+async function friendsSnapshot() {
+  if (!ACC.user) return { signedIn: false };
+  const [, agents] = await Promise.all([loadPeople(true), synapse.requests.agents().catch(() => [])]);
+  ACC.agents = agents;
+  const who = (x) => x && { handle: x.handle || null, name: x.name || x.handle || null };
+  const req = (r) => ({ id: r.id, kind: r.kind === 'offer' ? 'offer' : 'ask', mode: r.mode || null, from: who(r.from), to: who(r.to), agent: r.agent && { id: r.agent.id, name: r.agent.name, kind: r.agent.kind, project: r.agent.project || null }, target: r.target || null, note: r.note || null, best: r.kind === 'offer' ? null : bestAgent(r) });
+  return {
+    signedIn: true, me: who(ACC.user), canOffer: ACC.feed.canOffer !== false, offersLater: ACC.feed.offersLater || '',
+    people: people.map((p) => ({ handle: p.handle || null, name: p.name || p.handle || p.email || '?', trustsYou: !!p.trustsYou, pending: !!p.pending })),
+    incoming: pendingRequests().map(req), outgoing: (ACC.feed.outgoing || []).filter((r) => r.status === 'pending').map(req),
+    links: (ACC.feed.links || []).map((l) => ({ direction: l.direction, owner: l.owner || null, mode: l.mode || null, agent: l.agent && { name: l.agent.name, kind: l.agent.kind }, local: l.local && { id: l.local.id, name: l.local.name } })),
+    agents: agents.map((a) => ({ id: a.id, name: a.name, kind: a.kind, project: a.project || null })),
+  };
+}
 async function desktopAction(action, args) {
   switch (action) {
     case 'state': return workspaceState();
@@ -2798,6 +2876,20 @@ async function desktopAction(action, args) {
       return;
     }
     case 'settings': return openSettings();
+    // friends, for the GUI's Add connection and Connections view: who you trust, what waits on you, and the four
+    // answers (share, ask, accept, deny). Agents are named by their Synapse id.
+    case 'friends': return friendsSnapshot();
+    case 'sign-in': return showLogin();
+    case 'friend-offer': return synapse.requests.offer(String(args.to || ''), String(args.agent || ''), args.mode === 'sync' ? 'sync' : 'talk');
+    case 'friend-ask': return synapse.requests.ask(String(args.to || ''), String(args.agent || ''), String(args.target || '').slice(0, 120));
+    case 'friend-accept': {
+      const ids = Array.isArray(args.agents) ? args.agents.map(String).filter(Boolean) : [];
+      if (!ids.length) throw new Error('Choose which of your agents to share.');
+      return synapse.requests.accept(String(args.id || ''), ids, args.talk !== false);
+    }
+    case 'friend-accept-offer': return synapse.requests.acceptOffer(String(args.id || ''), String(args.receiver || ''));
+    case 'friend-deny': return synapse.requests.deny(String(args.id || ''));
+    case 'friend-cancel': return synapse.requests.cancel(String(args.id || ''));
     case 'account': return openAccount();
     case 'canvas': return openCanvas();
     case 'canvas-ready': syncCanvasBranches(); return;

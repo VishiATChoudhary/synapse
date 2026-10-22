@@ -7,6 +7,7 @@ body { padding-top: 48px; grid-template-rows: calc(100vh - 48px); }
 .desktop-toolbar button:hover { background: var(--color-hover); color: var(--color-ink); }
 .desktop-toolbar button:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 .desktop-toolbar button:active { background: var(--color-selected); }
+.desktop-modes[hidden] { display: none; }
 .desktop-modes { display: flex; padding: 3px; gap: 2px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
 .desktop-modes button[aria-pressed='true'] { background: var(--color-paper); color: var(--color-ink); box-shadow: 0 1px 3px var(--color-shadow); }
 .desktop-title { flex: 1; color: var(--color-muted); font-size: 12px; }

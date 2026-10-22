@@ -243,6 +243,7 @@ function initialize() {
         if (follow) navigate('session', desktop.active);
       }
     }
+    if (message?.type === 'synapse:friends-changed') { friends = null; renderFriendsList(true); return; }
     if (message?.type === 'synapse:desktop-visibility') {
       desktopActive = message.visible;
       if (!desktopActive) persistDraft();
@@ -733,7 +734,42 @@ function initialize() {
       <section class="inspector-section"><h3 class="inspector-label">Recent messages</h3>${chat.slice(-3).reverse().map((message) => `<div class="recent-note"><strong>${icon('message')}${escapeHtml(message.fromName === 'You' ? 'You' : message.fromName)}</strong><p>${escapeHtml(message.text)}</p></div>`).join('') || '<p class="inspector-note">Messages between agents will appear here.</p>'}${chat.length ? '<button class="text-button" data-action="show-messages">View messages ' + icon('arrow-right') + '</button>' : ''}</section>`;
   }
 
+  // Friends under Connections: what waits on you (accept picks which of your agents), what waits on them, and
+  // what is shared already. Loaded from the desktop app; redrawn when its requests change.
+  async function renderFriendsList(reload = false) {
+    const box = $('friends-list'); if (!box || view !== 'connections') return;
+    if (!embedded) { box.innerHTML = ''; return; }
+    try { if (reload || !friends) await loadFriends(); } catch (error) { box.innerHTML = `<p class="inspector-note">${escapeHtml(error.message)}</p>`; return; }
+    if (!friends.signedIn) { box.innerHTML = `<div class="friends-heading"><h2>Friends</h2></div><div class="connections-explainer">${icon('network')}Sign in to share agents with people you trust and ask for theirs.<button class="button secondary" data-action="friends-sign-in">Sign in</button></div>`; return; }
+    const name = (x) => escapeHtml(x?.name || x?.handle || 'Someone');
+    const ag = (a) => a ? `<strong>${escapeHtml(a.name || '?')}</strong> <small>${escapeHtml(a.kind || 'agent')}${a.project ? ` · ${escapeHtml(a.project)}` : ''}</small>` : 'an agent';
+    const mine = (pick, multi) => `<select class="field friend-pick" aria-label="Which of your agents">${friends.agents.map((a) => `<option value="${escapeHtml(a.id)}"${a.id === pick ? ' selected' : ''}>${escapeHtml(a.name)} · ${escapeHtml(kindName(a))}</option>`).join('')}${multi && friends.agents.length > 1 ? '<option value="*">All live agents</option>' : ''}</select>`;
+    const incoming = friends.incoming.map((r) => `<div class="friend-card" data-request="${escapeHtml(r.id)}" data-kind="${r.kind}"><p>${r.kind === 'offer' ? `${name(r.from)} wants to give you access to ${ag(r.agent)}, ${r.mode === 'talk' ? 'read and ask' : 'read only'}.` : `${name(r.from)} asks for one of your agents, into ${ag(r.agent)}.`}${r.target || r.note ? `<span class="friend-note">${escapeHtml([r.target && `For: ${r.target}`, r.note].filter(Boolean).join(' · '))}</span>` : ''}</p>
+      <div class="friend-actions">${friends.agents.length ? `<label>${r.kind === 'offer' ? 'Into' : 'Share'} ${mine(r.kind === 'offer' ? mineId(selectedId) : r.best || mineId(selectedId), r.kind !== 'offer')}</label>` : '<span class="inspector-note">Start an agent to accept.</span>'}${r.kind === 'ask' ? '<label class="friend-talk"><input type="checkbox" checked> Let their agent ask questions</label>' : ''}<button class="button secondary" data-friend-deny="${escapeHtml(r.id)}">Decline</button><button class="button" data-friend-accept="${escapeHtml(r.id)}"${friends.agents.length ? '' : ' disabled'}>Accept</button></div></div>`).join('');
+    const outgoing = friends.outgoing.map((r) => `<div class="friend-card wait"><p>${r.kind === 'offer' ? `You invited ${name(r.to)} to ${ag(r.agent)}.` : `You asked ${name(r.to)} for ${escapeHtml(r.target || 'an agent')}, into ${ag(r.agent)}.`} <span class="friend-note">Waiting for them to accept.</span></p><div class="friend-actions"><button class="button secondary" data-friend-cancel="${escapeHtml(r.id)}">Withdraw</button></div></div>`).join('');
+    const links = friends.links.map((l) => `<div class="friend-card shared"><p>${l.direction === 'in' ? `${escapeHtml(l.owner || 'A friend')}'s <strong>${escapeHtml(l.agent?.name || 'agent')}</strong> ${icon('arrow-right')} your <strong>${escapeHtml(l.local?.name || 'agent')}</strong>` : `Your <strong>${escapeHtml(l.local?.name || 'agent')}</strong> ${icon('arrow-right')} ${escapeHtml(l.owner || 'a friend')}'s <strong>${escapeHtml(l.agent?.name || 'agent')}</strong>`} <span class="friend-note">${l.mode === 'talk' ? 'read and ask' : 'read only'}</span></p></div>`).join('');
+    box.innerHTML = `<div class="friends-heading"><h2>Friends</h2><button class="button secondary" data-action="friend-connection">${icon('plus')}Share or ask</button></div>
+      ${incoming ? `<h3 class="friends-sub">Waiting for you</h3>${incoming}` : ''}${outgoing ? `<h3 class="friends-sub">Waiting for them</h3>${outgoing}` : ''}
+      ${links ? `<h3 class="friends-sub">Shared</h3>${links}` : ''}${incoming || outgoing || links ? '' : `<p class="inspector-note">Nothing shared with friends yet. Share one of your agents, or ask a friend for one of theirs.</p>`}`;
+  }
+  async function answerFriend(button, kind) {
+    const card = button.closest('.friend-card'), id = button.dataset.friendAccept || button.dataset.friendDeny || button.dataset.friendCancel;
+    button.disabled = true;
+    try {
+      if (kind === 'cancel') await desktopCall('friend-cancel', { id });
+      else if (kind === 'deny') await desktopCall('friend-deny', { id });
+      else if (card.dataset.kind === 'offer') await desktopCall('friend-accept-offer', { id, receiver: card.querySelector('.friend-pick').value });
+      else {
+        const pick = card.querySelector('.friend-pick').value;
+        await desktopCall('friend-accept', { id, agents: pick === '*' ? friends.agents.map((a) => a.id) : [pick], talk: card.querySelector('.friend-talk input')?.checked !== false });
+      }
+      toast(kind === 'cancel' ? 'Withdrawn.' : kind === 'deny' ? 'Declined.' : 'Accepted. Their agent is connected.');
+      renderFriendsList(true);
+    } catch (error) { toast(error.message); if (button.isConnected) button.disabled = false; }
+  }
+
   function renderConnections() {
+    renderFriendsList();
     const liveEdges = state.edges.filter((edge) => byId.has(edge.from) && byId.has(edge.to));
     const signature = JSON.stringify([liveEdges, state.agents.map((agent) => [agent.id, agent.name])]);
     if (signature === connectionsSignature) return;
@@ -744,7 +780,7 @@ function initialize() {
       if (!pairs.has(key)) pairs.set(key, { from: byId.get(edge.from), to: byId.get(edge.to), edges: [] });
       pairs.get(key).edges.push(edge);
     }
-    $('new-connection').disabled = state.agents.length < 2;
+    $('new-connection').disabled = false; // a friend connection needs only one agent
     $('connections-list').innerHTML = pairs.size ? `<div class="connections-explainer">${icon('network')}An arrow points toward the agent receiving context. Two arrows share it both ways.</div>${[...pairs.values()].map((pair) => `<div class="connection-card"><button class="connection-endpoint" data-agent="${escapeHtml(pair.from.id)}">${avatar(pair.from)}<span><strong>${escapeHtml(pair.from.name)}</strong><small>${escapeHtml(kindName(pair.from))}</small></span></button><span class="connection-arrow" aria-label="${pair.edges.length > 1 ? 'Two-way context' : 'Shares context with'}">${icon(pair.edges.length > 1 ? 'arrows' : 'arrow-right')}</span><button class="connection-endpoint" data-agent="${escapeHtml(pair.to.id)}">${avatar(pair.to)}<span><strong>${escapeHtml(pair.to.name)}</strong><small>${escapeHtml(kindName(pair.to))}</small></span></button><button class="icon-button" data-remove-links="${pair.edges.map((edge) => escapeHtml(edge.id)).join(',')}" aria-label="Remove connection between ${escapeHtml(pair.from.name)} and ${escapeHtml(pair.to.name)}" title="Remove connection">${icon('unlink')}</button></div>`).join('')}` : emptyState('Give your agents a little context', 'Connect two live sessions to let them read each other’s work and exchange messages.', state.agents.length > 1 ? 'add-connection' : 'connect', state.agents.length > 1 ? 'Add connection' : 'Connect an agent', 'network');
   }
 
@@ -892,7 +928,7 @@ function initialize() {
     $('cancel-dialog').hidden = !submit; $('dialog-error').hidden = true;
     modalSubmit = submit || null;
     if (!$('action-dialog').open) $('action-dialog').showModal();
-    const field = $('dialog-content').querySelector('input, select, button');
+    const field = $('dialog-content').querySelector('input, select') || $('dialog-content').querySelector('button[aria-pressed="true"], button');
     if (field) field.focus();
   }
 
@@ -917,14 +953,69 @@ function initialize() {
     $('copy-launch').onclick = async () => { if (await copyText($('launch-command').textContent)) $('copy-launch').textContent = 'Copied'; };
   }
 
-  function addConnection() {
+  // Add connection: link two of my agents, share one of mine with a friend (they accept and pick which of theirs
+  // receives it), or ask a friend for one of theirs (they accept and pick which to share). Friends live in the
+  // desktop app, so the last two need it and a signed-in account.
+  let friends = null, connectionMode = 'mine';
+  const loadFriends = async () => (friends = embedded ? await desktopCall('friends') : { signedIn: false, unavailable: true });
+  const mineId = (id) => byId.get(id)?.backendId || id;
+  const connectionTabs = () => `<div class="segmented-control connection-tabs" role="group" aria-label="Kind of connection">${[['mine', 'My agents'], ['share', 'Share with a friend'], ['ask', 'Ask a friend']].map(([k, label]) => `<button type="button" data-conn-tab="${k}" aria-pressed="${k === connectionMode}">${label}</button>`).join('')}</div>`;
+  async function addConnection(mode) {
+    if (typeof mode === 'string') connectionMode = mode;
+    if (connectionMode === 'mine') return addLocalConnection();
+    openModal('Add connection', `${connectionTabs()}<p class="dialog-copy">Loading your friends…</p>`, 'Done');
+    try { await loadFriends(); } catch (error) { friends = { signedIn: false, error: error.message }; }
+    if (connectionMode !== 'mine') renderFriendConnection();
+  }
+  function friendOptions() {
+    return friends.people.filter((p) => p.trustsYou && !p.pending && p.handle).map((p) => `<option value="${escapeHtml(p.handle)}">${escapeHtml(p.name)} · @${escapeHtml(p.handle)}</option>`).join('');
+  }
+  function agentOptions() {
+    return friends.agents.map((a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)} · ${escapeHtml(kindName(a))}${a.project ? ` · ${escapeHtml(a.project)}` : ''}</option>`).join('');
+  }
+  function renderFriendConnection() {
+    const share = connectionMode === 'share';
+    if (!friends?.signedIn) {
+      const why = friends?.unavailable ? 'Friends live in the Synapse desktop app. Open this workspace there to share agents with people you trust.' : friends?.error || 'Sign in to share agents with people you trust and ask for theirs.';
+      openModal('Add connection', `${connectionTabs()}<p class="dialog-copy">${escapeHtml(why)}</p>${friends?.unavailable ? '' : '<button class="button" type="button" data-action="friends-sign-in">Sign in</button>'}`, 'Done');
+      return;
+    }
+    const people = friendOptions();
+    if (!people || !friends.agents.length) {
+      const why = !friends.agents.length ? 'Start an agent first. It is the one you share, or the one that receives theirs.' : friends.people.length ? 'None of your trusted people has added you back yet. Once they do, you can share agents with each other.' : 'Add someone you trust first: their email or @handle in Friends (top right of Terminal view) or Settings.';
+      openModal('Add connection', `${connectionTabs()}<p class="dialog-copy">${escapeHtml(why)}</p>`, 'Done');
+      return;
+    }
+    if (share) {
+      openModal('Add connection', `${connectionTabs()}<p class="dialog-copy">Give a friend access to one of your agents. They accept and choose which of their agents receives it.</p>
+        <label class="field-label" for="friend-agent">Your agent</label><select class="field" id="friend-agent">${agentOptions()}</select>
+        <label class="field-label" for="friend-who">Friend</label><select class="field" id="friend-who">${people}</select>
+        <label class="field-label" for="friend-mode">Access</label><select class="field" id="friend-mode"><option value="talk">Read and ask questions</option><option value="sync">Read only</option></select>
+        <p class="field-hint">${friends.canOffer ? 'Questions are answered by a copy of your agent with no tools. Nobody can type into your agent.' : escapeHtml(friends.offersLater)}</p>`, 'Send invite', async () => {
+        await desktopCall('friend-offer', { to: $('friend-who').value, agent: $('friend-agent').value, mode: $('friend-mode').value });
+        toast('Invite sent. It connects once they accept.'); renderFriendsList(true);
+      });
+      if (!friends.canOffer) $('dialog-submit').disabled = true;
+    } else {
+      openModal('Add connection', `${connectionTabs()}<p class="dialog-copy">Ask a friend for one of their agents. They accept and choose which one to share with you.</p>
+        <label class="field-label" for="friend-who">Friend</label><select class="field" id="friend-who">${people}</select>
+        <label class="field-label" for="friend-agent">Into your agent</label><select class="field" id="friend-agent">${agentOptions()}</select>
+        <label class="field-label" for="friend-what">What you need <span class="optional">optional</span></label><input class="field" id="friend-what" maxlength="120" autocomplete="off" placeholder="e.g. their api-auth agent, the payments work">`, 'Send request', async () => {
+        await desktopCall('friend-ask', { to: $('friend-who').value, agent: $('friend-agent').value, target: $('friend-what').value });
+        toast('Request sent. You can read their agent once they accept.'); renderFriendsList(true);
+      });
+    }
+    const current = mineId(selectedId);
+    if (friends.agents.some((a) => a.id === current)) $('friend-agent').value = current;
+  }
+  function addLocalConnection() {
     const linkable = state.agents.filter((a) => !a.owned || a.backendId);
     if (linkable.length < 2) {
-      openModal('One more agent makes a connection', '<p class="dialog-copy">Start a second coding agent, then connect the two sessions here to share context.</p>', 'Done'); return;
+      openModal('Add connection', `${connectionTabs()}<p class="dialog-copy">Start a second coding agent, then connect the two sessions here to share context. Or share with a friend.</p>`, 'Done'); return;
     }
     const options = (omit) => linkable.filter((agent) => agent.id !== omit).map((agent) => `<option value="${escapeHtml(agent.id)}">${escapeHtml(agent.name)} · ${escapeHtml(kindName(agent))}</option>`).join('');
     const initial = linkable.some((a) => a.id === selectedId) ? selectedId : linkable[0].id;
-    openModal('Connect your agents', `<p class="dialog-copy">Choose which sessions share context. Linked agents can also message each other.</p><label class="field-label" for="link-from">Agent</label><select class="field" id="link-from">${options()}</select><label class="field-label" for="link-to">Connect with</label><select class="field" id="link-to">${options(initial)}</select><label class="field-label" for="link-direction">Share context</label><select class="field" id="link-direction"><option value="both">Both ways</option><option value="out">First agent → second agent</option><option value="in">Second agent → first agent</option></select>`, 'Connect agents', async () => {
+    openModal('Add connection', `${connectionTabs()}<p class="dialog-copy">Choose which sessions share context. Linked agents can also message each other.</p><label class="field-label" for="link-from">Agent</label><select class="field" id="link-from">${options()}</select><label class="field-label" for="link-to">Connect with</label><select class="field" id="link-to">${options(initial)}</select><label class="field-label" for="link-direction">Share context</label><select class="field" id="link-direction"><option value="both">Both ways</option><option value="out">First agent → second agent</option><option value="in">Second agent → first agent</option></select>`, 'Connect agents', async () => {
       const from = $('link-from').value, to = $('link-to').value, direction = $('link-direction').value;
       if (from === to || !byId.has(from) || !byId.has(to)) throw new Error('Choose two different live agents.');
       if (direction !== 'in') await createEdge(from, to);
@@ -1149,12 +1240,18 @@ function initialize() {
     if (button.dataset.filter) { filter = button.dataset.filter; renderOverview(); return; }
     if (button.dataset.tab) { persistDraft(); tab = button.dataset.tab; renderMain(true); return; }
     if (button.dataset.removeLinks) return removeLinks(button.dataset.removeLinks.split(','), button);
+    if (button.dataset.connTab) { connectionMode = button.dataset.connTab; return addConnection(); }
+    if (button.dataset.friendAccept) return answerFriend(button, 'accept');
+    if (button.dataset.friendDeny) return answerFriend(button, 'deny');
+    if (button.dataset.friendCancel) return answerFriend(button, 'cancel');
     if (button.hasAttribute('data-copy-code')) { if (await copyText(button.closest('.code-block').querySelector('code').textContent)) { button.textContent = 'Copied'; setTimeout(() => { if (button.isConnected) button.textContent = 'Copy code'; }, 2000); } return; }
     if (button.hasAttribute('data-copy-message')) { const message = renderedMessages.get(button.closest('[data-message-key]').dataset.messageKey); if (message && await copyText(message.text)) toast('Message copied.'); return; }
     const action = button.dataset.action;
     if (action === 'connect') connectAgent();
     if (action === 'desktop-terminal') runDesktop('terminal', { id: selectedId });
     if (action === 'add-connection') addConnection();
+    if (action === 'friend-connection') addConnection('share');
+    if (action === 'friends-sign-in') { if ($('action-dialog').open) $('action-dialog').close(); desktopCall('sign-in').catch((e) => toast(e.message)); }
     if (action === 'close-inspector') { inspectorOpen = false; setStorage('synapse-inspector', 'closed'); syncInspector(); $('context-toggle').focus(); }
     if (action === 'show-messages') { persistDraft(); tab = 'messages'; renderMain(true); }
     if (action === 'show-all') { filter = 'all'; renderOverview(); }

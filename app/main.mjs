@@ -1084,6 +1084,20 @@ handle('share:offer', async ({ to, agent, mode }) => {
   await pollRequests();
   return out;
 });
+// ask a trusted person for one of their agents: it comes into my agent `agent` once they accept and pick one
+handle('requests:ask', async ({ to, agent, target, note }) => {
+  const a = listAgents().find((x) => x.id === agent && !x.remote);
+  if (!a) throw new Error('pick which of your agents should receive it');
+  let out;
+  if (FAKE) {
+    const f = fake(), p = (f.people || []).find((x) => x.handle === to || x.id === to);
+    out = { id: `a-${Date.now()}`, kind: 'ask', status: 'pending', to: { handle: p?.handle || to, name: p?.name || to }, agent: { id: a.id, name: a.name, kind: a.kind }, target: target || null, note: note || null };
+    f.outgoing = [out, ...(f.outgoing || [])];
+    writeJSON(FAKE, f);
+  } else out = await (await acct()).sendRequest({ to, agent: a, target: String(target || '').trim() || undefined, note: String(note || '').trim() || undefined });
+  await pollRequests();
+  return out;
+});
 // an offer to me: it goes into the agent of mine picked here
 handle('requests:acceptOffer', async ({ id, receiver }) => {
   if (FAKE) {
