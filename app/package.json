@@ -1,6 +1,6 @@
 {
   "name": "synapse-app",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "description": "Synapse desktop: projects, worktrees, agent terminals and fork stacks",
   "main": "main.mjs",
