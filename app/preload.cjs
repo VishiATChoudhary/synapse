@@ -67,7 +67,7 @@ contextBridge.exposeInMainWorld('synapse', {
     onChange: (fn) => on('account', fn),
   },
   onboarding: { get: () => call('onboarding:get'), done: () => call('onboarding:done') },
-  integrations: { preview: () => call('integrations:preview'), install: () => call('integrations:install') },
+  integrations: { preview: () => call('integrations:preview'), install: () => call('integrations:install'), onSetup: (fn) => on('setup:done', fn) },
   shares: { mode: (id, mode) => call('share:mode', { id, mode }), remove: (id) => call('share:remove', { id }) },
   people: { list: () => call('people:list'), add: (who) => call('people:add', { who }), remove: (id) => call('people:remove', { id }),
     trustBack: (id, handle) => call('trust:back', { id, handle }), ignore: (id) => call('trust:ignore', { id }) },

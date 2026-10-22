@@ -3,6 +3,7 @@
 import { Terminal } from '../node_modules/@xterm/xterm/lib/xterm.mjs';
 import { FitAddon } from '../node_modules/@xterm/addon-fit/lib/addon-fit.mjs';
 import { createActivityView } from '../../public/activity.mjs';
+import { playSound, DONE_SOUNDS } from './sounds.js';
 
 const $ = (s) => document.querySelector(s);
 // Windows has no ⌘: the app's shortcuts are Ctrl+Shift+key there (Alt adds what ⇧ adds on a Mac), and every
@@ -152,7 +153,9 @@ async function makeSession(s, { kind, title, question = null, parent = null, key
 
 synapse.pty.onData(({ id, data }) => { for (const s of M.slots) for (const x of s.sessions) if (x.pty === id) { x.updatedAt = Date.now(); x.term.write(data); } });
 synapse.pty.onExit(({ id, code }) => {
-  for (const s of M.slots) for (const x of s.sessions) if (x.pty === id) { x.exited = true; x.term.write(`\r\n\x1b[2m[exited ${code}]\x1b[0m\r\n`); }
+  let crashed = false;
+  for (const s of M.slots) for (const x of s.sessions) if (x.pty === id) { crashed ||= code !== 0 && ![129, 130, 143].includes(code) && x.kind !== 'shell'; x.exited = true; x.term.write(`\r\n\x1b[2m[exited ${code}]\x1b[0m\r\n`); }
+  if (crashed) errorCue(); // an agent that quit with an error; Ctrl-C (130), hangups and closed tabs are not one
   render();
 });
 
@@ -1499,8 +1502,29 @@ async function openSettings() {
     dcb.type = 'checkbox'; dcb.checked = s.notifyDone !== false;
     doneRow.append(dcb, el('span', 'k', 'notify when done'), el('span', 'c', 'a notification when an agent finishes while Synapse is in the background, a toast when you are looking at another one'));
     dcb.onchange = async () => {
-      try { dcb.checked = (await synapse.settings.set({ notifyDone: dcb.checked })).notifyDone; toast(dcb.checked ? 'agents tell you when they are done' : 'no notifications when agents finish'); }
+      try { dcb.checked = CUES.notify = (await synapse.settings.set({ notifyDone: dcb.checked })).notifyDone; toast(dcb.checked ? 'agents tell you when they are done' : 'no notifications when agents finish'); }
       catch (e) { dcb.checked = !dcb.checked; toast(e.message, true); }
+    };
+    // which sound says an agent is done, and whether errors make one (purr); picking one plays it
+    const soundRow = el('div', 'opt set'), seg = el('div', 'seg view-seg sound-seg');
+    const paintSound = (v) => seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.sound === v));
+    for (const [key, label] of Object.entries(DONE_SOUNDS)) {
+      const b = el('button', '', label); b.type = 'button'; b.dataset.sound = key;
+      b.onclick = async (e) => {
+        e.preventDefault();
+        try { CUES.done = (await synapse.settings.set({ doneSound: key })).doneSound; paintSound(CUES.done); if (key !== 'off') playSound(key); }
+        catch (err) { toast(err.message, true); }
+      };
+      seg.append(b);
+    }
+    paintSound(s.doneSound || 'bubbleTap');
+    soundRow.append(el('span', 'k', 'done sound'), el('span', 'c', 'plays when an agent finishes a turn; pick one to hear it'), seg);
+    const errRow = el('label', 'opt set'), ecb = el('input');
+    ecb.type = 'checkbox'; ecb.checked = s.errorSound !== false;
+    errRow.append(ecb, el('span', 'k', 'error sound'), el('span', 'c', 'a low purr when something fails or an agent quits with an error'));
+    ecb.onchange = async () => {
+      try { CUES.error = (await synapse.settings.set({ errorSound: ecb.checked })).errorSound; if (CUES.error) playSound('purr'); }
+      catch (e) { ecb.checked = !ecb.checked; toast(e.message, true); }
     };
     const loginRow = el('label', 'opt set'), lcb = el('input');
     lcb.type = 'checkbox'; lcb.checked = !!s.openAtLogin;
@@ -1534,7 +1558,7 @@ async function openSettings() {
     const tourRow = el('div', 'opt set'), tourBtn = el('button', 'btn', 'replay');
     tourRow.append(el('span', 'k', 'tour'), el('span', 'c', 'the five steps a new install starts with'), tourBtn);
     tourBtn.onclick = () => { close(); showOnboarding(false); };
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), viewRow, themeRow, linkRow, forkRow, doneRow, loginRow, updRow, tourRow);
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), viewRow, themeRow, linkRow, forkRow, doneRow, soundRow, errRow, loginRow, updRow, tourRow);
     const commands = el('div', 'agent-commands'), commandInputs = new Map();
     for (const [kind, profile] of Object.entries(s.profiles || {})) {
       const row = el('label', 'opt set'), input = el('input');
@@ -1603,7 +1627,12 @@ synapse.onLoginSuggest(() => {
 });
 
 let toastTimer = null;
+// the cue settings, loaded at boot and kept in step by the settings sheet
+const CUES = { done: 'bubbleTap', error: true, notify: true };
+synapse.settings.get().then((s) => { CUES.done = s.doneSound || 'bubbleTap'; CUES.error = s.errorSound !== false; CUES.notify = s.notifyDone !== false; }).catch(() => {});
+const errorCue = () => { if (CUES.error) playSound('purr'); };
 function toast(text, sig = false, onClick = null) {
+  if (sig) errorCue();
   const t = $('#toast'); t.textContent = text; t.className = 'toast' + (sig ? ' sig' : '') + (onClick ? ' act' : ''); t.hidden = false;
   t.onclick = onClick && (() => { t.hidden = true; onClick(); });
   clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), onClick ? 6000 : 2600);
@@ -1832,6 +1861,7 @@ function watchTurn(x, a) {
   if (looking) return;
   // a tab still called just "codex" says little with three of them open; the agent's name says which
   const name = x.title && x.title !== x.kind ? x.title : a.name || x.title;
+  if (CUES.done !== 'off' && CUES.notify) playSound(CUES.done);
   if (document.hasFocus()) toast(`✓ ${name} is done · open`, false, () => openTurn(x.pty));
   else synapse.notify.done({ pty: x.pty, title: name, took: long });
 }
@@ -1844,6 +1874,8 @@ function openTurn(pty) {
   top(s)?.term.focus();
 }
 synapse.notify.onOpen(openTurn);
+// the installed app set itself up in the agent CLIs (main.mjs autoSetup): say so once, Settings shows the details
+synapse.integrations.onSetup(({ added }) => toast(`Synapse is set up in your agents: MCP server, hooks and the synapse skill (${added} change${added === 1 ? '' : 's'}). Details in Settings`, false, () => openSettings()));
 synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { requestId, parentPty }));
 
 // ---------------------------------------------------------------- account, trusted people, synapse requests

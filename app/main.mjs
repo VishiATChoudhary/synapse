@@ -676,6 +676,7 @@ app.whenReady().then(() => {
   pollRequests(); setInterval(pollRequests, REQUEST_POLL);
   serveFriends(); setInterval(serveFriends, TALK_CHECK);
   startPhone();
+  setTimeout(autoSetup, 4000);
   if (UPDATES) { setTimeout(() => updater.check(), UPDATE_DELAY); setInterval(() => updater.check(), UPDATE_EVERY); }
   let refreshing = false;
   setInterval(async () => {
@@ -886,7 +887,7 @@ handle('canvas', () => ensureCanvas());
 function setupIntegrations(dry) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [path.join(ROOT, '..', 'install.mjs'), ...(dry ? ['--dry-run'] : [])], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', PATH: userPath() || process.env.PATH, SYNAPSE_HOME: DATA }, stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', PATH: userPath() || process.env.PATH, SYNAPSE_HOME: DATA, ...(process.env.SYNAPSE_USER_HOME ? { HOME: process.env.SYNAPSE_USER_HOME } : {}) }, stdio: ['ignore', 'pipe', 'pipe'], // a test's home stays the home the agent CLIs write to
     });
     let report = '', errors = '';
     const timer = setTimeout(() => { child.kill(); reject(new Error('Agent setup timed out. Try again.')); }, 30000);
@@ -895,6 +896,22 @@ function setupIntegrations(dry) {
     child.on('error', (e) => { clearTimeout(timer); reject(e); });
     child.on('close', (code) => { clearTimeout(timer); code === 0 ? resolve(report) : reject(new Error(errors || report || 'Agent setup failed.')); });
   });
+}
+// The installed app wires itself into the agent CLIs (MCP server, prompt hook, the synapse skill, the `synapse`
+// launcher) on its first launch and again after each update, so nobody has to find "Set up" in Settings. Not from
+// the DMG or Downloads (the paths would point into a volume that goes away) and not in dev or tests, unless
+// SYNAPSE_AUTO_SETUP=1. The tunnel helper for the phone ships inside the app, so it needs nothing here.
+async function autoSetup() {
+  const forced = process.env.SYNAPSE_AUTO_SETUP === '1';
+  if (!forced && (!app.isPackaged || process.env.SYNAPSE_HOME || (process.platform === 'darwin' && !app.isInApplicationsFolder()))) return;
+  const version = app.getVersion();
+  if (!forced && seen().setup === version) return;
+  try {
+    const report = await setupIntegrations(false);
+    writeJSON(SEEN, { ...seen(), setup: version });
+    const added = report.split('\n').filter((l) => l.startsWith('added')).length;
+    if (added) win?.webContents.send('setup:done', { report, added });
+  } catch (e) { console.error('Agent setup:', e.message); }
 }
 handle('integrations:preview', () => setupIntegrations(true));
 handle('integrations:install', () => setupIntegrations(false));
@@ -910,7 +927,7 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, notifyDone: c.notifyDone !== false, talkPerHour: talkPerHour(), talkModel: talkModel() });
+const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel() });
 handle('settings:get', () => settingsOut(config()));
 // an agent finished a turn while Synapse was in the background (the renderer decides when): say so, with the
 // start of its last reply; a click brings that session to the front
@@ -921,12 +938,13 @@ const lastReply = (pty) => {
   const t = said.replace(/\s+/g, ' ').trim();
   return t.length > 140 ? t.slice(0, 139) + '…' : t;
 };
+const DONE_SOUNDS = ['bubbleTap', 'perk', 'off']; // the renderer plays them (app/renderer/sounds.js), so notifications stay silent
 handle('notify:done', ({ pty, title, took }) => {
   if (config().notifyDone === false || !Notification.isSupported() || process.env.SYNAPSE_SHOT) return false;
   const mins = Math.round(took / 60_000);
   let body = '';
   try { body = lastReply(pty); } catch {}
-  const n = new Notification({ title: `${title} is done${mins >= 1 ? ` · ${mins} min` : ''}`, body: body || 'Its turn is over. Click to open it.' });
+  const n = new Notification({ title: `${title} is done${mins >= 1 ? ` · ${mins} min` : ''}`, body: body || 'Its turn is over. Click to open it.', silent: true });
   n.on('click', () => { if (!win) return; win.show(); win.focus(); win.webContents.send('notify:open', pty); });
   n.show();
   return true;
@@ -969,6 +987,8 @@ handle('settings:set', (patch) => {
   if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink;
   if ('autoSendFork' in patch) c.autoSendFork = !!patch.autoSendFork;
   if ('notifyDone' in patch) c.notifyDone = !!patch.notifyDone;
+  if ('doneSound' in patch) c.doneSound = DONE_SOUNDS.includes(patch.doneSound) ? patch.doneSound : 'bubbleTap';
+  if ('errorSound' in patch) c.errorSound = !!patch.errorSound;
   if ('openAtLogin' in patch) setLoginOpen(patch.openAtLogin);
   if ('talkPerHour' in patch) c.talkPerHour = clampPerHour(patch.talkPerHour);
   if ('talkModel' in patch) c.talkModel = ['opus', 'sonnet', 'haiku'].includes(patch.talkModel) ? patch.talkModel : 'agent';
