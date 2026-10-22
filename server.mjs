@@ -389,7 +389,7 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, '127.0.0.1', () => {
   const url = `http://localhost:${server.address().port}`;
   console.log(`synapse running at ${url}`);
-  if (!process.env.NO_OPEN) exec(`open ${url}`);
+  if (!process.env.NO_OPEN) exec(process.platform === 'win32' ? `start "" ${url}` : `open ${url}`);
 });
 
 function shutdown() {

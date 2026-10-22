@@ -37,7 +37,7 @@ if (args.includes('--win')) {
     process.exit(1);
   }
   await fetchCloudflared('win');
-  builder(['--win', 'nsis', '--x64', '--publish', 'never', '--config', CONFIG]);
+  builder(['--win', 'nsis', '--x64', '--config', CONFIG]);
   process.exit(0);
 }
 

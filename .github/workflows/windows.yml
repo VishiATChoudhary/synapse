@@ -1,0 +1,61 @@
+# Windows: the smoke test (agents in a ConPTY, discovery, PowerShell tabs), then the installer, installed silently
+# and opened once for a screenshot of its first window. The installer and the screenshot are kept as artifacts.
+name: windows
+on:
+  push:
+    branches: [windows, main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm ci
+        working-directory: app
+      - name: smoke test
+        shell: pwsh
+        run: |
+          Push-Location app; $electron = node -p "require('electron')" | Select-Object -Last 1; Pop-Location # the first require downloads it
+          $env:ELECTRON_RUN_AS_NODE = '1'
+          $env:SYNAPSE_TEST_LOG = "$env:RUNNER_TEMP\smoke.log"
+          # started on its own, without this console, like the app itself: a console event here would end it too
+          $t = Start-Process -FilePath $electron -ArgumentList 'app\tests\windows.mjs' -PassThru -Wait -WindowStyle Hidden
+          $code = $t.ExitCode; Write-Output "exit code $code"
+          Get-Content $env:SYNAPSE_TEST_LOG
+          if ($code -or !(Select-String -Path $env:SYNAPSE_TEST_LOG -Pattern 'windows suite passed' -Quiet)) { exit 1 }
+      - name: build the installer
+        run: node scripts/build-app.mjs --win
+      - name: install silently and open once
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist\Synapse-Setup-*.exe | Select-Object -First 1
+          Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait
+          $exe = "$env:LOCALAPPDATA\Programs\Synapse\Synapse.exe"
+          if (!(Test-Path $exe)) { Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Depth 1; throw "not installed at $exe" }
+          if (!(Test-Path "$env:LOCALAPPDATA\Programs\Synapse\resources\cloudflared.exe")) { throw 'cloudflared.exe missing' }
+          $env:SYNAPSE_HOME = "$env:RUNNER_TEMP\synapse-home"
+          New-Item -ItemType Directory -Force $env:SYNAPSE_HOME | Out-Null
+          '{"skipLogin": true}' | Set-Content "$env:SYNAPSE_HOME\app.json" # straight to the terminals, past sign-in and the tour
+          $env:SYNAPSE_SHOT = "$env:RUNNER_TEMP\synapse-shot.png"
+          $env:SYNAPSE_SHOT_DELAY = '8000'
+          $env:SYNAPSE_APP_PORT = '4999'
+          $env:SYNAPSE_DEBUG = '1'
+          $p = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP\app.log" -RedirectStandardError "$env:RUNNER_TEMP\app.err"
+          if (!$p.WaitForExit(60000)) { Stop-Process -Id $p.Id -Force; Get-Content "$env:RUNNER_TEMP\app.log", "$env:RUNNER_TEMP\app.err"; throw 'the app did not quit after its screenshot' }
+          Get-Content "$env:RUNNER_TEMP\app.log", "$env:RUNNER_TEMP\app.err"
+          if (!(Test-Path $env:SYNAPSE_SHOT)) { throw 'no screenshot' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synapse-windows
+          path: |
+            dist/Synapse-Setup-*.exe
+            ${{ runner.temp }}/synapse-shot.png
+            ${{ runner.temp }}/app.log
+            ${{ runner.temp }}/app.err
