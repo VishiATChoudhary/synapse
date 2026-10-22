@@ -9,6 +9,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='17' width='12' height='12' rx='3' fill='%232c2925'/%3E%3Crect x='17' y='3' width='12' height='12' rx='3' fill='%23ec642d'/%3E%3Cpath d='m13 19 6-6' stroke='%232c2925' stroke-width='2'/%3E%3C/svg%3E">
   <link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/workspace.css">
+  <link rel="stylesheet" href="/activity.css">
   <script>
     try {
       const saved = localStorage.getItem('synapse-mode');
@@ -37,9 +38,10 @@
         <button class="nav-item" data-view="connections"><span data-icon="network"></span><span>Connections</span><span class="nav-count" id="connection-count">0</span></button>
       </nav>
       <div class="projects-heading"><span>Projects</span><span class="count" id="project-count"></span></div>
+      <p class="sr-only" id="sidebar-order-status" role="status" aria-live="polite"></p>
       <div class="project-list" id="project-list"><p class="sidebar-placeholder">Finding your sessions…</p></div>
       <div class="sidebar-bottom">
-        <button class="nav-item desktop-only" id="desktop-activity"><span data-icon="grid"></span><span>Activity</span></button>
+        <button class="nav-item desktop-only" id="desktop-activity" data-view="activity"><span data-icon="grid"></span><span>Activity</span></button>
         <button class="nav-item desktop-only" id="desktop-account"><span data-icon="monitor"></span><span>Account &amp; sharing</span></button>
         <a href="/canvas" class="nav-item canvas-link"><span data-icon="canvas"></span><span>Open canvas</span><span data-icon="external" class="trailing-icon"></span></a>
         <div class="local-workspace">
@@ -92,6 +94,9 @@
           <div class="page-heading"><div><p class="page-kicker">Context, shared</p><h1 id="connections-title">Connections</h1><p class="page-description">Give your agents the context they need from each other.</p></div><button class="button secondary" id="new-connection"><span data-icon="plus"></span>Add connection</button></div>
           <div id="connections-list" class="connections-list"></div>
         </section>
+        <section class="activity activity-view" id="activity-view" aria-label="Activity" tabindex="-1" hidden></section>
+        <section class="canvas-view" id="canvas-view" aria-label="Agent canvas" hidden><iframe id="gui-canvas" title="Synapse agent canvas"></iframe></section>
+        <section class="split-view" id="split-view" aria-label="Split conversations" hidden></section>
         <aside class="inspector" id="inspector" aria-label="Session details" hidden></aside>
       </div>
     </main>

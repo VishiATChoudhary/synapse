@@ -36,6 +36,8 @@ const STATIC = new Map([
   ['/canvas.html', ['public/index.html', 'text/html']],
   ['/workspace.css', ['public/workspace.css', 'text/css']],
   ['/workspace.mjs', ['public/workspace.mjs', 'text/javascript']],
+  ['/activity.mjs', ['public/activity.mjs', 'text/javascript']],
+  ['/activity.css', ['public/activity.css', 'text/css']],
   ['/tokens.css', ['tokens.css', 'text/css']],
 ]);
 // Agent talk conversations for the canvas, both sides. `live` says what the thread is doing right now:

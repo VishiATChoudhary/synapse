@@ -12,6 +12,8 @@ body { padding-top: 48px; grid-template-rows: calc(100vh - 48px); }
 .desktop-title { flex: 1; color: var(--color-muted); font-size: 12px; }
 #desktop-workspace { position: fixed; inset: 48px 0 0; z-index: 24; background: var(--color-paper); }
 #workspace-frame { width: 100%; height: 100%; border: 0; display: block; }
+#workspace-error { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: var(--color-paper); color: var(--color-ink); font: var(--text-base)/1.5 var(--font-body); }
+#workspace-error button { padding: 8px 16px; border-radius: var(--radius-sm); background: var(--color-button); color: var(--color-button-ink); }
 body.gui-mode > .side, body.gui-mode > .main { visibility: hidden; pointer-events: none; }
 body.gui-mode > .grain { display: none; }
 body > .side .side-head { padding-left: 18px; }
@@ -26,4 +28,9 @@ body.gui-mode .modal-title { font: 600 20px/1.3 var(--font-body); text-transform
 body.gui-mode .modal .btn { font-family: var(--font-body); text-transform: none; font-size: 13px; }
 body.gui-mode .modal .sub { font-family: var(--font-body); text-transform: none; font-weight: 600; font-size: 13px; }
 body.gui-mode .modal .k { font-family: var(--font-body); text-transform: none; font-size: 12px; }
+body.gui-mode .fan { inset: 48px 0 0; z-index: 26; --paper: var(--color-paper); --ink: var(--color-ink); --ink-2: var(--color-secondary); --ink-3: var(--color-muted); --rule: var(--color-border); --sig: var(--color-accent); --display: var(--font-body); }
+body.gui-mode .fan-title { text-transform: none; }
+body.gui-mode .fan-title b { font: 600 var(--text-lg)/1.2 var(--font-body); letter-spacing: 0; }
+body.gui-mode .fcard { border-radius: var(--radius-sm); }
+body.gui-mode .menu { --paper: var(--color-paper); --ink: var(--color-ink); --ink-2: var(--color-secondary); --rule: var(--color-border); border-radius: var(--radius-sm); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

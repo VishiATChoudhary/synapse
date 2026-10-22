@@ -1,6 +1,6 @@
 {
   "name": "synapse",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "See every coding agent on your machine as a live node, link them, and let them share context and message each other",
   "type": "module",
   "license": "MIT",
@@ -21,7 +21,7 @@
     "mobile": "npm --prefix mobile start",
     "app": "npm --prefix app start",
     "app:setup": "npm ci && npm --prefix app ci",
-    "test:desktop": "node app/tests/restore.cjs && node app/tests/desktop.cjs"
+    "test:desktop": "node app/tests/restore.cjs && node app/tests/desktop.cjs && node app/tests/gui.cjs"
   },
   "keywords": [
     "claude-code",

@@ -2,6 +2,7 @@
 // sidebar, the deck of cards, the terminals and the fan-out tree. PTYs live in the main process.
 import { Terminal } from '../node_modules/@xterm/xterm/lib/xterm.mjs';
 import { FitAddon } from '../node_modules/@xterm/addon-fit/lib/addon-fit.mjs';
+import { createActivityView } from '../../public/activity.mjs';
 
 const $ = (s) => document.querySelector(s);
 // Windows has no ⌘: the app's shortcuts are Ctrl+Shift+key there (Alt adds what ⇧ adds on a Mac), and every
@@ -71,6 +72,7 @@ function selectSession(s, id = top(s)?.id) {
   if (id != null) focusPath(s, id);
   closeCanvas();
   render();
+  if (workspaceOpen && top(s)) workspacePost({ type: 'synapse:desktop-navigate', view: 'session', id: `desktop-${top(s).key}` });
   if (!workspaceOpen && $('#modal').hidden && !fanOpen) top(s)?.term.focus();
 }
 
@@ -209,7 +211,7 @@ function splitShell(direction) {
   const wt = s?.worktree || M.projects[0]?.worktrees[0]?.path;
   if (!wt) return toast('add a workspace first', true);
   if (fanOpen) closeFan();
-  newSlot(wt, 'shell', s ? { target: s.id, direction } : null);
+  return newSlot(wt, 'shell', s ? { target: s.id, direction } : null);
 }
 
 function paneIds(node) {
@@ -499,9 +501,9 @@ function moveItem(list, item, target, side) {
 function moveWorktree(key, from, to, side) {
   // state refreshes replace M.projects while a drag is on: move it in the current one
   const p = M.projects.find((x) => x.key === key);
-  if (!p) return;
+  if (!p || !p.worktrees.some((w) => w.path === from) || !p.worktrees.some((w) => w.path === to)) return Promise.resolve();
   p.worktrees = moveItem(p.worktrees, p.worktrees.find((w) => w.path === from), p.worktrees.find((w) => w.path === to), side);
-  synapse.worktree.order(p.worktrees.map((w) => w.path)).catch((e) => toast(e.message, true));
+  return synapse.worktree.order(p.worktrees.map((w) => w.path));
 }
 // folding a workspace slides its worktrees shut (or open) instead of snapping; the tree holds still meanwhile
 let folding = false;
@@ -526,8 +528,9 @@ function foldProject(key) {
 }
 function moveProject(key, targetKey, side) {
   const by = (k) => M.projects.find((p) => p.key === k);
+  if (!by(key) || !by(targetKey)) return Promise.resolve();
   M.projects = moveItem(M.projects, by(key), by(targetKey), side);
-  synapse.project.order(M.projects.map((p) => p.key)).catch((e) => toast(e.message, true));
+  return synapse.project.order(M.projects.map((p) => p.key));
 }
 
 let nameClick = null, nameEdit = null, namePointer = false;
@@ -652,7 +655,7 @@ function renderTree() {
     add.onclick = (e) => { e.stopPropagation(); promptWorktree(p); };
     head.appendChild(add);
     head.onclick = toggleProject;
-    sortable(head, box, '.proj', (t, side) => moveProject(p.key, t.dataset.key, side));
+    sortable(head, box, '.proj', (t, side) => moveProject(p.key, t.dataset.key, side).catch((e) => toast(e.message, true)));
     box.appendChild(head);
     if (M.open.has(p.key)) {
       for (const w of p.worktrees) {
@@ -672,7 +675,7 @@ function renderTree() {
         wa.onclick = (e) => { e.stopPropagation(); pickProfile(w.path); };
         wh.appendChild(wa);
         wh.onclick = selectWorktree;
-        sortable(wh, wt, '.wt', (t, side) => moveWorktree(p.key, w.path, t.dataset.path, side));
+        sortable(wh, wt, '.wt', (t, side) => moveWorktree(p.key, w.path, t.dataset.path, side).catch((e) => toast(e.message, true)));
         wt.appendChild(wh);
         for (const s of M.slots.filter((s) => s.worktree === w.path)) {
           n++;
@@ -934,7 +937,7 @@ function openFan(refresh = false) {
   $('#fan-meta').textContent = `${wt ? `${wt.project.label} / ${wt.worktree.name}` : ''}  ·  ${s.sessions.length} sessions  ·  depth ${s.path.length}`;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   inner.appendChild(svg);
-  const deckRects = new Map([...$('#deck').querySelectorAll('.card')].map((c, i) => [Number(c.dataset.session), c.getBoundingClientRect()]));
+  const deckRects = new Map(workspaceOpen ? [] : [...$('#deck').querySelectorAll('.card')].map((c, i) => [Number(c.dataset.session), c.getBoundingClientRect()]));
   const fanRect = inner.getBoundingClientRect();
   for (const n of nodes) {
     const x = n.x;
@@ -985,7 +988,7 @@ function openFan(refresh = false) {
     }
   }
 }
-function closeFan() { fanOpen = false; $('#fan').hidden = true; top(focusedSlot())?.term.focus(); }
+function closeFan() { fanOpen = false; $('#fan').hidden = true; if (workspaceOpen) workspaceFrame.focus(); else top(focusedSlot())?.term.focus(); }
 $('#fan-esc').onclick = closeFan;
 $('#fan').addEventListener('click', (e) => { if (e.target === $('#fan') || e.target === $('#fan-inner')) closeFan(); });
 
@@ -1416,24 +1419,23 @@ function openTalk(id) {
   if (!$('#modal').hidden) $('#modal').hidden = true;
   closePop();
   openCanvas();
-  if (canvasLive) tellCanvas({ action: 'thread', conv: id }); else pendingThread = id;
+  if (workspaceOpen || canvasLive) tellCanvas({ action: 'thread', conv: id }); else pendingThread = id;
 }
 synapse.talks.onOpen(openTalk);
 // right-click in the node view: the canvas reports what was hit, the menu is ours
-const tellCanvas = (d) => $('#canvas-frame').contentWindow?.postMessage({ type: 'synapse:do', ...d }, '*');
+const tellCanvas = (d) => workspaceOpen ? workspacePost({ type: 'synapse:canvas-action', action: d }) : $('#canvas-frame').contentWindow?.postMessage({ type: 'synapse:do', ...d }, '*');
 // start an agent in a folder that may not be in the sidebar yet: add it first, so the session has a row
 async function agentIn(cwd, kind) {
-  try { const dir = await synapse.project.add(cwd); await refresh(); const wt = worktreeOf(dir); if (wt) M.open.add(wt.project.key); if (kind) newSlot(dir, kind); else toast(`${dir.split('/').pop()} added to the sidebar`); }
+  try { const dir = await synapse.project.add(cwd); await refresh(); const wt = worktreeOf(dir); if (wt) M.open.add(wt.project.key); if (kind) { await newSlot(dir, kind); if (workspaceOpen && focusedSlot()) selectSession(focusedSlot()); } else toast(`${dir.split('/').pop()} added to the sidebar`); }
   catch (e) { toast(e.message, true); }
 }
 const agentMenuIn = (cwd) => profileOrder().map((k) => ({ label: M.profiles[k].label || k, run: () => agentIn(cwd, k) }));
-function canvasMenu({ hit, agent, group, x, y }) {
-  const r = $('#canvas-frame').getBoundingClientRect();
+function canvasMenu({ hit, agent, group, x, y }, r = $('#canvas-frame').getBoundingClientRect()) {
   const items = [];
   if (hit === 'node' && agent) {
     const ptyId = Object.keys(M.agents).find((k) => M.agents[k].synapseId === agent.id);
     const mine = ptyId && M.slots.find((s) => s.sessions.some((z) => z.pty === ptyId));
-    if (mine) items.push(...sessionActions(mine, mine.sessions.find((q) => q.pty === ptyId)), '-', { label: 'Open session', run: () => { const z = mine.sessions.find((q) => q.pty === ptyId); M.focused = mine.id; focusPath(mine, z.id); if (canvasOpen) toggleCanvas(); render(); } });
+    if (mine) items.push(...sessionActions(mine, mine.sessions.find((q) => q.pty === ptyId)), '-', { label: 'Open session', run: () => { const z = mine.sessions.find((q) => q.pty === ptyId); selectSession(mine, z.id); } });
     if (!mine) {
       const kids = agent.children || [];
       const collapse = (k) => { tellCanvas({ action: 'collapse-branch', id: k.id }); linkToParent(k.id, agent.id, k.name); };
@@ -1662,6 +1664,7 @@ function showCanvas(open) {
 }
 
 async function openCanvas() {
+  if (workspaceOpen) { workspacePost({ type: 'synapse:desktop-navigate', view: 'canvas' }); return; }
   // history.back() is asynchronous: finish removing the old entry before pushing another.
   if (canvasBackPending) { reopenCanvas = true; return; }
   if (canvasOpen) return;
@@ -1693,7 +1696,7 @@ function closeCanvas(fromHistory = false) {
   }
 }
 
-function toggleCanvas() { if (workspaceOpen) showWorkspace(false); if (canvasOpen || reopenCanvas) closeCanvas(); else openCanvas(); }
+function toggleCanvas() { if (workspaceOpen) return workspacePost({ type: 'synapse:desktop-navigate', view: 'canvas', toggle: true }); if (canvasOpen || reopenCanvas) closeCanvas(); else openCanvas(); }
 addEventListener('popstate', () => {
   const reopen = reopenCanvas;
   canvasBackPending = false; reopenCanvas = false;
@@ -1704,8 +1707,9 @@ $('#btn-canvas').onclick = toggleCanvas;
 
 // ---------------------------------------------------------------- activity
 // Your year at a glance: GitHub contributions and prompts to your agents as heatmaps, with a streak, a level and badges.
-let activityOpen = false, activityAt = 0;
+let activityOpen = false;
 function showActivity(open) {
+  if (workspaceOpen) { workspacePost({ type: 'synapse:desktop-navigate', view: open ? 'activity' : 'back' }); return; }
   activityOpen = open;
   $('#activity').hidden = !open;
   $('#btn-activity').classList.toggle('on', open);
@@ -1715,121 +1719,10 @@ function showActivity(open) {
 }
 $('#btn-activity').onclick = () => showActivity(!activityOpen);
 $('#activity').onkeydown = (e) => { if (e.key === 'Escape') showActivity(false); };
-synapse.activity.onProgress(({ done, total }) => { const p = $('#activity .act-loading'); if (p) p.textContent = `counting your year · ${done} of ${total} conversations`; });
+synapse.activity.onProgress((progress) => { activityView.progress(progress); workspacePost({ type: 'synapse:activity-progress', progress }); });
 
-const fmt = (n) => n.toLocaleString('en-US');
-const compact = (n) => n.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 });
-const dayKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-// 53 weeks of days, Sunday on top, like GitHub's; four shades split at the busiest tenth of active days
-function heatmap(days, unit) {
-  const wrap = el('div', 'act-map'), months = el('div', 'act-months'), grid = el('div', 'act-grid');
-  const end = new Date(); end.setHours(12, 0, 0, 0);
-  const start = new Date(end); start.setDate(start.getDate() - 52 * 7 - end.getDay());
-  const vals = Object.values(days).filter(Boolean).sort((x, y) => x - y);
-  const hi = vals[Math.floor(vals.length * 0.9)] || 1;
-  let col = 0, lastMonth = -1;
-  for (const d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    if (d.getDay() === 0) {
-      if (d.getMonth() !== lastMonth && col < 51) { const m = el('span', '', d.toLocaleDateString('en-US', { month: 'short' })); m.style.gridArea = `1 / ${col + 1} / 2 / span 3`; months.appendChild(m); lastMonth = d.getMonth(); }
-      col++;
-    }
-    const n = days[dayKey(d)] || 0, cell = el('i', `l${n ? Math.min(4, Math.ceil((4 * n) / hi)) : 0}`);
-    cell.title = `${n ? fmt(n) : 'no'} ${n === 1 ? unit.replace(/s$/, '') : unit} · ${d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}`;
-    grid.appendChild(cell);
-  }
-  const legend = el('div', 'act-legend');
-  legend.append(el('span', '', 'less'), ...[0, 1, 2, 3, 4].map((l) => el('i', `l${l}`)), el('span', '', 'more'));
-  wrap.append(months, grid, legend);
-  return wrap;
-}
-
-async function drawActivity() {
-  const box = $('#activity');
-  if (box.dataset.ready && Date.now() - activityAt < 60_000) return;
-  if (!box.dataset.ready) box.replaceChildren(el('div', 'act-loading', 'counting your year…'));
-  let a;
-  try { a = await synapse.activity.get(); } catch (e) { if (!box.dataset.ready) box.replaceChildren(el('div', 'act-loading', e.message)); return; }
-  activityAt = Date.now(); box.dataset.ready = '1';
-  const page = el('div', 'act-page');
-  const head = el('div', 'act-head'), lvl = el('div', 'act-level'), bar = el('div', 'act-xp'), fill = el('span');
-  fill.style.width = `${Math.round((100 * (a.xp - a.levelFrom)) / (a.levelTo - a.levelFrom))}%`;
-  bar.appendChild(fill);
-  lvl.append(el('div', 'act-lvl', `level ${a.level}`), bar, el('div', 'act-cap', `${fmt(a.xp)} XP · ${fmt(a.levelTo - a.xp)} to level ${a.level + 1}`));
-  head.append(el('div', 'act-title', 'Activity'), lvl);
-  const tiles = el('div', 'act-tiles');
-  const tile = (n, label, hot) => { const t = el('div', 'act-tile' + (hot ? ' hot' : '')); t.append(el('b', '', n), el('span', '', label)); return t; };
-  const codeWord = a.github ? 'contributions' : 'commits';
-  tiles.append(
-    tile(fmt(a.streak), 'day streak', a.streak > 0),
-    tile(fmt(a.longest), 'best streak'),
-    tile(fmt(a.totals.code), codeWord),
-    tile(fmt(a.totals.claude + a.totals.codex), 'prompts'),
-    tile(compact(a.totals.tokens), 'tokens'),
-    tile(compact(a.totals.todayTokens), 'tokens today'),
-  );
-  const section = (title, sub, map) => { const s = el('div', 'act-sec'), h = el('div', 'act-sec-head'); h.append(el('span', 'act-sec-t', title), el('span', 'act-sec-s', sub)); s.append(h, map); return s; };
-  const agents = {};
-  for (const k of ['claude', 'codex']) for (const [d, n] of Object.entries(a.prompts[k])) agents[d] = (agents[d] || 0) + n;
-  const code = a.github
-    ? section(`GitHub · @${a.github.login}`, `${fmt(a.totals.code)} contributions in the last year`, heatmap(a.github.days, 'contributions'))
-    : section('Commits', `${fmt(a.totals.code)} in your workspaces · sign in to the gh CLI to see GitHub here`, heatmap(a.commits, 'commits'));
-  const tokenDays = Object.fromEntries(Object.entries(a.tokens).map(([d, t]) => [d, t.all]));
-  const models = el('div', 'act-models'), top = a.models[0]?.tokens || 1;
-  for (const m of a.models.slice(0, 8)) {
-    const row = el('div', 'act-model'), bar = el('span', 'bar'), fill = el('i');
-    fill.style.width = `${Math.max(1, (100 * m.tokens) / top)}%`; bar.appendChild(fill);
-    row.append(el('span', 'name', m.name), bar, el('span', 'n', compact(m.tokens)));
-    models.appendChild(row);
-  }
-  const tokens = section('Tokens', `${compact(a.totals.tokens)} read and written · ${compact(a.totals.tokensOut)} written by your agents`, heatmap(tokenDays, 'tokens'));
-  if (a.models.length) tokens.appendChild(models);
-  const badges = el('div', 'act-badges');
-  for (const b of a.badges) { const c = el('div', 'act-badge' + (b.got ? ' got' : '')); c.append(el('b', '', b.name), el('span', '', b.what)); badges.appendChild(c); }
-  const friends = section('Friends this week', 'the last 7 days, next to the people you trust', el('div', 'act-board'));
-  drawBoard(friends.querySelector('.act-board'));
-  page.append(head, tiles, friends, code,
-    section('Agents', `${fmt(a.totals.claude)} prompts to Claude · ${fmt(a.totals.codex)} to Codex`, heatmap(agents, 'prompts')),
-    tokens,
-    section('Badges', `${a.badges.filter((b) => b.got).length} of ${a.badges.length}`, badges),
-    el('div', 'act-foot', 'counted on this Mac from your repos and agent conversations · esc closes'));
-  box.replaceChildren(page);
-}
-// the friends board: you and the people you trust both ways who joined, ranked by one number at a time
-let boardBy = 'tokens';
-const BOARD_BY = [['tokens', 'tokens', compact], ['prompts', 'prompts', fmt], ['activeDays', 'active days', fmt], ['streak', 'streak', fmt]];
-async function drawBoard(box, act) {
-  let b;
-  try { b = await (act ? synapse.board[act]() : synapse.board.get()); } catch (e) { box.replaceChildren(el('div', 'act-board-note', e.message)); return; }
-  const note = (text, button, onClick) => {
-    const n = el('div', 'act-board-join');
-    n.append(el('p', '', text));
-    if (button) { const go = el('button', 'btn sig', button); go.onclick = async () => { go.disabled = true; go.textContent = 'counting…'; await drawBoard(box, onClick); }; n.appendChild(go); }
-    box.replaceChildren(n);
-  };
-  if (!b.signedIn) return note('Sign in to Synapse (settings) to compete with the people you trust.');
-  if (!b.joined) return note(`See how your week compares with the people you trust. Joining shows them your last 7 days: tokens, prompts, commits, active days and streak.${b.waiting ? ` ${b.waiting} of them ${b.waiting === 1 ? 'is' : 'are'} on the board already.` : ''}`, 'join the board', 'join');
-  const [key, , show] = BOARD_BY.find((x) => x[0] === boardBy);
-  const people = [...b.people].sort((x, y) => (y[key] || 0) - (x[key] || 0));
-  const top = Math.max(1, people[0]?.[key] || 0);
-  const tabs = el('div', 'act-board-by');
-  for (const [k, label] of BOARD_BY) { const t = el('button', k === boardBy ? 'on' : '', label); t.onclick = () => { boardBy = k; drawBoard(box); }; tabs.appendChild(t); }
-  const list = el('div', 'act-board-list');
-  people.forEach((p, i) => {
-    const row = el('div', 'act-rank' + (p.me ? ' me' : '') + (i === 0 && people.length > 1 ? ' first' : ''));
-    const who = el('div', 'who');
-    who.append(el('b', '', p.me ? 'You' : p.name || p.handle), el('span', '', p.handle ? `@${p.handle}` : ''));
-    const bar = el('span', 'bar'), fill = el('i');
-    fill.style.width = `${Math.max(1.5, (100 * (p[key] || 0)) / top)}%`; bar.appendChild(fill);
-    row.append(el('span', 'pos', String(i + 1)), who, bar, el('span', 'n', show(p[key] || 0)));
-    list.appendChild(row);
-  });
-  const foot = el('div', 'act-board-foot');
-  if (people.length === 1) foot.appendChild(el('span', '', 'Nobody you trust has joined yet. When they do, they show up here.'));
-  const leave = el('button', 'act-board-leave', 'leave the board');
-  leave.onclick = () => drawBoard(box, 'leave');
-  foot.appendChild(leave);
-  box.replaceChildren(tabs, list, foot);
-}
+const activityView = createActivityView($('#activity'), { get: () => synapse.activity.get(), board: synapse.board });
+const drawActivity = () => activityView.refresh();
 
 for (const type of ['mouseup', 'auxclick']) addEventListener(type, (ev) => {
   if (ev.button !== 3 && ev.button !== 4) return;
@@ -1857,7 +1750,7 @@ addEventListener('message', (ev) => {
   toast(`${name || id} runs outside this app${pid ? ` (pid ${pid})` : ''}`, true);
 });
 synapse.onCanvasToggle(toggleCanvas);
-synapse.onCanvasBack(() => closeCanvas());
+synapse.onCanvasBack(() => workspaceOpen ? workspacePost({ type: 'synapse:desktop-navigate', view: 'back' }) : closeCanvas());
 
 function toggleTheme() {
   const next = document.documentElement.dataset.theme === 'night' ? 'signal' : 'night';
@@ -1926,7 +1819,7 @@ function watchTurn(x, a) {
   x.turnSince = 0;
   if (long < TURN_MIN || x.exited) return;
   const s = M.slots.find((sl) => sl.sessions.includes(x));
-  const looking = document.hasFocus() && !canvasOpen && $('#modal').hidden && s && focusedSlot() === s && top(s) === x;
+  const looking = document.hasFocus() && !canvasOpen && !fanOpen && (!workspaceOpen || workspaceView === 'session') && $('#modal').hidden && s && focusedSlot() === s && top(s) === x;
   if (looking) return;
   // a tab still called just "codex" says little with three of them open; the agent's name says which
   const name = x.title && x.title !== x.kind ? x.title : a.name || x.title;
@@ -2752,17 +2645,25 @@ const ageOf = (t) => { const m = Math.max(0, Math.round((Date.now() - (t || 0)) 
 
 // The GUI and terminal renderer keep one session model and one PTY per session.
 // Only this packaged renderer owns native capabilities; the local page gets an allowlisted bridge.
-let workspaceOpen = false, workspaceReady = null, workspaceLive = false, workspaceSignature = '';
+let workspaceOpen = false, workspaceReady = null, workspaceLive = false, workspaceSignature = '', workspaceView = 'session';
 const workspaceFrame = $('#workspace-frame');
 const workspacePost = (data) => {
   if (workspaceLive && workspaceFrame.src) workspaceFrame.contentWindow.postMessage(data, new URL(workspaceFrame.src).origin);
 };
 function workspaceState() {
+  const pane = (node) => {
+    if (typeof node !== 'number') return { direction: node.direction, first: pane(node.first), second: pane(node.second) };
+    const s = slot(node);
+    return s && top(s) ? { key: `pane-${root(s).key}`, id: `desktop-${top(s).key}` } : null;
+  };
+  const layout = M.layouts.find((node) => paneIds(node).includes(M.focused));
   return {
     projects: M.projects, profiles: M.profiles, theme: document.documentElement.dataset.theme,
+    layout: layout == null ? null : pane(layout),
     active: top(focusedSlot()) ? `desktop-${top(focusedSlot()).key}` : null,
     sessions: M.slots.flatMap((s) => s.sessions.map((x) => ({
       id: `desktop-${x.key}`, pty: x.pty, pid: x.pid, backendId: M.agents[x.pty]?.synapseId || null,
+      pane: `pane-${root(s).key}`,
       name: M.agents[x.pty]?.name || x.title, kind: x.kind, cwd: s.worktree,
       projectKey: worktreeOf(s.worktree)?.project.key || s.worktree,
       project: worktreeOf(s.worktree)?.project.label || s.worktree.split('/').pop(),
@@ -2780,23 +2681,29 @@ function syncWorkspace(force = false) {
   workspacePost({ type: 'synapse:desktop-state', state });
 }
 function showWorkspace(open) {
+  if (open !== workspaceOpen && fanOpen) closeFan();
   workspaceOpen = open;
+  $('.side').inert = $('.main').inert = open;
+  $('#desktop-workspace').inert = !open;
+  $('.side').setAttribute('aria-hidden', String(open)); $('.main').setAttribute('aria-hidden', String(open));
   workspacePost({ type: 'synapse:desktop-visibility', visible: open });
   $('#desktop-workspace').hidden = !open;
   document.body.classList.toggle('gui-mode', open);
   $('#mode-gui').setAttribute('aria-pressed', String(open));
   $('#mode-terminal').setAttribute('aria-pressed', String(!open));
   localStorage.setItem('synapse-desktop-view', open ? 'gui' : 'terminal');
-  if (open) { closeCanvas(); if (activityOpen) showActivity(false); syncWorkspace(true); }
-  else { render(); top(focusedSlot())?.term.focus(); }
+  if (open) { closeCanvas(); syncWorkspace(true); }
+  else { render(); if (activityOpen) $('#activity').focus(); else top(focusedSlot())?.term.focus(); }
 }
 async function openWorkspace() {
   showWorkspace(true);
+  $('#workspace-error').hidden = true;
   try {
     workspaceReady ||= synapse.canvas().then((url) => { workspaceFrame.src = `${url}?desktop=1`; }).catch((e) => { workspaceReady = null; throw e; });
     await workspaceReady;
-  } catch (e) { showWorkspace(false); toast(e.message, true); }
+  } catch (e) { $('#workspace-error p').textContent = e.message; $('#workspace-error').hidden = false; }
 }
+$('#workspace-retry').onclick = () => { workspaceReady = null; openWorkspace(); };
 const ownSession = (id) => {
   for (const s of M.slots) {
     const x = s.sessions.find((x) => `desktop-${x.key}` === id);
@@ -2807,6 +2714,31 @@ const ownSession = (id) => {
 async function desktopAction(action, args) {
   switch (action) {
     case 'state': return workspaceState();
+    case 'view': if (['session', 'overview', 'connections', 'activity', 'canvas'].includes(args.view)) workspaceView = args.view; return;
+    case 'reorder': {
+      if (!['before', 'after'].includes(args.side)) throw new Error('Choose a valid position.');
+      if (args.kind === 'project') {
+        if (![args.from, args.to].every((key) => M.projects.some((p) => p.key === key))) throw new Error('This project is no longer open.');
+        await moveProject(args.from, args.to, args.side);
+      } else if (args.kind === 'worktree') {
+        const p = M.projects.find((p) => p.worktrees.some((w) => w.path === args.from));
+        if (!p?.worktrees.some((w) => w.path === args.to)) throw new Error('Reorder worktrees within the same project.');
+        await moveWorktree(p.key, args.from, args.to, args.side);
+      } else if (args.kind === 'session') {
+        const from = ownSession(args.from), to = ownSession(args.to);
+        if (from.s.worktree !== to.s.worktree || from.x.parent !== to.x.parent) throw new Error('Reorder sessions within the same worktree and parent.');
+        if (from.x.parent == null) M.slots = moveItem(M.slots, from.s, to.s, args.side);
+        else {
+          if (from.s !== to.s) throw new Error('Reorder forks of the same parent.');
+          from.s.sessions = moveItem(from.s.sessions, from.x, to.x, args.side);
+          const walk = (parent = null) => children(from.s, parent).flatMap((x) => [x, ...walk(x.id)]);
+          from.s.sessions = walk();
+        }
+      } else throw new Error('Choose a project, worktree, or session to reorder.');
+      if (persist) { const saved = snapshot(); await synapse.sessions.save(saved); lastSaved = JSON.stringify(saved); }
+      render();
+      return workspaceState();
+    }
     case 'preference': return synapse.workspace.save(args.key, args.value);
     case 'new-session': {
       if (!M.projects.some((p) => p.worktrees.some((w) => w.path === args.cwd))) throw new Error('Choose an open project.');
@@ -2867,10 +2799,17 @@ async function desktopAction(action, args) {
     }
     case 'settings': return openSettings();
     case 'account': return openAccount();
-    case 'canvas': showWorkspace(false); return openCanvas();
-    case 'activity': showWorkspace(false); return showActivity(true);
-    case 'fork-tree': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } showWorkspace(false); return openFan(); }
-    case 'split': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } showWorkspace(false); return splitShell(args.direction === 'down' ? 'down' : 'right'); }
+    case 'canvas': return openCanvas();
+    case 'canvas-ready': syncCanvasBranches(); return;
+    case 'canvas-menu': return canvasMenu(args, { left: 0, top: 48 });
+    case 'switch-session': if (/^[1-9\[\]]$/.test(args.key)) switchSession(args.key); return;
+    case 'activity': workspacePost({ type: 'synapse:desktop-navigate', view: 'activity' }); return;
+    case 'activity:get': return synapse.activity.get();
+    case 'board:get': return synapse.board.get();
+    case 'board:join': return synapse.board.join();
+    case 'board:leave': return synapse.board.leave();
+    case 'fork-tree': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } return openFan(); }
+    case 'split': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } await splitShell(args.direction === 'down' ? 'down' : 'right'); return workspaceState(); }
     case 'theme': { if (['night', 'signal'].includes(args.theme)) { document.documentElement.dataset.theme = args.theme; localStorage.setItem('synapse-mode', args.theme); for (const s of M.slots) for (const x of s.sessions) x.term.options.theme = termTheme(); sendTheme(); } return; }
     default: throw new Error('Unknown workspace action.');
   }

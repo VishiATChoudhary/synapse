@@ -56,7 +56,7 @@ if (!isMainThread) {
           }
         } catch { /* A session may exit while its transcript is being scanned. */ }
         const project = projectOfAgent(agent), wt = project.worktree;
-        return { ...agent, project: project.label, projectKey: project.key, color: colorOf(project.key), projectAuto: project.autoLabel, frameKey: wt ? `${project.key}#${wt.path}` : project.key, frame: wt ? `${project.label} / ${wt.name}` : project.label, frameSub: wt?.name || null, lastActivity, preview };
+        return { ...agent, project: project.label, projectKey: project.key, color: colorOf(project.key), projectAuto: project.autoLabel, frameKey: wt ? `${project.key}#${wt.path}` : project.key, frame: wt ? `${project.label} / ${wt.name}` : project.label, frameSub: wt?.name || null, worktreePath: wt?.path || (project.key.startsWith('project:') ? agent.cwd : project.key), worktreeName: wt?.name || 'Main checkout', worktreeHome: !wt, lastActivity, preview };
       });
       const live = new Set(agents.map((agent) => agent.id));
       for (const id of previews.keys()) if (!live.has(id)) previews.delete(id);

@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { renderMarkdown, searchSessions } from '../public/workspace.mjs';
+import { renderMarkdown, searchSessions, sessionTree } from '../public/workspace.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 let child, home, base;
@@ -67,6 +67,21 @@ test('search matches multiple words across project, provider, and folder', () =>
   assert.deepEqual(searchSessions(agents, 'checkout /dev').map((agent) => agent.id), ['two']);
   assert.deepEqual(searchSessions(agents, 'codex web'), []);
   assert.equal(searchSessions(agents, '')[0].id, 'two');
+});
+
+test('session trees preserve fork depth, sibling order, and orphaned sessions', () => {
+  const agents = [
+    { id: 'child-two', parent: 'root' }, { id: 'grandchild', parent: 'child-one' },
+    { id: 'root', parent: null }, { id: 'child-one', parent: 'root' },
+    { id: 'other', parent: null }, { id: 'orphan', parent: 'gone' },
+  ];
+  const tree = sessionTree(agents);
+  assert.deepEqual(tree.map((n) => n.agent.id), ['root', 'other', 'orphan']);
+  assert.deepEqual(tree[0].children.map((n) => n.agent.id), ['child-two', 'child-one']);
+  assert.equal(tree[0].children[1].children[0].agent.id, 'grandchild');
+  const cycle = sessionTree([{ id: 'a', forkOf: 'b' }, { id: 'b', forkOf: 'a' }]);
+  assert.equal(cycle.length, 1);
+  assert.equal(cycle[0].children[0].children.length, 0);
 });
 
 test('the GUI and original canvas are available without dependencies', async () => {

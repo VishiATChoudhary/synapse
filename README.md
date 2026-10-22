@@ -38,7 +38,11 @@ the same live processes, worktrees and fork trees. Switching never restarts an a
 - Start Claude Code, Codex, Gemini, OpenCode, Cursor, Copilot, Amp or a shell from **New session**.
 - Send prompts in the GUI; use **Open in Terminal** for sign-in, approvals and interactive CLI controls.
 - Add, create or clone projects, open Git branches/worktrees, and fork conversations (Claude Code and Codex).
-- Use Terminal mode for split panes, fork-tree navigation, drag ordering and the complete keyboard controls.
+- The GUI sidebar nests projects, worktrees, sessions and forks. Drag siblings to reorder them, or use
+  **⌥↑ / ⌥↓** on a focused row. The order is shared with Terminal mode and saved across restarts.
+- Split GUI conversations side by side or top and bottom, with independent drafts and live prompts.
+  Activity, Canvas and the fork tree stay in the selected mode. Switch modes explicitly with the top toggle
+  or **Open in Terminal**.
 - Configure commands and install context-sharing tools from **Settings**. The installer backs up existing
   agent settings and includes its own Node runtime. Agent CLIs still need to be installed and signed in.
 - Canvas, account/sharing, phone access and activity remain available in the same app.

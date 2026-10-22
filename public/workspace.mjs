@@ -1,4 +1,5 @@
 // The workspace uses one event stream. Only the selected conversation is fetched and rendered.
+import { createActivityView } from './activity.mjs';
 export const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 
 export function renderMarkdown(value) {
@@ -70,6 +71,24 @@ export function searchSessions(agents, query) {
   }).filter((hit) => hit.score >= 0).sort((a, b) => b.score - a.score || (b.agent.lastActivity || 0) - (a.agent.lastActivity || 0)).map((hit) => hit.agent);
 }
 
+export function sessionTree(agents) {
+  const ids = new Set(agents.map((a) => a.id)), children = new Map(), seen = new Set();
+  const parent = (a) => a.parent === undefined ? a.forkOf : a.parent;
+  for (const agent of agents) {
+    const key = parent(agent);
+    if (!children.has(key)) children.set(key, []);
+    children.get(key).push(agent);
+  }
+  const visit = (agent) => {
+    seen.add(agent.id);
+    return { agent, children: (children.get(agent.id) || []).filter((a) => !seen.has(a.id)).map(visit) };
+  };
+  const roots = agents.filter((a) => !ids.has(parent(a)) || parent(a) === a.id).map(visit);
+  // A stale parent or malformed cycle must not hide a running session.
+  for (const agent of agents) if (!seen.has(agent.id)) roots.push(visit(agent));
+  return roots;
+}
+
 const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   search: '<circle cx="10.7" cy="10.7" r="6.7"/><path d="m16 16 4.5 4.5"/>',
@@ -77,6 +96,8 @@ const ICONS = {
   network: '<rect x="9" y="2" width="6" height="6" rx="1.5"/><rect x="2" y="16" width="6" height="6" rx="1.5"/><rect x="16" y="16" width="6" height="6" rx="1.5"/><path d="M12 8v4M5 16v-4h14v4"/>',
   canvas: '<circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="5" r="2.5"/><circle cx="13" cy="19" r="2.5"/><path d="m7.5 6 9-1M6.5 8l5 8.5M18 7.5l-4 9"/>',
   folder: '<path d="M3 7V5a2 2 0 0 1 2-2h4l3 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',
+  branch: '<circle cx="6" cy="5" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10m0-5h6a6 6 0 0 0 6-4"/>',
+  home: '<path d="m3 10 9-7 9 7v10H3V10Zm6 10v-7h6v7"/>',
   'chevron-down': '<path d="m6 9 6 6 6-6"/>',
   'chevron-right': '<path d="m9 5 7 7-7 7"/>',
   'panel-left': '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 3v18"/>',
@@ -115,12 +136,16 @@ const hash = (text) => { let value = 0; for (let i = 0; i < text.length; i++) va
 
 function initialize() {
   const embedded = parent !== window && new URLSearchParams(location.search).get('desktop') === '1';
+  const paneKey = embedded ? new URLSearchParams(location.search).get('pane') : null;
+  const parentOrigin = paneKey ? location.origin : 'null';
+  if (paneKey) document.body.classList.add('pane-mode');
   let desktop = null, rawState = { agents: [], edges: [], messageRevision: 0 }, desktopActive = true;
+  const paneFrames = new Map();
+  let splitActive = false, reportedView = '';
   const requests = new Map();
-  let nextRequest = 0;
   function desktopCall(action, args = {}) {
     if (!embedded) return Promise.reject(new Error('Open the Synapse desktop app to use this action.'));
-    const request = String(++nextRequest);
+    const request = crypto.randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { requests.delete(request); reject(new Error('The desktop app did not respond. Try again.')); }, 30000);
       requests.set(request, { resolve, reject, timer });
@@ -139,8 +164,65 @@ function initialize() {
       edges: next.edges.map((e) => ({ ...e, from: aliases.get(e.from) || e.from, to: aliases.get(e.to) || e.to })) };
   }
   addEventListener('message', (event) => {
-    if (!embedded || event.source !== parent || event.origin !== 'null') return;
+    const pane = [...paneFrames.values()].find((frame) => frame.contentWindow === event.source);
+    if (pane && event.origin === location.origin) {
+      const message = event.data;
+      const owns = (id) => desktop?.sessions.some((s) => s.id === id && s.pane === pane.dataset.paneKey);
+      if (message?.type === 'synapse:desktop-bootstrap') {
+        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed'].map((key) => [key, getStorage(key, null)]));
+        pane.contentWindow.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, location.origin);
+      }
+      if (message?.type === 'synapse:desktop-ready') sendPaneState(pane);
+      if (message?.type === 'synapse:pane-draft' && owns(message.id) && typeof message.text === 'string' && message.text.length <= 12000) {
+        drafts[message.id] = message.text;
+        clearTimeout(draftTimer); draftTimer = setTimeout(persistDraft, 250);
+      }
+      if (message?.type === 'synapse:pane-focus' && view === 'session' && selectedId !== pane.dataset.agentId) navigate('session', pane.dataset.agentId);
+      if (message?.type === 'synapse:pane-navigate' && byId.has(message.id)) navigate('session', message.id);
+      if (message?.type === 'synapse:pane-command') {
+        if (message.command === 'sidebar') setSidebar(!sidebarOpen);
+        if (message.command === 'search') openSearch();
+        if (message.command === 'canvas') navigate(view === 'canvas' ? 'session' : 'canvas', selectedId);
+      }
+      if (message?.type === 'synapse:pane-recent' && owns(message.id)) {
+        recentCache.set(message.id, message.cached); if (inspectorOpen) renderInspector();
+      }
+      if (message?.type === 'synapse:desktop-call' && typeof message.request === 'string') {
+        desktopCall(message.action, message.args).then(
+          (value) => pane.contentWindow?.postMessage({ type: 'synapse:desktop-reply', request: message.request, value }, location.origin),
+          (error) => pane.contentWindow?.postMessage({ type: 'synapse:desktop-reply', request: message.request, error: error.message }, location.origin),
+        );
+      }
+      return;
+    }
+    const canvas = document.getElementById('gui-canvas');
+    if (canvas.src && event.source === canvas.contentWindow && event.origin === location.origin) {
+      const message = event.data, r = canvas.getBoundingClientRect();
+      if (message?.type === 'synapse:ready') { canvasLive = true; updateCanvasTheme(); for (const action of canvasActions.splice(0)) sendCanvas(action); if (embedded) desktopCall('canvas-ready').catch((e) => toast(e.message)); }
+      if (message?.type === 'synapse:menu' && embedded) desktopCall('canvas-menu', { ...message, x: r.left + message.x, y: r.top + message.y }).catch((e) => toast(e.message));
+      if (message?.type === 'synapse:settings') desktopCall('settings').catch((e) => toast(e.message));
+      if (message?.type === 'synapse:close') navigate(byId.has(selectedId) ? 'session' : 'overview', selectedId);
+      if (message?.type === 'synapse:forward') history.forward();
+      if (message?.type === 'synapse:switch' && embedded) desktopCall('switch-session', { key: message.key }).catch((e) => toast(e.message));
+      if (message?.type === 'synapse:open') {
+        const agent = state.agents.find((a) => a.id === message.id || a.backendId === message.id);
+        if (agent) navigate('session', agent.id);
+      }
+      return;
+    }
+    if (!embedded || event.source !== parent || event.origin !== parentOrigin) return;
     const message = event.data;
+    if (paneKey && message?.type === 'synapse:pane-state') {
+      const changed = selectedId !== message.id;
+      if (changed) { persistDraft(); recentController?.abort(); recentTarget = null; recentRequest++; tab = 'conversation'; limit = 60; }
+      desktop = message.desktop; selectedId = message.id; view = 'session';
+      drafts = { ...drafts, ...message.drafts };
+      if (changed) { $('message-input').value = drafts[selectedId] || ''; resizeComposer(); }
+      document.body.classList.add('desktop');
+      document.documentElement.dataset.theme = message.desktop.theme;
+      applyState(message.state); updateConnection(message.connected);
+      return;
+    }
     if (message?.type === 'synapse:desktop-reply') {
       const pending = requests.get(message.request); if (!pending) return;
       clearTimeout(pending.timer); requests.delete(message.request);
@@ -155,16 +237,38 @@ function initialize() {
       if (['night', 'signal'].includes(theme)) document.documentElement.dataset.theme = theme;
       updateThemeButton();
       if (desktopActive) {
+        const follow = view === 'session' && followSelection && desktop.active && desktop.active !== previous && desktop.sessions.some((s) => s.id === desktop.active);
+        if (follow) { persistDraft(); selectedId = desktop.active; $('message-input').value = drafts[selectedId] || ''; }
         applyState(rawState);
-        if (followSelection && desktop.active && desktop.active !== previous && byId.has(desktop.active)) navigate('session', desktop.active);
+        if (follow) navigate('session', desktop.active);
       }
     }
     if (message?.type === 'synapse:desktop-visibility') {
       desktopActive = message.visible;
+      if (!desktopActive) persistDraft();
       if (desktopActive) applyState(rawState);
     }
+    if (message?.type === 'synapse:desktop-navigate') navigate(message.view === 'back' || (message.toggle && view === message.view) ? byId.has(selectedId) ? 'session' : 'overview' : message.view, message.id || selectedId);
+    if (message?.type === 'synapse:activity-progress') activityView.progress(message.progress);
+    if (message?.type === 'synapse:canvas-action') sendCanvas(message.action);
   });
   const $ = (id) => document.getElementById(id);
+  const activityView = createActivityView($('activity-view'), {
+    get: () => desktopCall('activity:get'),
+    board: Object.fromEntries(['get', 'join', 'leave'].map((action) => [action, () => desktopCall(`board:${action}`)])),
+  });
+  let canvasLive = false;
+  const canvasActions = [];
+  function sendCanvas(action) {
+    if (canvasLive) $('gui-canvas').contentWindow.postMessage({ type: 'synapse:do', ...action }, location.origin);
+    else {
+      if (['session-visibility', 'thread'].includes(action.action)) {
+        const old = canvasActions.findIndex((a) => a.action === action.action); if (old >= 0) canvasActions.splice(old, 1);
+      }
+      canvasActions.push(action); if (canvasActions.length > 30) canvasActions.shift();
+    }
+  }
+  function updateCanvasTheme() { if (canvasLive) $('gui-canvas').contentWindow.postMessage({ type: 'synapse:theme', theme: document.documentElement.dataset.theme }, location.origin); }
   const populateIcons = (root) => root.querySelectorAll('[data-icon]').forEach((element) => { element.innerHTML = icon(element.dataset.icon); });
   populateIcons(document);
   const getStorage = (key, fallback = '') => { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } };
@@ -180,7 +284,8 @@ function initialize() {
   let inspectorOpen = wide.matches && getStorage('synapse-inspector', 'open') === 'open';
   let drafts;
   try { drafts = JSON.parse(getStorage('synapse-drafts', '{}')); if (!drafts || typeof drafts !== 'object') drafts = {}; } catch { drafts = {}; }
-  const projectElements = new Map(), sessionElements = new Map(), recentCache = new Map();
+  const projectElements = new Map(), worktreeElements = new Map(), sessionElements = new Map(), recentCache = new Map();
+  let sidebarDrag = null;
   let storedCollapsed;
   try { storedCollapsed = JSON.parse(getStorage('synapse-collapsed', '[]')); } catch {}
   const collapsed = new Set(Array.isArray(storedCollapsed) ? storedCollapsed : []);
@@ -191,7 +296,7 @@ function initialize() {
 
   function readRoute() {
     const route = location.hash.slice(1);
-    if (route === 'overview' || route === 'connections') view = route;
+    if (['overview', 'connections', 'activity', 'canvas'].includes(route)) view = route;
     else if (route.startsWith('agent=')) { view = 'session'; selectedId = new URLSearchParams(route).get('agent'); }
   }
   readRoute();
@@ -207,7 +312,8 @@ function initialize() {
   }
 
   function persistDraft() {
-    if (selectedId) drafts[selectedId] = $('message-input').value;
+    if (paneKey) { if (selectedId) parent.postMessage({ type: 'synapse:pane-draft', id: selectedId, text: $('message-input').value }, location.origin); return; }
+    if (selectedId && view === 'session' && !splitActive) drafts[selectedId] = $('message-input').value;
     const entries = Object.entries(drafts).filter(([, text]) => text).slice(-50);
     setStorage('synapse-drafts', JSON.stringify(Object.fromEntries(entries)));
   }
@@ -251,23 +357,67 @@ function initialize() {
   }
 
   function projectGroups() {
-    const groups = new Map((desktop?.projects || []).map((p) => [p.key, { key: p.key, name: p.label, agents: [] }]));
+    const groups = new Map((desktop?.projects || []).map((p) => [p.key, {
+      key: p.key, name: p.label, managed: true, agents: [], worktrees: p.worktrees.map((w) => ({ ...w, managed: true, agents: [] })),
+    }]));
     for (const agent of state.agents) {
-      if (!groups.has(agent.projectKey)) groups.set(agent.projectKey, { key: agent.projectKey, name: agent.project, agents: [] });
-      groups.get(agent.projectKey).agents.push(agent);
+      if (!groups.has(agent.projectKey)) groups.set(agent.projectKey, { key: agent.projectKey, name: agent.project, agents: [], worktrees: [] });
+      const group = groups.get(agent.projectKey);
+      group.agents.push(agent);
+      const cwd = (agent.worktreePath || agent.cwd || '').replaceAll('\\', '/');
+      let worktree = group.worktrees.find((w) => cwd === w.path.replaceAll('\\', '/'))
+        || [...group.worktrees].sort((a, b) => b.path.length - a.path.length).find((w) => cwd.startsWith(w.path.replaceAll('\\', '/').replace(/\/$/, '') + '/'));
+      if (!worktree) {
+        worktree = { path: agent.worktreePath || agent.cwd, name: agent.worktreeName || agent.frameSub || agent.cwd?.split(/[\\/]/).pop() || group.name, home: agent.worktreeHome, agents: [] };
+        group.worktrees.push(worktree);
+      }
+      worktree.agents.push(agent);
     }
     const order = new Map((desktop?.projects || []).map((p, i) => [p.key, i]));
     return [...groups.values()].sort((a, b) => (order.get(a.key) ?? Infinity) - (order.get(b.key) ?? Infinity) || a.name.localeCompare(b.name));
   }
 
+  function sortHandle(item, handle, kind, id, enabled) {
+    if (enabled) {
+      item.dataset.sortKind = kind; item.dataset.sortId = id;
+      handle.dataset.sortHandle = '';
+      handle.setAttribute('aria-keyshortcuts', 'Alt+ArrowUp Alt+ArrowDown');
+    } else {
+      delete item.dataset.sortKind; delete item.dataset.sortId; delete handle.dataset.sortHandle;
+      handle.removeAttribute('aria-keyshortcuts');
+    }
+  }
+
   function renderSidebar() {
-    const groups = projectGroups(), desired = [], live = new Set();
+    if (sidebarDrag || paneKey) return;
+    const groups = projectGroups(), desired = [], live = new Set(), liveWorktrees = new Set();
+    const sessionNode = ({ agent, children }, depth = 0) => {
+      live.add(agent.id);
+      let node = sessionElements.get(agent.id);
+      if (!node) {
+        node = document.createElement('div'); node.className = 'session-node';
+        node.innerHTML = '<button type="button" class="session-row"><span class="status-dot" aria-hidden="true"></span><span class="session-name"></span><span class="session-kind" aria-hidden="true"></span></button><div class="session-children"></div>';
+        node.firstElementChild.dataset.agent = agent.id;
+        sessionElements.set(agent.id, node);
+      }
+      const row = node.firstElementChild;
+      row.querySelector('.status-dot').classList.toggle('busy', agent.status === 'busy');
+      row.querySelector('.status-dot').classList.toggle('done', agent.status === 'done');
+      row.querySelector('.session-name').textContent = agent.name;
+      row.querySelector('.session-kind').textContent = KIND_INITIALS[agent.kind] || '';
+      row.title = `${agent.name} · ${kindName(agent)} · ${activityLabel(agent)}${agent.owned ? ' · Drag to reorder' : ''}`;
+      node.dataset.depth = depth;
+      sortHandle(node, row, 'session', agent.id, agent.owned);
+      if (view === 'session' && selectedId === agent.id) row.setAttribute('aria-current', 'page'); else row.removeAttribute('aria-current');
+      syncChildren(node.lastElementChild, children.map((child) => sessionNode(child, depth + 1)));
+      node.lastElementChild.hidden = !children.length;
+      return node;
+    };
     for (const group of groups) {
       let section = projectElements.get(group.key);
       if (!section) {
-        section = document.createElement('section');
-        section.className = 'project-group';
-        section.innerHTML = `<div class="project-heading"><button class="project-button" type="button"><span class="project-chevron">${icon('chevron-down')}</span>${icon('folder')}<span class="project-name"></span><span class="count"></span></button><button class="project-add desktop-only" type="button" aria-label="Add worktree" title="Add worktree">${icon('plus')}</button></div><div class="project-sessions"></div>`;
+        section = document.createElement('section'); section.className = 'project-group'; section.dataset.projectKey = group.key;
+        section.innerHTML = `<div class="project-heading"><button class="project-button" type="button"><span class="project-chevron">${icon('chevron-down')}</span>${icon('folder')}<span class="project-name"></span><span class="count"></span></button><button class="project-add desktop-only" type="button" aria-label="Add worktree" title="Add worktree">${icon('plus')}</button></div><div class="project-worktrees"></div>`;
         section.querySelector('.project-button').dataset.project = group.key;
         section.querySelector('.project-add').dataset.createWorktree = group.key;
         projectElements.set(group.key, section);
@@ -275,29 +425,38 @@ function initialize() {
       const button = section.querySelector('.project-button');
       button.querySelector('.project-name').textContent = group.name;
       button.querySelector('.count').textContent = group.agents.length;
-      section.querySelector('.project-add').hidden = !desktop?.projects.some((p) => p.key === group.key);
+      button.title = group.managed ? `${group.name} · Drag to reorder` : group.name;
+      section.querySelector('.project-add').hidden = !group.managed;
+      sortHandle(section, button, 'project', group.key, group.managed);
       button.setAttribute('aria-expanded', String(!collapsed.has(group.key)));
-      const container = section.lastElementChild;
-      container.hidden = collapsed.has(group.key);
-      const rows = group.agents.map((agent) => {
-        live.add(agent.id);
-        let row = sessionElements.get(agent.id);
-        if (!row) {
-          row = document.createElement('button'); row.type = 'button'; row.className = 'session-row'; row.dataset.agent = agent.id;
-          row.innerHTML = '<span class="status-dot" aria-hidden="true"></span><span class="session-name"></span><span class="session-kind" aria-hidden="true"></span>';
-          sessionElements.set(agent.id, row);
+      section.lastElementChild.hidden = collapsed.has(group.key);
+      const worktrees = group.worktrees.map((worktree) => {
+        const key = `worktree:${worktree.path}`;
+        liveWorktrees.add(key);
+        let node = worktreeElements.get(key);
+        if (!node) {
+          node = document.createElement('section'); node.className = 'worktree-group'; node.dataset.worktreePath = worktree.path;
+          node.innerHTML = `<div class="worktree-heading"><button class="worktree-button" type="button"><span class="worktree-chevron">${icon('chevron-down')}</span><span class="worktree-icon"></span><span class="worktree-name"></span><span class="count"></span></button><button class="worktree-add project-add desktop-only" type="button" aria-label="New session in this worktree" title="New session in this worktree">${icon('plus')}</button></div><div class="worktree-sessions"></div>`;
+          node.querySelector('.worktree-button').dataset.worktreeToggle = key;
+          node.querySelector('.worktree-add').dataset.newSessionCwd = worktree.path;
+          worktreeElements.set(key, node);
         }
-        row.querySelector('.status-dot').classList.toggle('busy', agent.status === 'busy');
-        if (row.querySelector('.session-name').textContent !== agent.name) row.querySelector('.session-name').textContent = agent.name;
-        row.querySelector('.session-kind').textContent = KIND_INITIALS[agent.kind] || '';
-        row.classList.toggle('fork-session', !!agent.parent);
-        row.title = `${agent.name} · ${kindName(agent)} · ${activityLabel(agent)}`;
-        if (view === 'session' && selectedId === agent.id) row.setAttribute('aria-current', 'page'); else row.removeAttribute('aria-current');
-        return row;
+        const head = node.querySelector('.worktree-button');
+        head.querySelector('.worktree-icon').innerHTML = icon(worktree.home ? 'home' : 'branch');
+        head.querySelector('.worktree-name').textContent = worktree.home ? worktree.branch || worktree.name : worktree.branch && worktree.branch !== worktree.name ? `${worktree.name} · ${worktree.branch}` : worktree.name;
+        head.querySelector('.count').textContent = worktree.agents.length;
+        head.title = `${worktree.path}${worktree.branch ? ` · ${worktree.branch}` : ''}${worktree.managed ? ' · Drag to reorder' : ''}`;
+        head.setAttribute('aria-expanded', String(!collapsed.has(key)));
+        node.querySelector('.worktree-add').hidden = !worktree.managed;
+        sortHandle(node, head, 'worktree', worktree.path, worktree.managed);
+        node.lastElementChild.hidden = collapsed.has(key);
+        syncChildren(node.lastElementChild, sessionTree(worktree.agents).map((entry) => sessionNode(entry)));
+        return node;
       });
-      syncChildren(container, rows); desired.push(section);
+      syncChildren(section.lastElementChild, worktrees); desired.push(section);
     }
-    for (const [id, row] of sessionElements) if (!live.has(id)) { row.remove(); sessionElements.delete(id); }
+    for (const [id, node] of sessionElements) if (!live.has(id)) { node.remove(); sessionElements.delete(id); }
+    for (const [key, node] of worktreeElements) if (!liveWorktrees.has(key)) { node.remove(); worktreeElements.delete(key); }
     for (const [key, section] of projectElements) if (!groups.some((group) => group.key === key)) { section.remove(); projectElements.delete(key); }
     if (!groups.length) {
       const empty = document.createElement('p'); empty.className = 'sidebar-placeholder';
@@ -311,7 +470,120 @@ function initialize() {
     });
   }
 
+  const sortableSiblings = (item) => [...item.parentElement.children].filter((node) => node.dataset.sortKind === item.dataset.sortKind);
+  async function reorderSidebar(item, target, side) {
+    const name = item.firstElementChild.textContent.trim(), other = target.firstElementChild.textContent.trim();
+    desktop = await desktopCall('reorder', { kind: item.dataset.sortKind, from: item.dataset.sortId, to: target.dataset.sortId, side });
+    $('sidebar-order-status').textContent = `Moved ${name} ${side} ${other}.`;
+  }
+  $('project-list').addEventListener('pointerdown', (event) => {
+    const handle = event.target.closest('[data-sort-handle]'), item = handle?.closest('[data-sort-kind]');
+    if (!item || event.button !== 0 || sidebarDrag) return;
+    const list = $('project-list'), x0 = event.clientX, y0 = event.clientY;
+    let lifted = false, ended = false, frame, items, rects, from, to, step, scroll0;
+    let point = { x: x0, y: y0 }, previousY = null;
+    sidebarDrag = item;
+    handle.setPointerCapture(event.pointerId);
+    const follow = () => {
+      const dy = point.y - y0 + list.scrollTop - scroll0;
+      if (dy === previousY) return;
+      previousY = dy; to = from;
+      item.style.transform = `translateY(${dy}px)`;
+      items.forEach((node, index) => {
+        if (index === from) return;
+        const middle = (rects[index].top + rects[index].bottom) / 2;
+        const shift = index > from && rects[from].bottom + dy > middle ? -step : index < from && rects[from].top + dy < middle ? step : 0;
+        if (shift < 0) to = Math.max(to, index);
+        if (shift > 0) to = Math.min(to, index);
+        const transform = shift ? `translateY(${shift}px)` : '';
+        if (node.style.transform !== transform) node.style.transform = transform;
+      });
+    };
+    const tick = () => {
+      if (!lifted || ended) return;
+      const r = list.getBoundingClientRect();
+      if (point.x >= r.left && point.x <= r.right) {
+        const dy = point.y < r.top + 32 ? -Math.min(12, (r.top + 32 - point.y) / 3)
+          : point.y > r.bottom - 32 ? Math.min(12, (point.y - r.bottom + 32) / 3) : 0;
+        if (dy) list.scrollTop += dy;
+      }
+      follow(); frame = requestAnimationFrame(tick);
+    };
+    const move = (e) => {
+      if (e.pointerId !== event.pointerId) return;
+      point = { x: e.clientX, y: e.clientY };
+      if (!lifted && Math.hypot(point.x - x0, point.y - y0) < 5) return;
+      e.preventDefault();
+      if (!lifted) {
+        lifted = true; document.body.classList.add('sidebar-sorting');
+        items = sortableSiblings(item); from = to = items.indexOf(item); scroll0 = list.scrollTop;
+        rects = items.map((node) => node.getBoundingClientRect());
+        const gap = from < items.length - 1 ? rects[from + 1].top - rects[from].bottom : from ? rects[from].top - rects[from - 1].bottom : 0;
+        step = rects[from].height + gap;
+        item.classList.add('sidebar-lifted');
+        for (const node of items) if (node !== item) node.classList.add('sidebar-yielding');
+        tick();
+      }
+    };
+    const end = async (cancel = false, waitForRelease = false) => {
+      if (ended) return;
+      ended = true; cancelAnimationFrame(frame);
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', abort);
+      removeEventListener('keydown', escape, true); removeEventListener('blur', abort); removeEventListener('resize', abort);
+      if (!waitForRelease && handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+      try {
+        if (lifted) {
+          const swallow = (e) => { e.preventDefault(); e.stopImmediatePropagation(); };
+          addEventListener('click', swallow, { once: true, capture: true });
+          if (waitForRelease) {
+            let finished = false;
+            const release = () => {
+              if (finished) return; finished = true;
+              removeEventListener('pointerup', release, true); removeEventListener('blur', release);
+              handle.removeEventListener('lostpointercapture', release);
+              if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+              setTimeout(() => removeEventListener('click', swallow, true), 0);
+            };
+            addEventListener('pointerup', release, { once: true, capture: true }); addEventListener('blur', release, { once: true });
+            handle.addEventListener('lostpointercapture', release, { once: true });
+          } else setTimeout(() => removeEventListener('click', swallow, true), 0);
+          const r = list.getBoundingClientRect();
+          const inside = point.x >= r.left && point.x <= r.right && point.y >= r.top - 8 && point.y <= r.bottom + 8;
+          const offset = !cancel && inside && to > from ? rects[to].bottom - rects[from].bottom : !cancel && inside && to < from ? rects[to].top - rects[from].top : 0;
+          item.classList.add('sidebar-settling'); item.style.transform = `translateY(${offset}px)`;
+          if (!matchMedia('(prefers-reduced-motion: reduce)').matches) await new Promise((resolve) => setTimeout(resolve, 150));
+          if (!cancel && inside && to !== from) await reorderSidebar(item, items[to], to > from ? 'after' : 'before');
+        }
+      } catch (error) { toast(error.message); }
+      finally {
+        for (const node of items || []) { node.style.removeProperty('transform'); node.classList.remove('sidebar-lifted', 'sidebar-yielding', 'sidebar-settling'); }
+        document.body.classList.remove('sidebar-sorting'); sidebarDrag = null; applyState(rawState);
+      }
+    };
+    const up = (e) => {
+      if (e.pointerId !== event.pointerId) return;
+      point = { x: e.clientX, y: e.clientY };
+      if (lifted) follow();
+      end();
+    };
+    const abort = () => end(true);
+    const escape = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); end(true, true); } };
+    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', abort);
+    addEventListener('keydown', escape, true); addEventListener('blur', abort); addEventListener('resize', abort);
+  });
+  $('project-list').addEventListener('keydown', async (event) => {
+    if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key) || sidebarDrag) return;
+    const handle = event.target.closest('[data-sort-handle]'), item = handle?.closest('[data-sort-kind]');
+    if (!item) return;
+    const siblings = sortableSiblings(item), to = siblings.indexOf(item) + (event.key === 'ArrowUp' ? -1 : 1);
+    if (!siblings[to]) return;
+    event.preventDefault(); event.stopPropagation();
+    try { await reorderSidebar(item, siblings[to], event.key === 'ArrowUp' ? 'before' : 'after'); applyState(rawState); handle.focus(); }
+    catch (error) { toast(error.message); }
+  });
+
   function navigate(nextView, id = null, push = true) {
+    if (paneKey && nextView === 'session' && id !== selectedId) { persistDraft(); parent.postMessage({ type: 'synapse:pane-navigate', id }, location.origin); return; }
     persistDraft();
     recentController?.abort(); recentTarget = null; recentRequest++;
     view = nextView; selectedId = nextView === 'session' ? id : selectedId;
@@ -333,11 +605,63 @@ function initialize() {
     return `<div class="empty-state"><span data-icon="${symbol}">${icon(symbol)}</span><h2>${escapeHtml(title)}</h2><p>${escapeHtml(description)}</p>${action ? `<button class="button secondary" data-action="${action}">${escapeHtml(actionLabel)}</button>` : ''}</div>`;
   }
 
+  function sendPaneState(frame) {
+    if (desktop) frame.contentWindow?.postMessage({ type: 'synapse:pane-state', desktop, state: rawState, drafts, connected, id: frame.dataset.agentId }, location.origin);
+  }
+
+  function renderSplits(isSession) {
+    if (paneKey) return false;
+    const layout = desktop?.layout;
+    if (!isSession) { $('split-view').hidden = true; return false; }
+    if (!layout?.direction) {
+      for (const frame of paneFrames.values()) frame.remove();
+      paneFrames.clear(); $('split-view').replaceChildren(); $('split-view').hidden = true;
+      return false;
+    }
+    const ids = (node) => !node ? [] : node.id ? [node.id] : [...ids(node.first), ...ids(node.second)];
+    if (!ids(layout).includes(selectedId)) { $('split-view').hidden = true; return false; }
+    const live = new Set();
+    const build = (node, host) => {
+      if (!node) return;
+      if (node.id) {
+        live.add(node.key);
+        let frame = paneFrames.get(node.key);
+        if (!frame) {
+          frame = document.createElement('iframe'); frame.className = 'split-pane'; frame.title = 'Session conversation';
+          frame.dataset.paneKey = node.key;
+          frame.src = `/?desktop=1&pane=${encodeURIComponent(node.key)}#agent=${encodeURIComponent(node.id)}`;
+          paneFrames.set(node.key, frame);
+        }
+        frame.dataset.agentId = node.id;
+        frame.classList.toggle('active-pane', node.id === selectedId);
+        if (frame.parentElement !== host) host.appendChild(frame);
+        for (const child of [...host.children]) if (child !== frame) child.remove();
+        sendPaneState(frame);
+      } else {
+        let group = host.firstElementChild;
+        if (!group?.classList.contains('split-group')) { group = document.createElement('div'); group.className = 'split-group'; host.prepend(group); }
+        group.dataset.direction = node.direction;
+        while (group.children.length < 2) group.appendChild(document.createElement('div'));
+        build(node.first, group.children[0]); build(node.second, group.children[1]);
+        for (const child of [...host.children]) if (child !== group) child.remove();
+      }
+    };
+    build(layout, $('split-view'));
+    for (const [key, frame] of paneFrames) if (!live.has(key)) { frame.remove(); paneFrames.delete(key); }
+    $('split-view').hidden = false;
+    return true;
+  }
+
   function renderMain(reset = false) {
     const agent = byId.get(selectedId), isSession = view === 'session' && agent;
-    $('thread-view').hidden = !isSession;
+    if (!paneKey && !splitActive && isSession && desktop?.layout?.direction && !$('thread-view').hidden) persistDraft();
+    const split = splitActive = renderSplits(isSession && agent.owned);
+    if (embedded && !paneKey && reportedView !== view) { reportedView = view; desktopCall('view', { view }).catch((e) => toast(e.message)); }
+    $('thread-view').hidden = !isSession || split;
     $('overview-view').hidden = view !== 'overview';
     $('connections-view').hidden = view !== 'connections';
+    $('activity-view').hidden = view !== 'activity';
+    $('canvas-view').hidden = view !== 'canvas';
     $('session-actions').hidden = !isSession;
     if (isSession) {
       const breadcrumbs = `<span class="crumb-project">${icon('folder')}</span><span class="crumb-project">${escapeHtml(agent.project)}</span><span class="crumb-divider">${icon('chevron-right')}</span><span>${escapeHtml(agent.name)}</span>`;
@@ -356,12 +680,15 @@ function initialize() {
       $('messages-tab').tabIndex = tab === 'messages' ? 0 : -1;
       $('thread-scroll').setAttribute('aria-labelledby', tab === 'messages' ? 'messages-tab' : 'conversation-tab');
       if (reset) { $('message-input').value = drafts[selectedId] || ''; $('send-error').hidden = true; }
-      updateComposer(); renderTimeline(reset); loadRecent();
+      if (!split) { updateComposer(); renderTimeline(reset); loadRecent(); }
       document.title = `${agent.name} · Synapse`;
     } else {
-      $('breadcrumbs').textContent = view === 'connections' ? 'Connections' : 'Your workspace';
-      document.title = `${view === 'connections' ? 'Connections' : 'Your workspace'} · Synapse`;
-      if (view === 'connections') renderConnections(); else renderOverview();
+      const title = view === 'activity' ? 'Activity' : view === 'canvas' ? 'Canvas' : view === 'connections' ? 'Connections' : 'Your workspace';
+      $('breadcrumbs').textContent = title;
+      document.title = `${title} · Synapse`;
+      if (view === 'canvas') { if (!$('gui-canvas').src) $('gui-canvas').src = '/canvas'; }
+      else if (view === 'activity') activityView.refresh();
+      else if (view === 'connections') renderConnections(); else renderOverview();
     }
     syncInspector();
   }
@@ -494,7 +821,7 @@ function initialize() {
   }
 
   async function loadRecent(force = false) {
-    const agent = byId.get(selectedId); if (view !== 'session' || !agent) return;
+    const agent = byId.get(selectedId); if (view !== 'session' || !agent || (!paneKey && paneFrames.size && !$('split-view').hidden)) return;
     const cached = recentCache.get(agent.id), revision = state.messageRevision, activity = agent.lastActivity;
     if (!force && cached?.activity === activity && cached?.revision === revision && cached?.limit === limit) return;
     if (recentTarget === agent.id) { recentDirty = true; return; }
@@ -507,6 +834,7 @@ function initialize() {
         : await api(`/api/agents/${encodeURIComponent(agent.backendId || id)}/recent?limit=${requestedLimit}`, { signal: recentController.signal });
       if (agent.owned && !data.messages?.length && !data.chat?.length) Object.assign(data, await desktopCall('output', { id }));
       recentCache.delete(id); recentCache.set(id, { data, activity, revision, limit: requestedLimit });
+      if (paneKey) parent.postMessage({ type: 'synapse:pane-recent', id, cached: recentCache.get(id) }, location.origin);
       if (recentCache.size > 30) recentCache.delete(recentCache.keys().next().value);
       if (request === recentRequest && selectedId === id && view === 'session') { renderTimeline(); renderInspector(); }
     } catch (error) {
@@ -568,7 +896,7 @@ function initialize() {
     if (field) field.focus();
   }
 
-  function connectAgent() {
+  function connectAgent(cwd) {
     if (embedded && desktop) {
       const worktrees = desktop.projects.flatMap((p) => p.worktrees.map((w) => ({ ...w, project: p.label })));
       if (!worktrees.length) { desktopCall('add-project').catch((e) => toast(e.message)); return; }
@@ -579,7 +907,8 @@ function initialize() {
         desktop = await desktopCall('state'); applyState(rawState); navigate('session', result.id);
       });
       const current = byId.get(selectedId);
-      if (current && worktrees.some((w) => w.path === current.cwd)) $('session-folder').value = current.cwd;
+      const folder = typeof cwd === 'string' ? cwd : current?.cwd;
+      if (worktrees.some((w) => w.path === folder)) $('session-folder').value = folder;
       if (Object.hasOwn(desktop.profiles, 'codex')) $('agent-kind').value = 'codex';
       return;
     }
@@ -634,7 +963,7 @@ function initialize() {
   }
 
   function showHelp() {
-    if (embedded) { openModal('Your desktop workspace', '<p class="dialog-copy">Start sessions, send prompts, connect agents, and manage worktrees here. GUI and Terminal modes share the same running sessions. Use Terminal mode for agent sign-in, interactive approvals, split panes, and the full fork tree.</p><div class="shortcut-row"><span>Find a session</span><kbd>⌘ K</kbd></div><div class="shortcut-row"><span>New session</span><kbd>⌘ N</kbd></div><div class="shortcut-row"><span>Settings</span><kbd>⌘ ,</kbd></div><p class="field-hint">An agent must receive its first prompt before its transcript can be forked. Claude Code and Codex support native forks.</p>', 'Got it'); return; }
+    if (embedded) { openModal('Your desktop workspace', '<p class="dialog-copy">Projects contain worktrees, sessions, and their forks. Drag siblings to reorder them. GUI and Terminal share the same running sessions; Activity, Canvas, splits, and fork trees stay in the mode you choose.</p><div class="shortcut-row"><span>Find a session</span><kbd>⌘ K</kbd></div><div class="shortcut-row"><span>New session</span><kbd>⌘ N</kbd></div><div class="shortcut-row"><span>Split conversation</span><kbd>⌘ D</kbd></div><div class="shortcut-row"><span>Reorder a focused row</span><kbd>⌥ ↑ / ↓</kbd></div><div class="shortcut-row"><span>Settings</span><kbd>⌘ ,</kbd></div><p class="field-hint">Open Terminal explicitly for CLI sign-in and interactive approvals. Claude Code and Codex support native conversation forks after their first prompt.</p>', 'Got it'); return; }
     openModal('A little space for your agents', '<p class="dialog-copy">Follow conversations across coding tools, connect sessions to share context, and leave messages without switching terminals. Everything stays on this machine.</p><div class="shortcut-row"><span>Find a session</span><kbd>⌘ / Ctrl K</kbd></div><div class="shortcut-row"><span>Search from anywhere</span><kbd>/</kbd></div><div class="shortcut-row"><span>Send a message</span><kbd>Enter</kbd></div><div class="shortcut-row"><span>Add a new line</span><kbd>Shift Enter</kbd></div><div class="shortcut-row"><span>Close a panel or dialog</span><kbd>Esc</kbd></div><p class="field-hint">Messages are queued until the agent’s next prompt or inbox check. Synapse does not start or interrupt a running agent.</p>', 'Got it');
   }
 
@@ -660,11 +989,13 @@ function initialize() {
   }
 
   function updateConnection(isConnected) {
+    const changed = connected !== isConnected;
     connected = isConnected;
     $('connection-banner').hidden = isConnected;
     $('connection-dot').classList.toggle('offline', !isConnected);
     $('local-status').textContent = isConnected ? `${state.agents.length} ${state.agents.length === 1 ? 'session' : 'sessions'} connected` : ready ? 'Reconnecting…' : 'Connecting…';
     updateComposer();
+    if (changed) for (const frame of paneFrames.values()) sendPaneState(frame);
   }
 
   function applyState(next) {
@@ -690,6 +1021,7 @@ function initialize() {
   }
 
   function connectEvents() {
+    if (paneKey) return;
     source?.close();
     source = new EventSource('/api/events');
     source.onopen = () => updateConnection(true);
@@ -710,7 +1042,8 @@ function initialize() {
   $('composer').addEventListener('submit', sendMessage);
   $('message-input').addEventListener('input', () => {
     resizeComposer(); updateComposer(); $('send-error').hidden = true; $('message-input').removeAttribute('aria-invalid');
-    clearTimeout(draftTimer); draftTimer = setTimeout(persistDraft, 250);
+    if (paneKey) persistDraft();
+    else { clearTimeout(draftTimer); draftTimer = setTimeout(persistDraft, 250); }
   });
   $('message-input').addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('composer').requestSubmit(); }
@@ -721,9 +1054,14 @@ function initialize() {
   $('sidebar-close').onclick = $('sidebar-scrim').onclick = () => { setSidebar(false); $('sidebar-toggle').focus(); };
   $('context-toggle').onclick = () => { inspectorOpen = !inspectorOpen; setStorage('synapse-inspector', inspectorOpen ? 'open' : 'closed'); syncInspector(); };
   $('connect-agent').onclick = connectAgent;
-  const runDesktop = (action, args = {}) => desktopCall(action, args).catch((e) => toast(e.message));
+  const runDesktop = (action, args = {}) => desktopCall(action, args).then(async (result) => {
+    if (action === 'new-session' || action === 'split') {
+      desktop = action === 'split' ? result : await desktopCall('state');
+      applyState(rawState); navigate('session', action === 'split' ? desktop.active : result.id);
+    }
+    return result;
+  }).catch((e) => toast(e.message));
   $('add-project').onclick = () => runDesktop('add-project');
-  $('desktop-activity').onclick = () => runDesktop('activity');
   $('desktop-account').onclick = () => runDesktop('account');
   $('open-terminal').onclick = () => runDesktop('terminal', { id: selectedId });
   function forkSession() {
@@ -743,7 +1081,7 @@ function initialize() {
       runDesktop(action === 'split-down' ? 'split' : action, { id: agent.id, direction: action === 'split-down' ? 'down' : 'right' });
     }; });
   };
-  document.querySelector('.canvas-link').addEventListener('click', (event) => { if (embedded) { event.preventDefault(); runDesktop('canvas'); } });
+  document.querySelector('.canvas-link').addEventListener('click', (event) => { if (embedded) { event.preventDefault(); navigate('canvas'); } });
   document.querySelector('.brand').addEventListener('click', (event) => { if (embedded) { event.preventDefault(); navigate('overview'); } });
   $('project-list').addEventListener('contextmenu', (event) => {
     const button = event.target.closest('[data-project]');
@@ -766,6 +1104,7 @@ function initialize() {
     const dark = document.documentElement.dataset.theme === 'night';
     $('theme-toggle').innerHTML = icon(dark ? 'sun' : 'moon');
     $('theme-toggle').setAttribute('aria-label', `Switch to ${dark ? 'light' : 'dark'} mode`);
+    updateCanvasTheme();
   }
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (event) => {
     if (!getStorage('synapse-mode')) { document.documentElement.dataset.theme = event.matches ? 'night' : 'signal'; updateThemeButton(); }
@@ -795,11 +1134,16 @@ function initialize() {
   document.addEventListener('click', async (event) => {
     const button = event.target.closest('button'); if (!button) return;
     if (button.dataset.createWorktree) return runDesktop('worktree', { key: button.dataset.createWorktree });
+    if (button.dataset.newSessionCwd) return connectAgent(button.dataset.newSessionCwd);
     if (button.dataset.agent) return navigate('session', button.dataset.agent);
     if (button.dataset.view) return navigate(button.dataset.view);
     if (button.dataset.searchAgent) { $('search-dialog').close(); return navigate('session', button.dataset.searchAgent); }
     if (button.dataset.project) {
       const key = button.dataset.project; collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
+      setStorage('synapse-collapsed', JSON.stringify([...collapsed])); renderSidebar(); return;
+    }
+    if (button.dataset.worktreeToggle) {
+      const key = button.dataset.worktreeToggle; collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
       setStorage('synapse-collapsed', JSON.stringify([...collapsed])); renderSidebar(); return;
     }
     if (button.dataset.filter) { filter = button.dataset.filter; renderOverview(); return; }
@@ -819,18 +1163,32 @@ function initialize() {
   });
   document.addEventListener('keydown', (event) => {
     const editing = event.target.matches('input, textarea, select, [contenteditable="true"]');
+    const key = event.key.toLowerCase(), mod = event.metaKey || event.ctrlKey;
+    if (paneKey && ((mod && ['b', 'k', 'g'].includes(key)) || (mod && key === 'f' && !event.shiftKey) || (event.ctrlKey && key === 'tab'))) {
+      event.preventDefault(); parent.postMessage({ type: 'synapse:pane-command', command: key === 'b' ? 'sidebar' : ['g', 'tab'].includes(key) ? 'canvas' : 'search' }, location.origin); return;
+    }
+    if (embedded && ((event.ctrlKey && !event.metaKey && key === 'tab') || (mod && key === 'g'))) { event.preventDefault(); navigate(view === 'canvas' ? 'session' : 'canvas', selectedId); return; }
+    if (embedded && event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && /^[1-9]$/.test(key)) {
+      const kind = Object.keys(desktop?.profiles || {}).filter((k) => k !== 'shell')[Number(key) - 1];
+      const cwd = byId.get(selectedId)?.cwd || desktop?.projects[0]?.worktrees[0]?.path;
+      if (kind && cwd) { event.preventDefault(); runDesktop('new-session', { cwd, kind }); } return;
+    }
     if (embedded && (event.metaKey || event.ctrlKey)) {
-      const key = event.key.toLowerCase();
-      if (key === 'n') { event.preventDefault(); connectAgent(); return; }
+      if (key === 'n') { event.preventDefault(); if (event.shiftKey) runDesktop('worktree', { key: byId.get(selectedId)?.projectKey || desktop?.projects[0]?.key }); else connectAgent(); return; }
+      if (key === 't') { event.preventDefault(); const cwd = byId.get(selectedId)?.cwd || desktop?.projects[0]?.worktrees[0]?.path; if (cwd) runDesktop('new-session', { cwd, kind: 'shell' }); return; }
       if (key === ',') { event.preventDefault(); runDesktop('settings'); return; }
       if (key === 'b') { event.preventDefault(); setSidebar(!sidebarOpen); return; }
       if (key === 'd') { event.preventDefault(); runDesktop('split', { id: selectedId, direction: event.shiftKey ? 'down' : 'right' }); return; }
+      if (key === 'e') { event.preventDefault(); runDesktop('fork-tree', { id: selectedId }); return; }
+      if (key === 'w') { event.preventDefault(); runDesktop('close', { id: selectedId }); return; }
+      if (/^[1-9\[\]]$/.test(key)) { event.preventDefault(); runDesktop('switch-session', { key }); return; }
       if (key === 'f' && event.shiftKey) { event.preventDefault(); forkSession(); return; }
     }
     if ((event.metaKey || event.ctrlKey) && ['k', 'f'].includes(event.key.toLowerCase())) { event.preventDefault(); openSearch(); return; }
     if (event.key === '/' && !editing && !$('action-dialog').open && !$('search-dialog').open) { event.preventDefault(); openSearch(); }
     if (event.key === 'Escape' && !$('action-dialog').open && !$('search-dialog').open) {
-      if (narrow.matches && sidebarOpen) { setSidebar(false, false); $('sidebar-toggle').focus(); }
+      if (view === 'activity' || view === 'canvas') navigate(byId.has(selectedId) ? 'session' : 'overview', selectedId);
+      else if (narrow.matches && sidebarOpen) { setSidebar(false, false); $('sidebar-toggle').focus(); }
       else if (inspectorOpen) { inspectorOpen = false; syncInspector(); $('context-toggle').focus(); }
     }
     if (event.target.matches('[role="tab"]') && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
@@ -852,9 +1210,10 @@ function initialize() {
     navigate(nextView, nextId, false);
   });
   addEventListener('beforeunload', persistDraft);
+  if (paneKey) document.addEventListener('focusin', () => parent.postMessage({ type: 'synapse:pane-focus' }, location.origin));
   document.addEventListener('visibilitychange', () => { if (document.hidden) { persistDraft(); source?.close(); } else connectEvents(); });
   setInterval(() => { if (!document.hidden && ready) { if (view === 'overview') renderOverview(); if (inspectorOpen) renderInspector(); } }, 30000);
-  updateThemeButton(); setSidebar(sidebarOpen, false); connectEvents();
+  updateThemeButton(); setSidebar(paneKey ? false : sidebarOpen, false); connectEvents();
   if (embedded) parent.postMessage({ type: 'synapse:desktop-ready' }, '*');
 }
 
@@ -865,7 +1224,8 @@ if (typeof document !== 'undefined') {
     await new Promise((resolve) => {
       const timer = setTimeout(() => { removeEventListener('message', receive); resolve(); }, 15000);
       function receive(event) {
-        if (event.source !== parent || event.origin !== 'null' || event.data?.type !== 'synapse:desktop-bootstrap') return;
+        const origin = new URLSearchParams(location.search).has('pane') ? location.origin : 'null';
+        if (event.source !== parent || event.origin !== origin || event.data?.type !== 'synapse:desktop-bootstrap') return;
         clearTimeout(timer); removeEventListener('message', receive);
         const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed'];
         for (const key of keys) {
