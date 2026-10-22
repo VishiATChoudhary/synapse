@@ -39,6 +39,7 @@ async function until(check, label, ms = 15000) {
 const js = (code) => win.webContents.executeJavaScript(code, true);
 const pop = () => js(`document.querySelector('#friends-pop').hidden ? '' : document.querySelector('#friends-pop').textContent`);
 const friend = (name) => `[...document.querySelectorAll('#friends-pop .friend')].find((f) => f.querySelector('.friend-head b')?.textContent === ${JSON.stringify(name)})`;
+const shareOf = (name) => `[...(${friend(name)})?.querySelectorAll('button') || []].find((b) => b.textContent === 'share')`;
 
 (async () => {
   await import(pathToFileURL(path.join(root, 'app/main.mjs')));
@@ -61,8 +62,8 @@ const friend = (name) => `[...document.querySelectorAll('#friends-pop .friend')]
   await until(async () => /shared with you · 1/.test(await pop()) && /trusted people · 2/.test(await pop()), 'friends list');
   assert.match(await pop(), /Mara.*shares claude · web with you, read and ask/);
   assert.match(await js(`${friend('Jonas')}.textContent`), /has not added you back yet/);
-  assert.equal(await js(`${friend('Jonas')}.querySelector('button').disabled`), true, 'no sharing with someone who has not added you back');
-  assert.equal(await js(`${friend('Mara')}.querySelector('button').title`), `offer ${agentName} to Mara`);
+  assert.equal(await js(`${shareOf('Jonas')}.disabled`), true, 'no sharing with someone who has not added you back');
+  assert.equal(await js(`${shareOf('Mara')}.title`), `offer ${agentName} to Mara`);
 
   // accept Mara's offer into the open codex
   await until(() => js(`[...document.querySelectorAll('#friends-pop .offer-in select option')].some((o) => o.textContent.includes(${JSON.stringify(agentName)}))`), 'my agents to receive it');
@@ -74,7 +75,7 @@ const friend = (name) => `[...document.querySelectorAll('#friends-pop .friend')]
   assert.doesNotMatch(await pop(), /shared with you/, 'nothing waiting any more');
 
   // share my codex with Mara, read only
-  await js(`${friend('Mara')}.querySelector('button').click()`);
+  await js(`${shareOf('Mara')}.click()`);
   await until(() => js(`!document.querySelector('#modal').hidden && document.querySelector('#modal-title').textContent === ${JSON.stringify(`share ${agentName}`)}`), 'the share sheet');
   assert.deepEqual(await js(`[...document.querySelectorAll('#modal .share-person b')].map((b) => b.textContent)`), ['Mara'], 'only people who trust you back');
   assert.equal(await js(`document.querySelector('#modal .share-person').classList.contains('on')`), true, 'Mara picked');
@@ -102,7 +103,7 @@ const friend = (name) => `[...document.querySelectorAll('#friends-pop .friend')]
   await js(`document.querySelector('#btn-share').click()`);
   assert.equal(await js(`document.querySelector('#modal').hidden`), true, 'no share sheet');
   await js(`document.querySelector('#btn-friends').click()`);
-  await until(() => js(`${friend('Mara')}?.querySelector('button').disabled === true`), 'per-person share off too');
+  await until(() => js(`${shareOf('Mara')}.disabled === true`), 'per-person share off too');
 
   assert.deepEqual(errors, []);
   console.log('share: ok');

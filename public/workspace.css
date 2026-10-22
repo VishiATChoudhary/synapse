@@ -183,6 +183,25 @@ svg.icon { width: 18px; height: 18px; display: block; flex: none; stroke-width: 
 .composer:has(textarea[aria-invalid='true']) { border-color: var(--color-error); }
 .composer textarea { display: block; border: 0; outline: none; width: 100%; min-height: 52px; max-height: 180px; resize: none; padding: 0 2px; background: var(--color-transparent); line-height: 1.6; font-size: var(--text-md); }
 .composer textarea::placeholder { color: var(--color-muted); }
+.composer { position: relative; }
+.composer textarea { position: relative; z-index: 1; }
+.composer-mirror { position: absolute; z-index: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: break-word; color: transparent; pointer-events: none; line-height: 1.6; }
+.composer-mirror mark { color: transparent; border-radius: 4px; }
+.composer-mirror mark.slash { background: color-mix(in srgb, var(--color-accent-text) 22%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent-text) 22%, transparent); }
+.composer-mirror mark.mention { background: color-mix(in srgb, var(--color-success) 22%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-success) 22%, transparent); }
+.slash-cmd { display: inline-block; padding: 1px 7px; margin-inline-end: 8px; border-radius: var(--radius-xs); background: color-mix(in srgb, var(--color-accent-text) 16%, transparent); color: var(--color-accent-text); font-family: var(--font-mono, ui-monospace, monospace); font-size: .92em; font-weight: 500; }
+.slash-head { margin-bottom: 4px; }
+.message-body .mention, .mention-bar .mention { color: var(--color-success); font-weight: 500; }
+.mention-pop { position: absolute; left: 16px; right: 16px; bottom: calc(100% - 4px); z-index: 5; max-width: 420px; padding: 6px; background: var(--color-paper); border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); box-shadow: 0 8px 24px var(--color-shadow); }
+.mention-head { margin: 4px 8px 6px; font-size: var(--text-xs); color: var(--color-muted); }
+.mention-option { width: 100%; display: grid; grid-template-columns: auto auto 1fr; align-items: baseline; gap: 8px; padding: 8px; border-radius: var(--radius-xs); text-align: start; }
+.mention-option span { color: var(--color-muted); font-size: var(--text-sm); }
+.mention-option small { justify-self: end; color: var(--color-muted); font-size: var(--text-xs); }
+.mention-option[aria-selected='true'], .mention-option:hover { background: var(--color-sidebar); }
+.mention-bar { display: grid; gap: 6px; margin-bottom: 8px; }
+.mention-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); font-size: var(--text-sm); }
+.mention-text { flex: 1; color: var(--color-secondary); }
+.mention-row .button { flex: none; }
 .composer-toolbar { display: flex; align-items: center; gap: 12px; padding-top: 10px; }
 .composer-channel { display: inline-flex; align-items: center; gap: 7px; font-size: var(--text-xs); color: var(--color-muted); }
 .composer-channel .icon { width: 14px; height: 14px; }

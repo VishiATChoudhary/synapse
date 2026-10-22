@@ -78,13 +78,22 @@ function alive(pid) {
 
 const NOISE = /^<(command-|local-command|system-reminder|task-notification|bash-|user-prompt-submit-hook|environment_context|user_instructions|permissions)/;
 
+// A slash command the user ran (`/goal ship it`): Claude logs it as <command-name>/<command-args> tags. Keep it
+// as the command line it was typed as; its expanded prompt is a meta entry and stays out.
+function claudeSlash(t) {
+  const name = /<command-name>\s*([^<\s]+)\s*<\/command-name>/.exec(t)?.[1];
+  if (!name) return null;
+  const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(t)?.[1].trim();
+  return `${name.startsWith('/') ? name : `/${name}`}${args ? ` ${args}` : ''}`;
+}
+
 function claudeMessage(e) {
   if (e.isMeta || e.isSidechain || e.isCompactSummary) return null;
   const content = e.message?.content;
   if (e.type === 'user') {
     const parts = typeof content === 'string' ? [content]
       : Array.isArray(content) ? content.filter((b) => b.type === 'text').map((b) => b.text) : [];
-    const text = parts.filter((t) => !NOISE.test(t.trim())).join('\n').trim();
+    const text = parts.map((t) => claudeSlash(t) ?? t).filter((t) => !NOISE.test(t.trim())).join('\n').trim();
     return text ? { role: 'user', text, ts: e.timestamp } : null;
   }
   if (e.type === 'assistant' && Array.isArray(content)) {

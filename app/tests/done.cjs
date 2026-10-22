@@ -35,7 +35,7 @@ setInterval(() => {}, 1 << 30);
 `);
 fs.chmodSync(path.join(bin, 'codex'), 0o755);
 fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], profiles: { shell: { command: 'cat', label: 'Shell' }, codex: { command: `exec ${path.join(bin, 'codex')}`, label: 'Codex' } } }));
-Object.assign(process.env, { SYNAPSE_HOME: state, CODEX_HOME: codexHome, SYNAPSE_CLOUD: 'http://127.0.0.1:9', SHELL: '/bin/zsh' });
+Object.assign(process.env, { SYNAPSE_HOME: state, CODEX_HOME: codexHome, SYNAPSE_CLOUD: 'http://127.0.0.1:9', SYNAPSE_DESKTOP_VIEW: 'terminal', SHELL: '/bin/zsh' });
 for (const key of Object.keys(process.env)) if (key.startsWith('SYNAPSE_SHOT') || key === 'SYNAPSE_DEBUG' || key === 'SYNAPSE_DEMO' || key === 'SYNAPSE_FAKE_REQUESTS') delete process.env[key];
 process.chdir(fixture);
 app.setPath('userData', path.join(fixture, 'electron'));

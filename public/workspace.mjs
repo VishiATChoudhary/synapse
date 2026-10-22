@@ -2,6 +2,20 @@
 import { createActivityView } from './activity.mjs';
 export const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 
+// A slash command at the start of a message: `/goal`, `//goal` (Claude Code), `/ultrafast` (Codex). Paths such as
+// /Users/me are not commands (the token stops at the next space and holds no further slash).
+export function slashCommand(value) {
+  const m = /^\s*(\/{1,2}[A-Za-z][\w:.-]*)(?=\s|$)/.exec(String(value ?? ''));
+  return m ? { command: m[1], rest: String(value).slice(m.index + m[0].length).replace(/^[ \t]+/, '') } : null;
+}
+// a user message that is a slash command shows the command as a chip, its arguments as text
+export function messageBody(text, user) {
+  const slash = user && slashCommand(text);
+  return slash ? `<div class="slash-head"><span class="slash-cmd">${escapeHtml(slash.command)}</span></div>${slash.rest ? renderMarkdown(slash.rest) : ''}` : renderMarkdown(text);
+}
+// "@mara" in a message, not inside an email address
+export const MENTION = /(^|[\s(])@([A-Za-z0-9][\w-]{1,23})\b/g;
+
 export function renderMarkdown(value) {
   const blocks = [];
   const hold = (html) => `\u0000${blocks.push(html) - 1}\u0000`;
@@ -20,6 +34,7 @@ export function renderMarkdown(value) {
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|[^\w*])\*(?!\s)(.+?)\*(?!\w)/g, '$1<em>$2</em>')
       .replace(/(^|[^\w_])_(?!\s)(.+?)_(?!\w)/g, '$1<em>$2</em>')
+      .replace(MENTION, '$1<span class="mention">@$2</span>')
       .replace(/\u0001(\d+)\u0001/g, (_, index) => parts[index]);
   };
   const output = [], lines = source.split('\n');
@@ -243,7 +258,7 @@ function initialize() {
         if (follow) navigate('session', desktop.active);
       }
     }
-    if (message?.type === 'synapse:friends-changed') { friends = null; renderFriendsList(true); return; }
+    if (message?.type === 'synapse:friends-changed') { if (friends) loadFriends().then(() => { renderFriendsList(); composerPaint?.(); }, () => {}); return; }
     if (message?.type === 'synapse:desktop-visibility') {
       desktopActive = message.visible;
       if (!desktopActive) persistDraft();
@@ -292,6 +307,7 @@ function initialize() {
   const collapsed = new Set(Array.isArray(storedCollapsed) ? storedCollapsed : []);
   let sending = false, recentController, recentRequest = 0, recentTarget, recentDirty = false, limit = 60;
   let source, stateFrame = 0, pendingState, toastTimer, draftTimer, flowTimer;
+  let composerPaint = null; // set once the composer's highlighting exists; drafts loaded before then repaint on input
   let modalSubmit = null, modalVersion = 0, searchHits = [], searchIndex = 0, renderedMessages = new Map();
   let overviewSignature = '', connectionsSignature = '', inspectorSignature = '';
 
@@ -846,7 +862,7 @@ function initialize() {
           element.className = `message ${user ? 'user' : message.type === 'shared' ? 'peer' : 'assistant'}`;
           const name = message.type === 'shared' && !message.human ? `${message.fromName} → ${message.toName}` : kindName(agent);
           const delivery = message.human ? `<span class="queued-label">${icon(message.delivered ? 'check' : 'clock')}${message.delivered ? 'Picked up by agent' : 'Queued for next prompt'}</span>` : '';
-          element.innerHTML = `${user ? '' : `<header class="message-head">${avatar(agent)}<span>${escapeHtml(name)}</span>${time ? `<time>${time}</time>` : ''}</header>`}<div class="message-body md">${renderMarkdown(message.text)}</div><footer class="message-foot">${delivery}${user && time ? `<time>${time}</time>` : ''}<button class="icon-button" data-copy-message aria-label="Copy message" title="Copy message">${icon('copy')}</button></footer>`;
+          element.innerHTML = `${user ? '' : `<header class="message-head">${avatar(agent)}<span>${escapeHtml(name)}</span>${time ? `<time>${time}</time>` : ''}</header>`}<div class="message-body md">${messageBody(message.text, user)}</div><footer class="message-foot">${delivery}${user && time ? `<time>${time}</time>` : ''}<button class="icon-button" data-copy-message aria-label="Copy message" title="Copy message">${icon('copy')}</button></footer>`;
         }
       }
       desired.push(element);
@@ -891,6 +907,7 @@ function initialize() {
     const agent = byId.get(selectedId);
     $('message-input').placeholder = agent ? `Message ${agent.name}…` : 'Message your agent…';
     $('message-input').setAttribute('aria-label', agent ? `Message ${agent.name}` : 'Message this agent');
+    composerPaint?.();
     $('send-message').disabled = !agent || agent.exited || !connected || sending || !$('message-input').value.trim();
     $('composer').setAttribute('aria-busy', String(sending));
     $('send-message').innerHTML = sending ? '<span class="spinner" aria-hidden="true"></span>' : icon('arrow-up');
@@ -956,16 +973,17 @@ function initialize() {
   // Add connection: link two of my agents, share one of mine with a friend (they accept and pick which of theirs
   // receives it), or ask a friend for one of theirs (they accept and pick which to share). Friends live in the
   // desktop app, so the last two need it and a signed-in account.
-  let friends = null, connectionMode = 'mine';
+  let friends = null, connectionMode = 'mine', connectionTicket = 0;
   const loadFriends = async () => (friends = embedded ? await desktopCall('friends') : { signedIn: false, unavailable: true });
   const mineId = (id) => byId.get(id)?.backendId || id;
   const connectionTabs = () => `<div class="segmented-control connection-tabs" role="group" aria-label="Kind of connection">${[['mine', 'My agents'], ['share', 'Share with a friend'], ['ask', 'Ask a friend']].map(([k, label]) => `<button type="button" data-conn-tab="${k}" aria-pressed="${k === connectionMode}">${label}</button>`).join('')}</div>`;
   async function addConnection(mode) {
     if (typeof mode === 'string') connectionMode = mode;
+    const ticket = ++connectionTicket; // only the latest open draws, and only while the dialog is still up
     if (connectionMode === 'mine') return addLocalConnection();
     openModal('Add connection', `${connectionTabs()}<p class="dialog-copy">Loading your friends…</p>`, 'Done');
     try { await loadFriends(); } catch (error) { friends = { signedIn: false, error: error.message }; }
-    if (connectionMode !== 'mine') renderFriendConnection();
+    if (ticket === connectionTicket && $('action-dialog').open) renderFriendConnection();
   }
   function friendOptions() {
     return friends.people.filter((p) => p.trustsYou && !p.pending && p.handle).map((p) => `<option value="${escapeHtml(p.handle)}">${escapeHtml(p.name)} · @${escapeHtml(p.handle)}</option>`).join('');
@@ -1129,6 +1147,113 @@ function initialize() {
       }
     });
   }
+
+  // The composer marks what it understands: a slash command at the start (it runs as a command in sessions
+  // opened in Synapse, and arrives as plain text through the inbox otherwise) and @friends. A mirror behind the
+  // textarea carries the highlights, so the text you type stays the textarea's own.
+  const mirror = document.createElement('div');
+  mirror.className = 'composer-mirror'; mirror.setAttribute('aria-hidden', 'true');
+  $('message-input').before(mirror);
+  const mentionBox = document.createElement('div');
+  mentionBox.className = 'mention-pop'; mentionBox.id = 'mention-pop'; mentionBox.setAttribute('role', 'listbox'); mentionBox.hidden = true;
+  const mentionBar = document.createElement('div');
+  mentionBar.className = 'mention-bar'; mentionBar.id = 'mention-bar'; mentionBar.hidden = true;
+  $('composer').before(mentionBar, mentionBox);
+  let mentionHits = [], mentionIndex = 0, mentionAt = -1, friendsAt = 0;
+  const asked = new Set(); // friend handles asked from this composer, so the bar says so
+  const knownFriends = () => (friends?.signedIn ? friends.people.filter((p) => p.handle && p.trustsYou && !p.pending) : []);
+  async function freshFriends() {
+    if (!embedded || Date.now() - friendsAt < 30000) return;
+    friendsAt = Date.now();
+    try { await loadFriends(); } catch { friendsAt = 0; }
+  }
+  const projectOf = (agent) => agent?.project || (agent?.cwd || '').split('/').filter(Boolean).pop() || '';
+  // which of their agents already reach this one, and whether one of theirs works on this project
+  function friendContext(p) {
+    const agent = byId.get(selectedId), project = projectOf(agent);
+    const theirs = (friends?.links || []).filter((l) => l.direction === 'in' && (l.owner === p.name || l.owner === p.handle));
+    const here = theirs.find((l) => l.local?.id === mineId(selectedId));
+    return { project, here, related: !here && theirs.find((l) => project && l.agent?.name && l.agent.name.toLowerCase().includes(project.toLowerCase())) };
+  }
+  function paintMirror() {
+    const text = $('message-input').value, slash = slashCommand(text);
+    let html = escapeHtml(text);
+    if (slash) { const at = text.indexOf(slash.command); html = escapeHtml(text.slice(0, at)) + `<mark class="slash">${escapeHtml(slash.command)}</mark>` + escapeHtml(text.slice(at + slash.command.length)); }
+    const handles = new Set(knownFriends().map((p) => p.handle.toLowerCase()));
+    mirror.innerHTML = html.replace(MENTION, (all, pre, h) => handles.has(h.toLowerCase()) ? `${pre}<mark class="mention">@${h}</mark>` : all) + '\n';
+    const input = $('message-input'), style = getComputedStyle(input);
+    Object.assign(mirror.style, { top: `${input.offsetTop}px`, left: `${input.offsetLeft}px`, width: `${input.clientWidth}px`, height: `${input.clientHeight}px`, font: style.font, letterSpacing: style.letterSpacing, padding: style.padding });
+    mirror.scrollTop = input.scrollTop;
+    const agent = byId.get(selectedId);
+    $('composer').classList.toggle('has-command', !!slash);
+    const channel = $('composer').querySelector('.composer-channel');
+    if (channel) channel.innerHTML = slash ? `<span class="slash-cmd">${escapeHtml(slash.command)}</span>${agent?.owned ? `Runs as a ${escapeHtml(kindName(agent))} command` : 'Sent as text: commands run in sessions opened in Synapse'}` : `${icon('network')}Via Synapse`;
+  }
+  function paintMentionBar() {
+    const text = $('message-input').value, seen = new Set(), rows = [];
+    for (const m of text.matchAll(MENTION)) {
+      const p = knownFriends().find((x) => x.handle.toLowerCase() === m[2].toLowerCase());
+      if (!p || seen.has(p.handle)) continue;
+      seen.add(p.handle);
+      const { project, here, related } = friendContext(p);
+      rows.push(`<div class="mention-row"><span class="mention">@${escapeHtml(p.handle)}</span><span class="mention-text">${here ? `${escapeHtml(p.name)}'s <strong>${escapeHtml(here.agent?.name || 'agent')}</strong> already shares with this agent.` : asked.has(p.handle) ? `Asked ${escapeHtml(p.name)} for access. Waiting for them to accept.` : `${related ? `${escapeHtml(p.name)} has <strong>${escapeHtml(related.agent.name)}</strong>, which looks related. ` : ''}Ask ${escapeHtml(p.name)} for access to an agent${project ? ` on ${escapeHtml(project)}` : ''}?`}</span>${here || asked.has(p.handle) ? '' : `<button class="button secondary" type="button" data-mention-ask="${escapeHtml(p.handle)}">Request access</button>`}</div>`);
+    }
+    mentionBar.innerHTML = rows.join(''); mentionBar.hidden = !rows.length;
+  }
+  function mentionQuery() {
+    const input = $('message-input'), before = input.value.slice(0, input.selectionStart);
+    const m = /(^|[\s(])@([\w-]{0,24})$/.exec(before);
+    return m ? { at: before.length - m[2].length - 1, q: m[2].toLowerCase() } : null;
+  }
+  function paintMentionPop() {
+    const hit = mentionQuery();
+    if (!hit || !friends?.signedIn) { mentionBox.hidden = true; mentionAt = -1; return; }
+    mentionAt = hit.at;
+    const rank = (p) => { const c = friendContext(p); return c.here ? 0 : c.related ? 1 : 2; };
+    mentionHits = knownFriends().filter((p) => !hit.q || p.handle.toLowerCase().startsWith(hit.q) || p.name.toLowerCase().startsWith(hit.q)).sort((a, b) => rank(a) - rank(b)).slice(0, 6);
+    if (!mentionHits.length) { mentionBox.hidden = true; return; }
+    mentionIndex = Math.min(mentionIndex, mentionHits.length - 1);
+    mentionBox.innerHTML = `<p class="mention-head">Tag a friend to ask for one of their agents</p>` + mentionHits.map((p, i) => {
+      const c = friendContext(p);
+      return `<button type="button" class="mention-option" role="option" aria-selected="${i === mentionIndex}" data-mention-pick="${escapeHtml(p.handle)}"><strong>${escapeHtml(p.name)}</strong><span>@${escapeHtml(p.handle)}</span><small>${c.here ? `shares ${escapeHtml(c.here.agent?.name || 'an agent')} here` : c.related ? `has ${escapeHtml(c.related.agent.name)}` : c.project ? `ask for an agent on ${escapeHtml(c.project)}` : 'ask for an agent'}</small></button>`;
+    }).join('');
+    mentionBox.hidden = false;
+  }
+  function pickMention(handle) {
+    const input = $('message-input'), end = input.selectionStart;
+    if (mentionAt < 0) return;
+    input.value = `${input.value.slice(0, mentionAt)}@${handle} ${input.value.slice(end)}`;
+    const caret = mentionAt + handle.length + 2;
+    input.setSelectionRange(caret, caret); input.focus();
+    mentionBox.hidden = true; mentionAt = -1;
+    input.dispatchEvent(new Event('input'));
+  }
+  async function askMention(handle, button) {
+    const agent = byId.get(selectedId), project = projectOf(agent);
+    if (button) button.disabled = true;
+    try {
+      await desktopCall('friend-ask', { to: handle, agent: mineId(selectedId), target: project ? `an agent on ${project}` : '' });
+      asked.add(handle); toast('Request sent. You can read their agent once they accept.'); paintMentionBar();
+    } catch (error) { toast(error.message); if (button?.isConnected) button.disabled = false; }
+  }
+  const paintComposer = () => { paintMirror(); paintMentionBar(); paintMentionPop(); };
+  composerPaint = () => { paintMirror(); paintMentionBar(); };
+  $('message-input').addEventListener('input', () => { if ($('message-input').value.includes('@')) freshFriends().then(paintComposer); paintComposer(); });
+  $('message-input').addEventListener('scroll', () => { mirror.scrollTop = $('message-input').scrollTop; });
+  $('message-input').addEventListener('click', paintMentionPop);
+  $('message-input').addEventListener('blur', () => setTimeout(() => { if (!mentionBox.contains(document.activeElement)) mentionBox.hidden = true; }, 120));
+  mentionBox.addEventListener('mousedown', (event) => event.preventDefault()); // keep the caret in the textarea
+  document.addEventListener('click', (event) => {
+    const pick = event.target.closest('[data-mention-pick]'), ask = event.target.closest('[data-mention-ask]');
+    if (pick) pickMention(pick.dataset.mentionPick);
+    if (ask) askMention(ask.dataset.mentionAsk, ask);
+  });
+  $('message-input').addEventListener('keydown', (event) => {
+    if (mentionBox.hidden || !mentionHits.length) return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); event.stopImmediatePropagation(); mentionIndex = (mentionIndex + (event.key === 'ArrowDown' ? 1 : mentionHits.length - 1)) % mentionHits.length; paintMentionPop(); }
+    else if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) { event.preventDefault(); event.stopImmediatePropagation(); pickMention(mentionHits[mentionIndex].handle); }
+    else if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); mentionBox.hidden = true; }
+  });
 
   $('composer').addEventListener('submit', sendMessage);
   $('message-input').addEventListener('input', () => {

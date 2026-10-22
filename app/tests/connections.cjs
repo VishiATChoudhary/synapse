@@ -107,6 +107,28 @@ const friend = (name) => `[...document.querySelectorAll('#friends-pop .friend')]
   await until(() => ui(`!!document.querySelector('#friend-what')`), 'the ask form');
   await ui(`document.querySelector('#friend-what').value = 'docs agent'; document.querySelector('#dialog-submit').click()`);
   await until(() => (read().outgoing || []).filter((r) => r.kind === 'ask').length === 2, 'the second ask went out');
+  await until(() => ui(`!document.querySelector('#action-dialog').open`), 'the dialog closes once sent');
+  await sleep(1500);
+  assert.equal(await ui(`document.querySelector('#action-dialog').open`), false, 'and stays closed');
+
+  // the composer: a slash command and an @friend are marked; tagging Mara offers to ask her for access
+  await ui(`[...document.querySelectorAll('[data-agent]')].find((b) => /codex/.test(b.textContent)).click()`);
+  await until(() => ui(`!!document.querySelector('#message-input') && !document.querySelector('#message-input').closest('[hidden]')`), 'the codex session');
+  await ui(`(() => { const i = document.querySelector('#message-input'); i.focus(); i.value = '/ultrafast check the build with @ma'; i.setSelectionRange(i.value.length, i.value.length); i.dispatchEvent(new Event('input')); })()`);
+  await until(() => ui(`!document.querySelector('#mention-pop').hidden`), 'friends to tag');
+  assert.match(await ui(`document.querySelector('#mention-pop').textContent`), /Mara@mara/);
+  assert.doesNotMatch(await ui(`document.querySelector('#mention-pop').textContent`), /Jonas/, 'only friends who added you back');
+  await ui(`document.querySelector('#message-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))`);
+  assert.equal(await ui(`document.querySelector('#message-input').value`), '/ultrafast check the build with @mara ', 'Enter picks the friend, it does not send');
+  assert.equal(await ui(`document.querySelector('.composer-mirror mark.slash').textContent`), '/ultrafast');
+  assert.equal(await ui(`document.querySelector('.composer-mirror mark.mention').textContent`), '@mara');
+  assert.match(await ui(`document.querySelector('.composer-channel').textContent`), /\/ultrafastRuns as a Codex command/);
+  await until(() => ui(`!!document.querySelector('[data-mention-ask="mara"]')`), 'request access for Mara');
+  const asks = read().outgoing.filter((r) => r.kind === 'ask').length;
+  await ui(`document.querySelector('[data-mention-ask="mara"]').click()`);
+  await until(() => read().outgoing.filter((r) => r.kind === 'ask').length === asks + 1, 'the tag asked Mara');
+  assert.match(read().outgoing.find((r) => r.kind === 'ask').target, /^an agent on /);
+  await until(() => ui(`/Asked Mara for access/.test(document.querySelector('#mention-bar').textContent)`), 'the bar says it asked');
 
   assert.deepEqual(errors, []);
   console.log('connections: ok');
