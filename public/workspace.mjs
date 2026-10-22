@@ -154,6 +154,12 @@ function initialize() {
   const paneKey = embedded ? new URLSearchParams(location.search).get('pane') : null;
   const parentOrigin = paneKey ? location.origin : 'null';
   if (paneKey) document.body.classList.add('pane-mode');
+  // Windows has no ⌘: the shortcuts here take Ctrl, so the labels say so (Alt for ⌥)
+  if (/Windows/.test(navigator.userAgent)) {
+    const relabel = (root) => root.querySelectorAll?.('kbd').forEach((k) => { k.textContent = k.textContent.replace(/⌘ \/ Ctrl/g, 'Ctrl').replace(/⌘/g, 'Ctrl').replace(/⌥/g, 'Alt'); });
+    relabel(document);
+    new MutationObserver((list) => list.forEach((m) => m.addedNodes.forEach(relabel))).observe(document.body, { childList: true, subtree: true });
+  }
   let desktop = null, rawState = { agents: [], edges: [], messageRevision: 0 }, desktopActive = true;
   const paneFrames = new Map();
   let splitActive = false, reportedView = '';
