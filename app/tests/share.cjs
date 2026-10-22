@@ -93,6 +93,16 @@ const friend = (name) => `[...document.querySelectorAll('#friends-pop .friend')]
   await js(`document.querySelector('#btn-friends').click(); document.querySelector('#btn-share').click()`);
   await until(() => js(`!document.querySelector('#modal').hidden && /offered · waiting/.test(document.querySelector('#modal .share-person').textContent)`), 'share from the top bar, Mara marked as offered');
 
+  // a cloud from before offers: share stays off (it would file the offer the wrong way round) and says why
+  await js(`document.querySelector('#modal .row .btn').click()`);
+  fs.writeFileSync(feed, JSON.stringify({ ...read(), canOffer: false, offersLater: 'sharing turns on once Synapse Cloud is updated' }));
+  await until(() => js(`document.querySelector('#btn-share').classList.contains('off')`), 'share off on an old cloud');
+  assert.equal(await js(`document.querySelector('#btn-share').title`), 'sharing turns on once Synapse Cloud is updated');
+  await js(`document.querySelector('#btn-share').click()`);
+  assert.equal(await js(`document.querySelector('#modal').hidden`), true, 'no share sheet');
+  await js(`document.querySelector('#btn-friends').click()`);
+  await until(() => js(`${friend('Mara')}?.querySelector('button').disabled === true`), 'per-person share off too');
+
   assert.deepEqual(errors, []);
   console.log('share: ok');
   app.quit();

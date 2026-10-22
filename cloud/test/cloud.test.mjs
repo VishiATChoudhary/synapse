@@ -93,6 +93,10 @@ const linkIn = (mail, to, subject) => {
 };
 const signup = (email, name, password = 'correct horse', extra = {}) => call('/v1/auth/signup', { body: { email, name, password, client: 'app', ...extra } });
 
+test('health lists what this cloud can do', async () => {
+  assert.deepEqual((await (await fetch(`${base}/health`)).json()).features, ['offers']);
+});
+
 test('email sign-up, verification, sign-in, wrong password', async () => {
   const s = await signup('Ada@Example.com', 'Ada Lovelace');
   assert.equal(s.status, 201);

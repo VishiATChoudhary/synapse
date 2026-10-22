@@ -24,6 +24,8 @@ if (!SECRET) throw new Error('CLOUD_SECRET is not set');
 // Admins are the verified emails in ADMIN_EMAILS (the /admin page), or anyone sending x-admin-secret: ADMIN_SECRET
 const WAITLIST = !!process.env.WAITLIST && process.env.WAITLIST !== '0';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || '';
+// what this cloud can do, on /health, so an app newer than its cloud turns those parts on only once it is updated
+const FEATURES = ['offers'];
 const ADMIN_EMAILS = new Set(String(process.env.ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
 const STARTED = Date.now();
 export const DMG_URL = process.env.DMG_URL || 'https://github.com/VishiATChoudhary/synapse/releases/latest/download/Synapse-arm64.dmg';
@@ -918,7 +920,7 @@ export const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname;
   try {
-    if (p === '/health') return json(res, 200, { ok: true, service: 'synapse-cloud' });
+    if (p === '/health') return json(res, 200, { ok: true, service: 'synapse-cloud', features: FEATURES });
     // pages on the old railway.app address move to PUBLIC_URL (their cookies only work there); the API stays on both
     if (OLD_HOST?.test(req.headers.host || '') &&!p.startsWith('/v1/') && ['GET', 'HEAD'].includes(req.method)) {
       res.writeHead(301, { location: PUBLIC_URL + req.url });

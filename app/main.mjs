@@ -742,7 +742,8 @@ async function pollRequests() {
       try { r = await a.requests(); } catch { return; } // offline: keep showing what we had
       let links = [];
       try { links = a.externalLinks(); } catch {}
-      next = { incoming: r.incoming || [], outgoing: r.outgoing || [], links, incomingTrust: r.incomingTrust || [] };
+      const canOffer = (await a.cloudFeatures().catch(() => [])).includes('offers');
+      next = { incoming: r.incoming || [], outgoing: r.outgoing || [], links, incomingTrust: r.incomingTrust || [], canOffer, offersLater: canOffer ? '' : a.OFFERS_LATER };
     }
   }
   feed = next;

@@ -130,11 +130,27 @@ async function incoming(id) {
   return r;
 }
 
+// What the cloud can do (its /health lists it), asked again every few minutes. A cloud from before offers would
+// file one as an ordinary request, the other way round: they would be sharing with me.
+let featuresAt = 0, features = [];
+export const OFFERS_LATER = 'sharing turns on once Synapse Cloud is updated (soon); asking a friend for one of theirs works now';
+export async function cloudFeatures() {
+  if (Date.now() - featuresAt < 5 * 60_000) return features;
+  try {
+    const r = await fetch(cloudUrl() + '/health', { signal: AbortSignal.timeout(5000) });
+    const got = (await r.json()).features;
+    features = Array.isArray(got) ? got : [];
+  } catch { return features; }
+  featuresAt = Date.now();
+  return features;
+}
+
 // Share one of my agents with a trusted person, from my side: an offer they accept by picking which of their
 // agents receives it. Once they do, the cloud tells this machine, which links the two (remote.mjs).
 export async function sendOffer({ to, agent, mode = 'sync', note } = {}) {
   if (!agent?.id) throw new Error('which agent to share? open one first');
   if (!to) throw new Error('who to share it with?');
+  if (!(await cloudFeatures()).includes('offers')) throw new Error(OFFERS_LATER);
   const c = await remote.cloudMachine(cloudUrl(), account()?.token);
   const { request } = await api('POST', '/v1/requests', { to, machineId: c.machineId, agent: agentBrief(agent), kind: 'offer', mode: mode === 'talk' ? 'talk' : 'sync', note });
   // the agent may be closed by the time they accept: keep what linking needs (its folder gives its project)

@@ -2025,8 +2025,8 @@ async function loadPeople(force = false) {
 }
 function renderShareBar() {
   const a = openAgent(), b = $('#btn-share'), n = offersIn().length + pendingTrust().length, c = $('#friends-count');
-  b.classList.toggle('off', !a);
-  b.title = a ? `share ${a.name} with a friend` : 'open an agent to share it with a friend';
+  b.classList.toggle('off', !a || ACC.feed.canOffer === false);
+  b.title = ACC.feed.canOffer === false ? ACC.feed.offersLater : a ? `share ${a.name} with a friend` : 'open an agent to share it with a friend';
   c.hidden = !n; c.textContent = n ? String(n) : '';
 }
 
@@ -2096,8 +2096,8 @@ function renderFriends() {
     const row = el('div', 'friend'), head = el('div', 'friend-head');
     head.append(avatar(p), el('b', '', p.name || p.handle || p.email || '?'), el('span', 'h', p.handle ? `@${p.handle}` : ''));
     const share = el('button', 'btn', 'share');
-    share.disabled = !p.trustsYou || !!p.pending;
-    share.title = p.pending ? 'they have not joined Synapse yet' : !p.trustsYou ? 'they have not added you back yet' : open ? `offer ${open.name} to ${p.name || p.handle}` : 'pick which agent to share';
+    share.disabled = !p.trustsYou || !!p.pending || ACC.feed.canOffer === false;
+    share.title = ACC.feed.canOffer === false ? ACC.feed.offersLater : p.pending ? 'they have not joined Synapse yet' : !p.trustsYou ? 'they have not added you back yet' : open ? `offer ${open.name} to ${p.name || p.handle}` : 'pick which agent to share';
     share.onclick = () => { closeFriends(); openShare(p); };
     head.append(share);
     const meta = el('div', 'friend-meta', p.pending ? 'invited, not on Synapse yet' : !p.trustsYou ? 'has not added you back yet' : out.length || inn.length ? `sees ${out.length} of your agents · you see ${inn.length} of theirs` : 'nothing shared yet');
@@ -2128,6 +2128,7 @@ async function openShare(preset) {
   if (!ACC.user) return showLogin();
   const a = openAgent();
   if (!a) return toast('open the agent you want to share first', true);
+  if (ACC.feed.canOffer === false) return toast(ACC.feed.offersLater, true);
   await loadPeople(true);
   const ok = people.filter((p) => p.trustsYou && !p.pending && p.handle);
   let pick = ok.find((p) => p.handle === preset?.handle)?.handle || ok[0]?.handle, mode = 'talk';
