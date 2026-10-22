@@ -32,7 +32,8 @@ export const FILES = {
   offers: path.join(DATA, 'offers.json'),           // my agents I offered to friends, by request id, to link once they accept
   requests: path.join(DATA, 'requests.json'),       // synapse requests last fetched from the cloud
   talks: path.join(DATA, 'talks.json'),             // agent talk: conversations with friends' agents
-  ptys: path.join(DATA, 'ptys.json'),               // Windows: the desktop app's terminals, { pid: cwd }
+  ptys: path.join(DATA, 'ptys.json'),
+  canvasHidden: path.join(DATA, 'canvas-hidden.json'), // agents hidden from the canvas by the user, [id]               // Windows: the desktop app's terminals, { pid: cwd }
 };
 export const WIN = process.platform === 'win32';
 export const REMOTE_DIR = path.join(DATA, 'remote');

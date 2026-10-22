@@ -62,7 +62,7 @@ const brief = ({ turns, ...c }) => ({ ...c, asked: turns?.length || 0 });
 // a friend's agent wants to ask one of mine that is shared read only: Allow / Not now on the target agent
 const talkRequests = () => talk.openRequests(readJSON(FILES.talks, {})).map(({ id, peerName, peerHandle, target, targetName, asker, askerName, at }) => ({ id, peerName, peerHandle, target, targetName, asker, askerName, at }));
 const state = () => ({
-  agents: agents(), talks: talks({ open: true }).map(brief), talkRequests: talkRequests(), edges: readJSON(FILES.edges, []), layout: readJSON(FILES.layout, {}),
+  agents: agents(), talks: talks({ open: true }).map(brief), talkRequests: talkRequests(), edges: readJSON(FILES.edges, []), layout: readJSON(FILES.layout, {}), hidden: readJSON(FILES.canvasHidden, []),
   demo: !!process.env.SYNAPSE_DEMO,
   messageRevision: fs.existsSync(FILES.messages) ? fs.statSync(FILES.messages).mtimeMs : 0,
 });
@@ -268,6 +268,16 @@ async function handleRequest(req, res) {
     lastSig = '';
     broadcast('state', state());
     return json(res, 200, { ok: true });
+  }
+  // hide agents from the canvas, or show them again: { ids, hidden }; { all: true, hidden: false } shows every one
+  if (p === '/api/canvas/hidden' && req.method === 'POST') {
+    const b = await body(req), now = new Set(readJSON(FILES.canvasHidden, []));
+    const ids = b.all ? [...now] : (Array.isArray(b.ids) ? b.ids : []).filter((id) => typeof id === 'string');
+    for (const id of ids) b.hidden ? now.add(id) : now.delete(id);
+    writeJSON(FILES.canvasHidden, [...now]);
+    lastSig = '';
+    broadcast('state', state());
+    return json(res, 200, { hidden: [...now] });
   }
   if (p === '/api/layout' && req.method === 'POST') {
     writeJSON(FILES.layout, { ...readJSON(FILES.layout, {}), ...(await body(req)) });

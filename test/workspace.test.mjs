@@ -158,3 +158,12 @@ test('a connected workspace receives state changes over its event stream', async
     await reader.cancel();
   } finally { clearTimeout(timeout); controller.abort(); }
 });
+
+test('agents hidden from the canvas stay hidden until shown again', async () => {
+  const { agents } = await (await fetch(base + '/api/state')).json();
+  const [a, b] = agents;
+  assert.deepEqual((await (await request('/api/canvas/hidden', { ids: [a.id, b.id], hidden: true })).json()).hidden, [a.id, b.id]);
+  assert.deepEqual((await (await fetch(base + '/api/state')).json()).hidden, [a.id, b.id]);
+  assert.deepEqual((await (await request('/api/canvas/hidden', { ids: [a.id], hidden: false })).json()).hidden, [b.id]);
+  assert.deepEqual((await (await request('/api/canvas/hidden', { all: true, hidden: false })).json()).hidden, []);
+});

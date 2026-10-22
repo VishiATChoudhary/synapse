@@ -1433,7 +1433,7 @@ async function agentIn(cwd, kind) {
   catch (e) { toast(e.message, true); }
 }
 const agentMenuIn = (cwd) => profileOrder().map((k) => ({ label: M.profiles[k].label || k, run: () => agentIn(cwd, k) }));
-function canvasMenu({ hit, agent, group, x, y }, r = $('#canvas-frame').getBoundingClientRect()) {
+function canvasMenu({ hit, agent, group, x, y, hiddenCount }, r = $('#canvas-frame').getBoundingClientRect()) {
   const items = [];
   if (hit === 'node' && agent) {
     const ptyId = Object.keys(M.agents).find((k) => M.agents[k].synapseId === agent.id);
@@ -1448,7 +1448,7 @@ function canvasMenu({ hit, agent, group, x, y }, r = $('#canvas-frame').getBound
       if (agent.parentId) items.push({ label: 'Collapse this child', run: () => { tellCanvas({ action: 'collapse-branch', id: agent.id }); linkToParent(agent.id, agent.parentId, agent.name); } });
     }
     if (agent.cwd) items.push({ label: 'New agent in this folder', sub: agentMenuIn(agent.cwd) });
-    items.push({ label: 'Rename', run: () => tellCanvas({ action: 'rename', id: agent.id }) }, { label: 'Unlink all', run: () => tellCanvas({ action: 'unlink', id: agent.id }) }, '-');
+    items.push({ label: 'Rename', run: () => tellCanvas({ action: 'rename', id: agent.id }) }, { label: 'Unlink all', run: () => tellCanvas({ action: 'unlink', id: agent.id }) }, { label: 'Hide from canvas', run: () => tellCanvas({ action: 'hide', id: agent.id }) }, '-');
     items.push({ label: mine ? 'Close session' : 'Kill agent', danger: true, run: () => killAgentAsk(agent) });
   } else if (hit === 'group' && group) {
     const p = M.projects.find((q) => q.key === (group.project || group.key));
@@ -1463,6 +1463,7 @@ function canvasMenu({ hit, agent, group, x, y }, r = $('#canvas-frame').getBound
     else if (group.cwd) items.push({ label: 'Add to sidebar', run: () => agentIn(group.cwd, null) });
   } else {
     items.push({ label: 'New workspace', run: () => promptProject() }, '-', { label: 'Arrange', run: () => tellCanvas({ action: 'arrange' }) }, { label: 'Fit', run: () => tellCanvas({ action: 'fit' }) });
+    if (hiddenCount) items.push({ label: `Show hidden agents (${hiddenCount})`, run: () => tellCanvas({ action: 'show-hidden' }) });
   }
   if (items.length) contextMenu(items, r.left + x, r.top + y);
 }

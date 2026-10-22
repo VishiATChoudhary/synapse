@@ -42,6 +42,9 @@
   .stats { margin-left: auto; border-left: 1px solid var(--rule); }
   .stat { display: flex; align-items: center; gap: 8px; height: 100%; padding: 0 14px; border-right: 1px solid var(--rule); color: var(--ink-2); }
   .stat:last-child { border-right: 0; }
+  .hidden-stat { background: none; border-top: 0; border-bottom: 0; border-left: 0; font: inherit; text-transform: inherit; cursor: pointer; }
+  .hidden-stat:hover { color: var(--ink); }
+  .hidden-stat[hidden] { display: none; }
   .stat b { font-weight: 400; color: var(--ink); font-variant-numeric: tabular-nums; }
   .sq { width: 7px; height: 7px; border: 1px solid var(--ink-2); flex: none; }
   .sq.busy { background: var(--sig); border-color: var(--sig); }
@@ -284,6 +287,7 @@
     <div class="stat"><span class="sq busy"></span><b id="nBusy">0</b> working</div>
     <div class="stat idle"><span class="sq"></span><b id="nIdle">0</b> idle</div>
     <div class="stat links"><b id="nEdges">0</b> links</div>
+    <button class="stat hidden-stat" id="hiddenStat" type="button" hidden title="Show the agents you hid"><b id="nHidden">0</b> hidden</button>
   </div>
   <button class="friends-btn" id="friendsBtn" type="button" title="Share agents with friends on other machines"><span class="dot" id="friendsDot"></span><span id="friendsLbl">friends</span></button>
   <button class="mode" id="mode" type="button" aria-label="Toggle dark mode"></button>
@@ -356,6 +360,7 @@ let query = '', matches = null, resultIdx = 0;
 // Collapsing is presentation only: nodes, links and running agents are preserved.
 const collapsedBranches = new Set();
 let sessionHidden = new Set();
+let userHidden = new Set(); // hidden from the canvas on purpose (right-click > Hide from canvas), kept by the server
 const forkChildren = (id) => [...agents.values()].filter((n) => !n.dying && n.a?.forkOf === id);
 function updateBranchVisibility() {
   for (const [id, n] of agents) {
@@ -363,12 +368,16 @@ function updateBranchVisibility() {
     n.hidden = false;
     for (let cur = id; cur && !seen.has(cur); cur = agents.get(cur)?.a?.forkOf) {
       seen.add(cur);
-      if (sessionHidden.has(cur) || collapsedBranches.has(cur)) { n.hidden = true; break; }
+      if (sessionHidden.has(cur) || collapsedBranches.has(cur) || userHidden.has(cur)) { n.hidden = true; break; }
     }
   }
   if (selected?.type === 'node' && agents.get(selected.id)?.hidden) { selected = null; closePanel(); }
   if (agents.get(hover?.id)?.hidden) hover = null;
+  const n = hiddenCount();
+  $('nHidden').textContent = n; $('hiddenStat').hidden = !n;
 }
+const hiddenCount = () => [...userHidden].filter((id) => agents.has(id) && !agents.get(id).dying).length;
+const setHidden = (ids, hidden) => api('/api/canvas/hidden', ids === 'all' ? { all: true, hidden } : { ids, hidden }).catch((e) => toast(e.message));
 function expandBranch(id) {
   const todo = [id], seen = new Set();
   while (todo.length) {
@@ -526,6 +535,7 @@ function externalNodes(list, byId) {
 
 function applyState(s) {
   layout = s.layout || {};
+  userHidden = new Set(s.hidden || []);
   talks = s.talks || [];
   talkRequests = s.talkRequests || [];
   const seen = new Set();
@@ -714,11 +724,14 @@ function doAction(d) {
   if (d.action === 'rename' && n) { selected = { type: 'node', id: d.id }; renderPanel(true).then(startRename); revealSelected(); }
   if (d.action === 'rename-project' && d.key) startProjectRename(d.key);
   if (d.action === 'unlink' && n) for (const e of edges.filter((e) => e.from === d.id || e.to === d.id)) removeEdge(e.id);
+  if (d.action === 'hide' && n) { setHidden([d.id], true); toast(`${n.a.name} hidden from the canvas`); }
+  if (d.action === 'show-hidden') setHidden('all', false);
   if (d.action === 'arrange') { arrange(); toast('Arranged by project'); }
   if (d.action === 'fit') fit();
   // the app's sidebar, circle, settings and notification open a conversation's thread here
   if (d.action === 'thread' && typeof d.conv === 'string') openThread({ conv: d.conv });
 }
+$('hiddenStat').onclick = () => doAction({ action: 'show-hidden' });
 cv.addEventListener('contextmenu', (ev) => {
   ev.preventDefault();
   const w = toWorld(ev.clientX, ev.clientY), h = hitTest(w.x, w.y);
@@ -728,15 +741,15 @@ cv.addEventListener('contextmenu', (ev) => {
     // a repo's outer frame starts agents in the repo's own folder
     const a = n?.a, mate = g?.outer ? { cwd: g.project.startsWith('/') ? g.project : undefined } : g?.nodes[0]?.[1]?.a;
     window.parent.postMessage({ type: 'synapse:menu', x: ev.clientX, y: ev.clientY,
-      hit: n ? 'node' : g ? 'group' : 'background',
+      hit: n ? 'node' : g ? 'group' : 'background', hiddenCount: hiddenCount(),
       agent: a ? { id: a.id, name: a.name, pid: a.pid, kind: a.kind, cwd: a.cwd, parentId: a.forkOf, children: forkChildren(a.id).map((n) => ({ id: n.a.id, name: n.a.forkQ || n.a.name, hidden: n.hidden })) } : null,
       group: g ? { key: g.key, project: g.project, label: g.label, cwd: mate?.cwd, count: g.nodes.length } : null }, '*');
     return;
   }
   closeCmenu();
-  const items = n ? [...branchActions(n.a.id), ['Rename', () => doAction({ action: 'rename', id: n.a.id })], ['Unlink all', () => doAction({ action: 'unlink', id: n.a.id })]]
+  const items = n ? [...branchActions(n.a.id), ['Rename', () => doAction({ action: 'rename', id: n.a.id })], ['Unlink all', () => doAction({ action: 'unlink', id: n.a.id })], ['Hide from canvas', () => doAction({ action: 'hide', id: n.a.id })]]
     : g ? [['Rename project', () => doAction({ action: 'rename-project', key: g.key })]]
-    : [['Arrange', () => doAction({ action: 'arrange' })], ['Fit', () => doAction({ action: 'fit' })]];
+    : [['Arrange', () => doAction({ action: 'arrange' })], ['Fit', () => doAction({ action: 'fit' })], ...(hiddenCount() ? [[`Show hidden agents (${hiddenCount()})`, () => doAction({ action: 'show-hidden' })]] : [])];
   cmenu = document.createElement('div'); cmenu.className = 'cmenu';
   for (const [label, run] of items) { const d = document.createElement('div'); d.textContent = label; d.onclick = () => { closeCmenu(); run(); }; cmenu.appendChild(d); }
   document.body.appendChild(cmenu);
