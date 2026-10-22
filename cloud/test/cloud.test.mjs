@@ -93,6 +93,10 @@ const linkIn = (mail, to, subject) => {
 };
 const signup = (email, name, password = 'correct horse', extra = {}) => call('/v1/auth/signup', { body: { email, name, password, client: 'app', ...extra } });
 
+test('health lists what this cloud can do', async () => {
+  assert.deepEqual((await (await fetch(`${base}/health`)).json()).features, ['offers']);
+});
+
 test('email sign-up, verification, sign-in, wrong password', async () => {
   const s = await signup('Ada@Example.com', 'Ada Lovelace');
   assert.equal(s.status, 201);
@@ -681,4 +685,44 @@ test('friends board: only people who trust each other both ways and both joined 
   await call('/v1/board', { token: tok(ann), method: 'DELETE' });
   assert.deepEqual((await call('/v1/board', { token: tok(bob) })).json.people.map((p) => p.handle), ['bob']);
   assert.equal((await call('/v1/board')).status, 401);
+});
+
+test('share offers: I offer one of my agents, they pick which of theirs receives it, my machine hears who', async () => {
+  const tag = Date.now().toString(36), anaEmail = `ana-${tag}@example.com`, leeEmail = `lee-${tag}@example.com`;
+  const ana = await signup(anaEmail, 'Ana');
+  const lee = await signup(leeEmail, 'Lee');
+  const anaM = await machine(ana.json.token), leeM = await machine(lee.json.token);
+  const mine = { id: 'ana-sess-1', name: 'api-auth', kind: 'claude', project: 'api' };
+  const offer = (body) => call('/v1/requests', { token: ana.json.token, body: { to: leeEmail, machineId: anaM.machineId, agent: mine, kind: 'offer', ...body } });
+  assert.equal((await offer({ mode: 'talk' })).status, 403, 'only to people who trust you');
+  await call('/v1/trusted', { token: ana.json.token, body: { who: leeEmail } });
+  await call('/v1/trusted', { token: lee.json.token, body: { who: anaEmail } });
+  const o = await offer({ mode: 'talk' });
+  assert.equal(o.status, 201);
+  assert.equal(o.json.request.kind, 'offer');
+  assert.equal(o.json.request.mode, 'talk');
+  const again = await offer({ mode: 'sync' });
+  assert.equal(again.json.request.id, o.json.request.id, 'one pending offer per agent and person');
+  assert.equal(again.json.request.mode, 'sync', 'offering again changes how');
+  const ask = await call('/v1/requests', { token: ana.json.token, body: { to: leeEmail, machineId: anaM.machineId, agent: mine } });
+  assert.notEqual(ask.json.request.id, o.json.request.id, 'an ask for the same agent is its own request');
+  assert.equal(ask.json.request.kind, 'ask');
+
+  const inbox = (await call('/v1/requests', { token: lee.json.token })).json.incoming;
+  assert.deepEqual(inbox.map((r) => r.kind).sort(), ['ask', 'offer']);
+  const id = o.json.request.id;
+  assert.equal((await call(`/v1/requests/${id}/accept`, { token: lee.json.token, body: { machineId: leeM.machineId } })).status, 400, 'needs a receiving agent');
+  const receiver = { id: 'lee-sess-4', name: 'web', kind: 'codex', project: 'web' };
+  const acc = await call(`/v1/requests/${id}/accept`, { token: lee.json.token, body: { machineId: leeM.machineId, receiver } });
+  assert.equal(acc.status, 200);
+  assert.equal(acc.json.peer.machineId, anaM.machineId);
+
+  const items = (await call('/v1/poll', { token: anaM.token, body: {} })).json.items;
+  assert.deepEqual(items.map((i) => i.type), ['paired', 'request']);
+  assert.equal(items[1].kind, 'offer');
+  assert.equal(items[1].mode, 'sync');
+  assert.deepEqual(items[1].receiver, receiver);
+  assert.equal(items[1].agent.id, 'ana-sess-1', 'which of my agents to share');
+  await call('/v1/send', { token: leeM.token, body: { to: anaM.machineId, pair: acc.json.pair, items: [{ type: 'request', kind: 'offer', status: 'accepted', receiver }] } });
+  assert.deepEqual((await call('/v1/poll', { token: anaM.token, body: {} })).json.items, [], 'a friend cannot forge an accepted offer');
 });

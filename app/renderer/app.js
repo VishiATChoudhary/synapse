@@ -2,6 +2,7 @@
 // sidebar, the deck of cards, the terminals and the fan-out tree. PTYs live in the main process.
 import { Terminal } from '../node_modules/@xterm/xterm/lib/xterm.mjs';
 import { FitAddon } from '../node_modules/@xterm/addon-fit/lib/addon-fit.mjs';
+import { createActivityView } from '../../public/activity.mjs';
 
 const $ = (s) => document.querySelector(s);
 // Windows has no ⌘: the app's shortcuts are Ctrl+Shift+key there (Alt adds what ⇧ adds on a Mac), and every
@@ -71,7 +72,8 @@ function selectSession(s, id = top(s)?.id) {
   if (id != null) focusPath(s, id);
   closeCanvas();
   render();
-  if ($('#modal').hidden && !fanOpen) top(s)?.term.focus();
+  if (workspaceOpen && top(s)) workspacePost({ type: 'synapse:desktop-navigate', view: 'session', id: `desktop-${top(s).key}` });
+  if (!workspaceOpen && $('#modal').hidden && !fanOpen) top(s)?.term.focus();
 }
 
 function statusOf(x) {
@@ -99,7 +101,7 @@ const termTheme = () => {
   };
 };
 
-async function makeSession(s, { kind, title, question = null, parent = null, spawn }) {
+async function makeSession(s, { kind, title, question = null, parent = null, key = null, spawn }) {
   const wrap = el('div', 'term');
   $('#stage').appendChild(wrap);
   const term = new Terminal({
@@ -115,14 +117,11 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
   // app shortcuts pass through; the macOS editing keys xterm drops or mis-sends become their readline
   // bytes (⌘⌫ clears the line, ⌘← / ⌘→ jump to its ends); everything else goes to the pty as is
   term.attachCustomKeyEventHandler((e) => {
-    // xterm otherwise sends plain Enter for Shift+Enter. Match Option+Enter for multiline prompts.
+    // Shells keep Enter; agents receive the enhanced-keyboard newline sequence.
     if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey && !e.isComposing) {
-      e.preventDefault(); term.input('\x1b\r'); return false;
+      e.preventDefault(); term.input(kind === 'shell' ? '\r' : '\x1b[13;2u'); return false;
     }
     if (e.type === 'keydown' && agentKey(e)) return false; // ⌃1-9 launch agents, never reach the pty
-    // ⇧Enter is a newline in agent prompts: Claude Code and Codex read the CSI u form their own terminal
-    // setup installs in iTerm2 and VS Code. A shell gets a plain Enter; the sequence would only echo there.
-    if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey && kind !== 'shell') { e.preventDefault(); term.input('\x1b[13;2u'); return false; }
     if (WIN && e.type === 'keydown' && e.ctrlKey && !e.altKey) { // Windows terminal habits: Ctrl+V pastes, Ctrl+Shift+C/V copy and paste
       if (!e.shiftKey && e.code === 'KeyV') return false; // the browser's paste event reaches xterm
       if (e.shiftKey && e.code === 'KeyC') { e.preventDefault(); const sel = term.getSelection(); if (sel) navigator.clipboard.writeText(sel); return false; }
@@ -137,11 +136,11 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
   });
   fit.fit();
   if (!wasVisible) wrap.classList.remove('visible'); // renderStage() decides what is shown
-  let pty;
-  try { ({ id: pty } = await spawn(term.cols, term.rows)); }
+  let pty, pid;
+  try { ({ id: pty, pid } = await spawn(term.cols, term.rows)); }
   catch (error) { term.dispose(); wrap.remove(); throw error; }
   synapse.pty.resize(pty, term.cols, term.rows); // whatever the spawner defaulted to, the pty and the view agree from the first frame
-  const x = { id: nextId++, pty, kind, title, question, parent, exited: false, term, fit, el: wrap };
+  const x = { id: nextId++, key: /^[\w-]{1,80}$/.test(key || '') ? key : crypto.randomUUID(), pty, pid, updatedAt: Date.now(), kind, title, question, parent, exited: false, term, fit, el: wrap };
   wrap.addEventListener('pointerdown', () => { if (M.focused !== s.id) selectSession(s, x.id); });
   wrap.addEventListener('focusin', () => { if (M.focused !== s.id) selectSession(s, x.id); });
   term.onData(sforkFilter(() => x));
@@ -151,7 +150,7 @@ async function makeSession(s, { kind, title, question = null, parent = null, spa
   return x;
 }
 
-synapse.pty.onData(({ id, data }) => { for (const s of M.slots) for (const x of s.sessions) if (x.pty === id) x.term.write(data); });
+synapse.pty.onData(({ id, data }) => { for (const s of M.slots) for (const x of s.sessions) if (x.pty === id) { x.updatedAt = Date.now(); x.term.write(data); } });
 synapse.pty.onExit(({ id, code }) => {
   for (const s of M.slots) for (const x of s.sessions) if (x.pty === id) { x.exited = true; x.term.write(`\r\n\x1b[2m[exited ${code}]\x1b[0m\r\n`); }
   render();
@@ -176,7 +175,7 @@ function sforkFilter(get) {
       if (t === '\x7f' || t === '\b') line = line.slice(0, -1);
       else if (t === '\x15' || t === '\x03') line = '';
       else if (t === '\x17') line = line.replace(/\S+\s*$/, '');
-      else if (t === '\x1b\r') line = null; // multiline editing cannot be tracked by the single-line /sfork shortcut
+      else if (t === '\x1b\r' || t === '\x1b[13;2u') line = null; // multiline input cannot be tracked by /sfork
       else if (/^[^\x00-\x1f\x7f]+$/.test(t)) line += t;
       // keys that move the cursor make the line unknowable; terminal reports (focus, cursor position,
       // device attributes) also arrive here and are ignored
@@ -212,7 +211,7 @@ function splitShell(direction) {
   const wt = s?.worktree || M.projects[0]?.worktrees[0]?.path;
   if (!wt) return toast('add a workspace first', true);
   if (fanOpen) closeFan();
-  newSlot(wt, 'shell', s ? { target: s.id, direction } : null);
+  return newSlot(wt, 'shell', s ? { target: s.id, direction } : null);
 }
 
 function paneIds(node) {
@@ -329,7 +328,7 @@ function snapshot() {
       let p = x.parent;
       while (p != null && !index.has(p)) p = sess(s, p)?.parent;
       index.set(x.id, sessions.length);
-      sessions.push({ kind: x.kind, title: x.title, question: x.question, parent: p == null ? null : index.get(p), resume: x.resume || null });
+      sessions.push({ key: x.key, kind: x.kind, title: x.title, question: x.question, parent: p == null ? null : index.get(p), resume: x.resume || null });
     }
     if (!sessions.length) continue;
     const t = [...s.path].reverse().find((id) => index.has(id));
@@ -360,7 +359,7 @@ async function restoreSessions(saved) {
       const parent = x.parent == null ? null : ids[x.parent] ?? null;
       try {
         const made = await makeSession(s, {
-          kind: x.kind, title: x.title, question: x.question, parent,
+          kind: x.kind, title: x.title, question: x.question, parent, key: x.key,
           spawn: (cols, rows) => synapse.pty.restore({ cwd: sv.worktree, kind: x.kind, resume: x.resume, cols, rows }),
         });
         made.resume = x.resume;
@@ -406,13 +405,17 @@ function renderLaunch() {
 }
 
 function render() {
-  renderLaunch();
-  // Keep the live input (and an outside click target) intact through state refreshes.
-  if (!nameEdit && !namePointer) { renderTree(); renderDeck(); }
+  if (!workspaceOpen) {
+    renderLaunch();
+    renderShareBar();
+    // Keep the live input (and an outside click target) intact through state refreshes.
+    if (!nameEdit && !namePointer) { renderTree(); renderDeck(); }
+    renderBar();
+  }
   renderStage();
-  renderBar();
   scheduleSave();
   syncCanvasBranches();
+  syncWorkspace();
 }
 
 // ---------------------------------------------------------------- drag to rearrange
@@ -498,9 +501,9 @@ function moveItem(list, item, target, side) {
 function moveWorktree(key, from, to, side) {
   // state refreshes replace M.projects while a drag is on: move it in the current one
   const p = M.projects.find((x) => x.key === key);
-  if (!p) return;
+  if (!p || !p.worktrees.some((w) => w.path === from) || !p.worktrees.some((w) => w.path === to)) return Promise.resolve();
   p.worktrees = moveItem(p.worktrees, p.worktrees.find((w) => w.path === from), p.worktrees.find((w) => w.path === to), side);
-  synapse.worktree.order(p.worktrees.map((w) => w.path)).catch((e) => toast(e.message, true));
+  return synapse.worktree.order(p.worktrees.map((w) => w.path));
 }
 // folding a workspace slides its worktrees shut (or open) instead of snapping; the tree holds still meanwhile
 let folding = false;
@@ -525,8 +528,9 @@ function foldProject(key) {
 }
 function moveProject(key, targetKey, side) {
   const by = (k) => M.projects.find((p) => p.key === k);
+  if (!by(key) || !by(targetKey)) return Promise.resolve();
   M.projects = moveItem(M.projects, by(key), by(targetKey), side);
-  synapse.project.order(M.projects.map((p) => p.key)).catch((e) => toast(e.message, true));
+  return synapse.project.order(M.projects.map((p) => p.key));
 }
 
 let nameClick = null, nameEdit = null, namePointer = false;
@@ -651,7 +655,7 @@ function renderTree() {
     add.onclick = (e) => { e.stopPropagation(); promptWorktree(p); };
     head.appendChild(add);
     head.onclick = toggleProject;
-    sortable(head, box, '.proj', (t, side) => moveProject(p.key, t.dataset.key, side));
+    sortable(head, box, '.proj', (t, side) => moveProject(p.key, t.dataset.key, side).catch((e) => toast(e.message, true)));
     box.appendChild(head);
     if (M.open.has(p.key)) {
       for (const w of p.worktrees) {
@@ -671,7 +675,7 @@ function renderTree() {
         wa.onclick = (e) => { e.stopPropagation(); pickProfile(w.path); };
         wh.appendChild(wa);
         wh.onclick = selectWorktree;
-        sortable(wh, wt, '.wt', (t, side) => moveWorktree(p.key, w.path, t.dataset.path, side));
+        sortable(wh, wt, '.wt', (t, side) => moveWorktree(p.key, w.path, t.dataset.path, side).catch((e) => toast(e.message, true)));
         wt.appendChild(wh);
         for (const s of M.slots.filter((s) => s.worktree === w.path)) {
           n++;
@@ -862,7 +866,7 @@ function renderStage() {
   if (layout != null) place(layout);
   // grab focus only when a different session comes to the front, so the 1 s state refresh never steals it from a dialog
   const changed = t !== shownSession; shownSession = t;
-  if (t) requestAnimationFrame(() => { for (const x of visible) if (x.el.isConnected) x.fit.fit(); if (changed && top(focusedSlot()) === t && t.el.isConnected && !nameEdit && $('#modal').hidden && !fanOpen && !canvasOpen) t.term.focus(); });
+  if (t) requestAnimationFrame(() => { for (const x of visible) if (x.el.isConnected) x.fit.fit(); if (!workspaceOpen && changed && top(focusedSlot()) === t && t.el.isConnected && !nameEdit && $('#modal').hidden && !fanOpen && !canvasOpen) t.term.focus(); });
 }
 
 function renderBar() {
@@ -933,7 +937,7 @@ function openFan(refresh = false) {
   $('#fan-meta').textContent = `${wt ? `${wt.project.label} / ${wt.worktree.name}` : ''}  ·  ${s.sessions.length} sessions  ·  depth ${s.path.length}`;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   inner.appendChild(svg);
-  const deckRects = new Map([...$('#deck').querySelectorAll('.card')].map((c, i) => [Number(c.dataset.session), c.getBoundingClientRect()]));
+  const deckRects = new Map(workspaceOpen ? [] : [...$('#deck').querySelectorAll('.card')].map((c, i) => [Number(c.dataset.session), c.getBoundingClientRect()]));
   const fanRect = inner.getBoundingClientRect();
   for (const n of nodes) {
     const x = n.x;
@@ -984,7 +988,7 @@ function openFan(refresh = false) {
     }
   }
 }
-function closeFan() { fanOpen = false; $('#fan').hidden = true; top(focusedSlot())?.term.focus(); }
+function closeFan() { fanOpen = false; $('#fan').hidden = true; if (workspaceOpen) workspaceFrame.focus(); else top(focusedSlot())?.term.focus(); }
 $('#fan-esc').onclick = closeFan;
 $('#fan').addEventListener('click', (e) => { if (e.target === $('#fan') || e.target === $('#fan-inner')) closeFan(); });
 
@@ -997,7 +1001,7 @@ function modal(title, build) {
   m.querySelector('.modal-card').dataset.kind = title;
   body.replaceChildren();
   body.onkeydown = null;
-  build(body, () => { m.hidden = true; top(focusedSlot())?.term.focus(); });
+  build(body, () => { m.hidden = true; if (workspaceOpen) workspaceFrame.focus(); else top(focusedSlot())?.term.focus(); });
   m.hidden = false;
   const inp = body.querySelector('input, textarea'); if (inp) inp.focus();
 }
@@ -1415,24 +1419,23 @@ function openTalk(id) {
   if (!$('#modal').hidden) $('#modal').hidden = true;
   closePop();
   openCanvas();
-  if (canvasLive) tellCanvas({ action: 'thread', conv: id }); else pendingThread = id;
+  if (workspaceOpen || canvasLive) tellCanvas({ action: 'thread', conv: id }); else pendingThread = id;
 }
 synapse.talks.onOpen(openTalk);
 // right-click in the node view: the canvas reports what was hit, the menu is ours
-const tellCanvas = (d) => $('#canvas-frame').contentWindow?.postMessage({ type: 'synapse:do', ...d }, '*');
+const tellCanvas = (d) => workspaceOpen ? workspacePost({ type: 'synapse:canvas-action', action: d }) : $('#canvas-frame').contentWindow?.postMessage({ type: 'synapse:do', ...d }, '*');
 // start an agent in a folder that may not be in the sidebar yet: add it first, so the session has a row
 async function agentIn(cwd, kind) {
-  try { const dir = await synapse.project.add(cwd); await refresh(); const wt = worktreeOf(dir); if (wt) M.open.add(wt.project.key); if (kind) newSlot(dir, kind); else toast(`${dir.split('/').pop()} added to the sidebar`); }
+  try { const dir = await synapse.project.add(cwd); await refresh(); const wt = worktreeOf(dir); if (wt) M.open.add(wt.project.key); if (kind) { await newSlot(dir, kind); if (workspaceOpen && focusedSlot()) selectSession(focusedSlot()); } else toast(`${dir.split('/').pop()} added to the sidebar`); }
   catch (e) { toast(e.message, true); }
 }
 const agentMenuIn = (cwd) => profileOrder().map((k) => ({ label: M.profiles[k].label || k, run: () => agentIn(cwd, k) }));
-function canvasMenu({ hit, agent, group, x, y }) {
-  const r = $('#canvas-frame').getBoundingClientRect();
+function canvasMenu({ hit, agent, group, x, y }, r = $('#canvas-frame').getBoundingClientRect()) {
   const items = [];
   if (hit === 'node' && agent) {
     const ptyId = Object.keys(M.agents).find((k) => M.agents[k].synapseId === agent.id);
     const mine = ptyId && M.slots.find((s) => s.sessions.some((z) => z.pty === ptyId));
-    if (mine) items.push(...sessionActions(mine, mine.sessions.find((q) => q.pty === ptyId)), '-', { label: 'Open session', run: () => { const z = mine.sessions.find((q) => q.pty === ptyId); M.focused = mine.id; focusPath(mine, z.id); if (canvasOpen) toggleCanvas(); render(); } });
+    if (mine) items.push(...sessionActions(mine, mine.sessions.find((q) => q.pty === ptyId)), '-', { label: 'Open session', run: () => { const z = mine.sessions.find((q) => q.pty === ptyId); selectSession(mine, z.id); } });
     if (!mine) {
       const kids = agent.children || [];
       const collapse = (k) => { tellCanvas({ action: 'collapse-branch', id: k.id }); linkToParent(k.id, agent.id, k.name); };
@@ -1464,6 +1467,16 @@ async function openSettings() {
   let s = {};
   try { s = await synapse.settings.get(); } catch {}
   modal('settings', (body, close) => {
+    const setup = el('div', 'opt set'), setupButton = el('button', 'btn', 'Set up');
+    const setupReport = el('pre', 'setup-report'); setupReport.hidden = true;
+    setup.append(el('span', 'k', 'Agent integrations'), el('span', 'c', 'Add Synapse tools and prompt hooks to your agent settings. Existing files are backed up.'), setupButton);
+    setupButton.onclick = async () => {
+      setupButton.disabled = true; setupButton.textContent = 'Setting up…';
+      try { setupReport.textContent = await synapse.integrations.install(); setupReport.hidden = false; setupButton.textContent = 'Set up again'; }
+      catch (e) { setupReport.textContent = e.message; setupReport.hidden = false; setupButton.textContent = 'Try again'; }
+      finally { setupButton.disabled = false; }
+    };
+    body.append(setup, setupReport);
     const themeRow = el('div', 'opt set'), themeBtn = el('button', 'btn');
     const showTheme = () => (themeBtn.textContent = document.documentElement.dataset.theme === 'night' ? '◐ night' : '◐ signal');
     themeRow.append(el('span', 'k', 'theme'), el('span', 'c', 'signal is light, night is dark'), themeBtn); showTheme();
@@ -1482,6 +1495,13 @@ async function openSettings() {
       try { M.autoSendFork = (await synapse.settings.set({ autoSendFork: fcb.checked })).autoSendFork; toast(fcb.checked ? 'forks send their question right away' : 'a fork\'s question waits in its prompt for you'); }
       catch (e) { fcb.checked = !fcb.checked; toast(e.message, true); }
     };
+    const doneRow = el('label', 'opt set'), dcb = el('input');
+    dcb.type = 'checkbox'; dcb.checked = s.notifyDone !== false;
+    doneRow.append(dcb, el('span', 'k', 'notify when done'), el('span', 'c', 'a notification when an agent finishes while Synapse is in the background, a toast when you are looking at another one'));
+    dcb.onchange = async () => {
+      try { dcb.checked = (await synapse.settings.set({ notifyDone: dcb.checked })).notifyDone; toast(dcb.checked ? 'agents tell you when they are done' : 'no notifications when agents finish'); }
+      catch (e) { dcb.checked = !dcb.checked; toast(e.message, true); }
+    };
     const loginRow = el('label', 'opt set'), lcb = el('input');
     lcb.type = 'checkbox'; lcb.checked = !!s.openAtLogin;
     loginRow.append(lcb, el('span', 'k', 'Open Synapse at login'), el('span', 'c', 'so friends\' questions get answered while you work'));
@@ -1492,7 +1512,7 @@ async function openSettings() {
     const updRow = el('div', 'opt set'), updVal = el('span', 'c'), updBtn = el('button', 'btn', 'check now');
     const showUpd = (u) => {
       const at = `version ${u.current || '?'}`;
-      updVal.textContent = !u.enabled ? `${at} · running from source, updates come with git pull`
+      updVal.textContent = !u.enabled ? `${at} · ${u.current?.includes('-') ? 'preview build, install updates manually' : 'running from source, updates come with git pull'}`
         : u.state === 'checking' ? `${at} · checking…`
         : u.state === 'error' ? `${at} · last check failed: ${u.error}`
         : ['downloading', 'ready', 'manual', 'installing'].includes(u.state) ? `${at} · ${u.version} available`
@@ -1502,10 +1522,33 @@ async function openSettings() {
     updRow.append(el('span', 'k', 'updates'), updVal, updBtn);
     synapse.update.get().then(showUpd, () => {});
     updBtn.onclick = async () => { updBtn.disabled = true; updVal.textContent = 'checking…'; try { showUpd(await synapse.update.check()); } catch (e) { toast(e.message, true); } updBtn.disabled = false; };
+    // GUI or Terminal: one choice, kept here rather than in the toolbar
+    const viewRow = el('div', 'opt set'), viewSeg = el('div', 'seg view-seg');
+    for (const [v, label] of [['gui', 'GUI'], ['terminal', 'Terminal']]) {
+      const b = el('button', (v === 'gui') === workspaceOpen ? 'on' : '', label);
+      b.dataset.view = v;
+      b.onclick = () => { close(); if (v === 'gui') openWorkspace(); else showWorkspace(false); };
+      viewSeg.append(b);
+    }
+    viewRow.append(el('span', 'k', 'view'), el('span', 'c', 'GUI shows sessions, connections and friends as a workspace; Terminal is the raw terminals with forks'), viewSeg);
     const tourRow = el('div', 'opt set'), tourBtn = el('button', 'btn', 'replay');
     tourRow.append(el('span', 'k', 'tour'), el('span', 'c', 'the five steps a new install starts with'), tourBtn);
     tourBtn.onclick = () => { close(); showOnboarding(false); };
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), themeRow, linkRow, forkRow, loginRow, updRow, tourRow);
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), viewRow, themeRow, linkRow, forkRow, doneRow, loginRow, updRow, tourRow);
+    const commands = el('div', 'agent-commands'), commandInputs = new Map();
+    for (const [kind, profile] of Object.entries(s.profiles || {})) {
+      const row = el('label', 'opt set'), input = el('input');
+      input.value = profile.command; input.spellcheck = false; input.setAttribute('aria-label', `${profile.label || kind} command`);
+      row.append(el('span', 'k', profile.label || kind), input); commands.append(row); commandInputs.set(kind, input);
+    }
+    const saveCommands = el('button', 'btn', 'Save commands');
+    saveCommands.onclick = async () => {
+      saveCommands.disabled = true;
+      try { const result = await synapse.settings.set({ profiles: Object.fromEntries([...commandInputs].map(([kind, input]) => [kind, { command: input.value }])) }); M.profiles = result.profiles; render(); toast('Commands saved. New sessions use these commands.'); }
+      catch (e) { toast(e.message, true); }
+      finally { saveCommands.disabled = false; }
+    };
+    commands.append(saveCommands); body.append(el('div', 'sub', 'Agent commands'), commands);
     const phones = el('div', 'phones');
     body.append(el('div', 'sub', 'phone'), phones);
     drawPhones(phones);
@@ -1560,9 +1603,10 @@ synapse.onLoginSuggest(() => {
 });
 
 let toastTimer = null;
-function toast(text, sig = false) {
-  const t = $('#toast'); t.textContent = text; t.className = 'toast' + (sig ? ' sig' : ''); t.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 2600);
+function toast(text, sig = false, onClick = null) {
+  const t = $('#toast'); t.textContent = text; t.className = 'toast' + (sig ? ' sig' : '') + (onClick ? ' act' : ''); t.hidden = false;
+  t.onclick = onClick && (() => { t.hidden = true; onClick(); });
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), onClick ? 6000 : 2600);
 }
 
 // ---------------------------------------------------------------- keys
@@ -1629,6 +1673,7 @@ function showCanvas(open) {
 }
 
 async function openCanvas() {
+  if (workspaceOpen) { workspacePost({ type: 'synapse:desktop-navigate', view: 'canvas' }); return; }
   // history.back() is asynchronous: finish removing the old entry before pushing another.
   if (canvasBackPending) { reopenCanvas = true; return; }
   if (canvasOpen) return;
@@ -1639,7 +1684,7 @@ async function openCanvas() {
   const f = $('#canvas-frame');
   if (!f.src) $('#canvas').classList.add('loading');
   try {
-    canvasReady ||= synapse.canvas().then((url) => { f.src = url; }).catch((e) => { canvasReady = null; throw e; });
+    canvasReady ||= synapse.canvas().then((url) => { f.src = new URL('canvas', url).href; }).catch((e) => { canvasReady = null; throw e; });
     await canvasReady;
     if (version === canvasVersion && canvasOpen && $('#modal').hidden) f.focus();
   } catch (e) {
@@ -1660,7 +1705,7 @@ function closeCanvas(fromHistory = false) {
   }
 }
 
-function toggleCanvas() { if (canvasOpen || reopenCanvas) closeCanvas(); else openCanvas(); }
+function toggleCanvas() { if (workspaceOpen) return workspacePost({ type: 'synapse:desktop-navigate', view: 'canvas', toggle: true }); if (canvasOpen || reopenCanvas) closeCanvas(); else openCanvas(); }
 addEventListener('popstate', () => {
   const reopen = reopenCanvas;
   canvasBackPending = false; reopenCanvas = false;
@@ -1671,8 +1716,9 @@ $('#btn-canvas').onclick = toggleCanvas;
 
 // ---------------------------------------------------------------- activity
 // Your year at a glance: GitHub contributions and prompts to your agents as heatmaps, with a streak, a level and badges.
-let activityOpen = false, activityAt = 0;
+let activityOpen = false;
 function showActivity(open) {
+  if (workspaceOpen) { workspacePost({ type: 'synapse:desktop-navigate', view: open ? 'activity' : 'back' }); return; }
   activityOpen = open;
   $('#activity').hidden = !open;
   $('#btn-activity').classList.toggle('on', open);
@@ -1682,121 +1728,10 @@ function showActivity(open) {
 }
 $('#btn-activity').onclick = () => showActivity(!activityOpen);
 $('#activity').onkeydown = (e) => { if (e.key === 'Escape') showActivity(false); };
-synapse.activity.onProgress(({ done, total }) => { const p = $('#activity .act-loading'); if (p) p.textContent = `counting your year · ${done} of ${total} conversations`; });
+synapse.activity.onProgress((progress) => { activityView.progress(progress); workspacePost({ type: 'synapse:activity-progress', progress }); });
 
-const fmt = (n) => n.toLocaleString('en-US');
-const compact = (n) => n.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 });
-const dayKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-// 53 weeks of days, Sunday on top, like GitHub's; four shades split at the busiest tenth of active days
-function heatmap(days, unit) {
-  const wrap = el('div', 'act-map'), months = el('div', 'act-months'), grid = el('div', 'act-grid');
-  const end = new Date(); end.setHours(12, 0, 0, 0);
-  const start = new Date(end); start.setDate(start.getDate() - 52 * 7 - end.getDay());
-  const vals = Object.values(days).filter(Boolean).sort((x, y) => x - y);
-  const hi = vals[Math.floor(vals.length * 0.9)] || 1;
-  let col = 0, lastMonth = -1;
-  for (const d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    if (d.getDay() === 0) {
-      if (d.getMonth() !== lastMonth && col < 51) { const m = el('span', '', d.toLocaleDateString('en-US', { month: 'short' })); m.style.gridArea = `1 / ${col + 1} / 2 / span 3`; months.appendChild(m); lastMonth = d.getMonth(); }
-      col++;
-    }
-    const n = days[dayKey(d)] || 0, cell = el('i', `l${n ? Math.min(4, Math.ceil((4 * n) / hi)) : 0}`);
-    cell.title = `${n ? fmt(n) : 'no'} ${n === 1 ? unit.replace(/s$/, '') : unit} · ${d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}`;
-    grid.appendChild(cell);
-  }
-  const legend = el('div', 'act-legend');
-  legend.append(el('span', '', 'less'), ...[0, 1, 2, 3, 4].map((l) => el('i', `l${l}`)), el('span', '', 'more'));
-  wrap.append(months, grid, legend);
-  return wrap;
-}
-
-async function drawActivity() {
-  const box = $('#activity');
-  if (box.dataset.ready && Date.now() - activityAt < 60_000) return;
-  if (!box.dataset.ready) box.replaceChildren(el('div', 'act-loading', 'counting your year…'));
-  let a;
-  try { a = await synapse.activity.get(); } catch (e) { if (!box.dataset.ready) box.replaceChildren(el('div', 'act-loading', e.message)); return; }
-  activityAt = Date.now(); box.dataset.ready = '1';
-  const page = el('div', 'act-page');
-  const head = el('div', 'act-head'), lvl = el('div', 'act-level'), bar = el('div', 'act-xp'), fill = el('span');
-  fill.style.width = `${Math.round((100 * (a.xp - a.levelFrom)) / (a.levelTo - a.levelFrom))}%`;
-  bar.appendChild(fill);
-  lvl.append(el('div', 'act-lvl', `level ${a.level}`), bar, el('div', 'act-cap', `${fmt(a.xp)} XP · ${fmt(a.levelTo - a.xp)} to level ${a.level + 1}`));
-  head.append(el('div', 'act-title', 'Activity'), lvl);
-  const tiles = el('div', 'act-tiles');
-  const tile = (n, label, hot) => { const t = el('div', 'act-tile' + (hot ? ' hot' : '')); t.append(el('b', '', n), el('span', '', label)); return t; };
-  const codeWord = a.github ? 'contributions' : 'commits';
-  tiles.append(
-    tile(fmt(a.streak), 'day streak', a.streak > 0),
-    tile(fmt(a.longest), 'best streak'),
-    tile(fmt(a.totals.code), codeWord),
-    tile(fmt(a.totals.claude + a.totals.codex), 'prompts'),
-    tile(compact(a.totals.tokens), 'tokens'),
-    tile(compact(a.totals.todayTokens), 'tokens today'),
-  );
-  const section = (title, sub, map) => { const s = el('div', 'act-sec'), h = el('div', 'act-sec-head'); h.append(el('span', 'act-sec-t', title), el('span', 'act-sec-s', sub)); s.append(h, map); return s; };
-  const agents = {};
-  for (const k of ['claude', 'codex']) for (const [d, n] of Object.entries(a.prompts[k])) agents[d] = (agents[d] || 0) + n;
-  const code = a.github
-    ? section(`GitHub · @${a.github.login}`, `${fmt(a.totals.code)} contributions in the last year`, heatmap(a.github.days, 'contributions'))
-    : section('Commits', `${fmt(a.totals.code)} in your workspaces · sign in to the gh CLI to see GitHub here`, heatmap(a.commits, 'commits'));
-  const tokenDays = Object.fromEntries(Object.entries(a.tokens).map(([d, t]) => [d, t.all]));
-  const models = el('div', 'act-models'), top = a.models[0]?.tokens || 1;
-  for (const m of a.models.slice(0, 8)) {
-    const row = el('div', 'act-model'), bar = el('span', 'bar'), fill = el('i');
-    fill.style.width = `${Math.max(1, (100 * m.tokens) / top)}%`; bar.appendChild(fill);
-    row.append(el('span', 'name', m.name), bar, el('span', 'n', compact(m.tokens)));
-    models.appendChild(row);
-  }
-  const tokens = section('Tokens', `${compact(a.totals.tokens)} read and written · ${compact(a.totals.tokensOut)} written by your agents`, heatmap(tokenDays, 'tokens'));
-  if (a.models.length) tokens.appendChild(models);
-  const badges = el('div', 'act-badges');
-  for (const b of a.badges) { const c = el('div', 'act-badge' + (b.got ? ' got' : '')); c.append(el('b', '', b.name), el('span', '', b.what)); badges.appendChild(c); }
-  const friends = section('Friends this week', 'the last 7 days, next to the people you trust', el('div', 'act-board'));
-  drawBoard(friends.querySelector('.act-board'));
-  page.append(head, tiles, friends, code,
-    section('Agents', `${fmt(a.totals.claude)} prompts to Claude · ${fmt(a.totals.codex)} to Codex`, heatmap(agents, 'prompts')),
-    tokens,
-    section('Badges', `${a.badges.filter((b) => b.got).length} of ${a.badges.length}`, badges),
-    el('div', 'act-foot', 'counted on this Mac from your repos and agent conversations · esc closes'));
-  box.replaceChildren(page);
-}
-// the friends board: you and the people you trust both ways who joined, ranked by one number at a time
-let boardBy = 'tokens';
-const BOARD_BY = [['tokens', 'tokens', compact], ['prompts', 'prompts', fmt], ['activeDays', 'active days', fmt], ['streak', 'streak', fmt]];
-async function drawBoard(box, act) {
-  let b;
-  try { b = await (act ? synapse.board[act]() : synapse.board.get()); } catch (e) { box.replaceChildren(el('div', 'act-board-note', e.message)); return; }
-  const note = (text, button, onClick) => {
-    const n = el('div', 'act-board-join');
-    n.append(el('p', '', text));
-    if (button) { const go = el('button', 'btn sig', button); go.onclick = async () => { go.disabled = true; go.textContent = 'counting…'; await drawBoard(box, onClick); }; n.appendChild(go); }
-    box.replaceChildren(n);
-  };
-  if (!b.signedIn) return note('Sign in to Synapse (settings) to compete with the people you trust.');
-  if (!b.joined) return note(`See how your week compares with the people you trust. Joining shows them your last 7 days: tokens, prompts, commits, active days and streak.${b.waiting ? ` ${b.waiting} of them ${b.waiting === 1 ? 'is' : 'are'} on the board already.` : ''}`, 'join the board', 'join');
-  const [key, , show] = BOARD_BY.find((x) => x[0] === boardBy);
-  const people = [...b.people].sort((x, y) => (y[key] || 0) - (x[key] || 0));
-  const top = Math.max(1, people[0]?.[key] || 0);
-  const tabs = el('div', 'act-board-by');
-  for (const [k, label] of BOARD_BY) { const t = el('button', k === boardBy ? 'on' : '', label); t.onclick = () => { boardBy = k; drawBoard(box); }; tabs.appendChild(t); }
-  const list = el('div', 'act-board-list');
-  people.forEach((p, i) => {
-    const row = el('div', 'act-rank' + (p.me ? ' me' : '') + (i === 0 && people.length > 1 ? ' first' : ''));
-    const who = el('div', 'who');
-    who.append(el('b', '', p.me ? 'You' : p.name || p.handle), el('span', '', p.handle ? `@${p.handle}` : ''));
-    const bar = el('span', 'bar'), fill = el('i');
-    fill.style.width = `${Math.max(1.5, (100 * (p[key] || 0)) / top)}%`; bar.appendChild(fill);
-    row.append(el('span', 'pos', String(i + 1)), who, bar, el('span', 'n', show(p[key] || 0)));
-    list.appendChild(row);
-  });
-  const foot = el('div', 'act-board-foot');
-  if (people.length === 1) foot.appendChild(el('span', '', 'Nobody you trust has joined yet. When they do, they show up here.'));
-  const leave = el('button', 'act-board-leave', 'leave the board');
-  leave.onclick = () => drawBoard(box, 'leave');
-  foot.appendChild(leave);
-  box.replaceChildren(tabs, list, foot);
-}
+const activityView = createActivityView($('#activity'), { get: () => synapse.activity.get(), board: synapse.board });
+const drawActivity = () => activityView.refresh();
 
 for (const type of ['mouseup', 'auxclick']) addEventListener(type, (ev) => {
   if (ev.button !== 3 && ev.button !== 4) return;
@@ -1824,7 +1759,7 @@ addEventListener('message', (ev) => {
   toast(`${name || id} runs outside this app${pid ? ` (pid ${pid})` : ''}`, true);
 });
 synapse.onCanvasToggle(toggleCanvas);
-synapse.onCanvasBack(() => closeCanvas());
+synapse.onCanvasBack(() => workspaceOpen ? workspacePost({ type: 'synapse:desktop-navigate', view: 'back' }) : closeCanvas());
 
 function toggleTheme() {
   const next = document.documentElement.dataset.theme === 'night' ? 'signal' : 'night';
@@ -1874,12 +1809,41 @@ function apply(st) {
     const a = M.agents[x.pty];
     if (a?.synapseId && (a.transcript || !x.resume)) x.resume = { synapseId: a.synapseId, transcript: a.transcript || null };
     if (a && agentWorking(a)) x.ran = true; // noted here, not on draw, so a folded workspace's agents count too
+    if (a) watchTurn(x, a);
     if (a && x.named === false) { x.named = true; nameForkAgent(x); }
   }
   refreshPullRequests();
   render();
 }
 synapse.onState(apply);
+
+// An agent that finishes a turn while you look elsewhere says so: a toast when Synapse is in front, a
+// notification when it is not. A turn has to have run a few seconds and then stayed quiet for two checks, so
+// the pause between two steps of one turn is not a finish.
+const TURN_MIN = 5000;
+function watchTurn(x, a) {
+  if (agentWorking(a)) { x.turnSince ||= Date.now(); x.quiet = 0; return; }
+  if (!x.turnSince || ++x.quiet < 2) return;
+  const long = Date.now() - x.turnSince;
+  x.turnSince = 0;
+  if (long < TURN_MIN || x.exited) return;
+  const s = M.slots.find((sl) => sl.sessions.includes(x));
+  const looking = document.hasFocus() && !canvasOpen && !fanOpen && (!workspaceOpen || workspaceView === 'session') && $('#modal').hidden && s && focusedSlot() === s && top(s) === x;
+  if (looking) return;
+  // a tab still called just "codex" says little with three of them open; the agent's name says which
+  const name = x.title && x.title !== x.kind ? x.title : a.name || x.title;
+  if (document.hasFocus()) toast(`✓ ${name} is done · open`, false, () => openTurn(x.pty));
+  else synapse.notify.done({ pty: x.pty, title: name, took: long });
+}
+function openTurn(pty) {
+  const s = M.slots.find((sl) => sl.sessions.some((x) => x.pty === pty));
+  if (!s) return;
+  M.focused = s.id; focusPath(s, s.sessions.find((x) => x.pty === pty).id);
+  if (canvasOpen) toggleCanvas();
+  render();
+  top(s)?.term.focus();
+}
+synapse.notify.onOpen(openTurn);
 synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { requestId, parentPty }));
 
 // ---------------------------------------------------------------- account, trusted people, synapse requests
@@ -1983,6 +1947,264 @@ function talkRequestRow(r) {
   return box;
 }
 
+// ---------------------------------------------------------------- friends and share
+// Top right, under fork. Friends lists the trusted people and what flows between you, with anything waiting on you
+// on top. Share offers the open agent to one of them, read only or read and ask; they pick which of their agents
+// receives it, and once they accept, this Mac links the two.
+const openAgent = () => { const s = top(focusedSlot()), a = s && M.agents[s.pty]; return a?.synapseId ? { id: a.synapseId, name: a.name, kind: a.kind } : null; };
+const offersIn = () => (ACC.feed.incoming || []).filter((r) => r.kind === 'offer' && r.status === 'pending');
+const asksIn = () => pendingRequests().filter((r) => r.kind !== 'offer');
+const asksOut = (p) => (ACC.feed.outgoing || []).filter((r) => r.kind !== 'offer' && r.status === 'pending' && (r.to?.handle ? r.to.handle === p.handle : r.to?.name === p.name));
+const offersOut = (p) => (ACC.feed.outgoing || []).filter((r) => r.kind === 'offer' && r.status === 'pending' && (r.to?.handle ? r.to.handle === p.handle : r.to?.name === p.name));
+let people = [], peopleAt = 0;
+async function loadPeople(force = false) {
+  if (!ACC.user) { people = []; return people; }
+  if (!force && Date.now() - peopleAt < 15_000) return people;
+  try { const r = await synapse.people.list(); people = Array.isArray(r) ? r : r?.trusted || []; peopleAt = Date.now(); } catch {}
+  return people;
+}
+function renderShareBar() {
+  const a = openAgent(), b = $('#btn-share'), n = offersIn().length + asksIn().length + pendingTrust().length, c = $('#friends-count');
+  b.classList.toggle('off', !a || ACC.feed.canOffer === false);
+  b.title = ACC.feed.canOffer === false ? ACC.feed.offersLater : a ? `share ${a.name} with a friend` : 'open an agent to share it with a friend';
+  c.hidden = !n; c.textContent = n ? String(n) : '';
+}
+
+// "Mara shares api-auth with you": it goes into the agent of mine picked here. In the friends list and the circle.
+function offerRow(r, done) {
+  const box = el('div', 'req offer-in');
+  const who = el('div', 'req-who');
+  who.append(avatar(r.from), el('b', '', personName(r.from)));
+  if (r.from?.handle && r.from?.name) who.append(el('span', 'h', `@${r.from.handle}`));
+  const what = el('div', 'req-what');
+  what.append('shares ', el('span', 'ag', `${r.agent?.kind || 'agent'} · ${r.agent?.name || '?'}`), ` with you, ${r.mode === 'talk' ? 'read and ask' : 'read only'}`);
+  box.append(who, what, el('div', 'req-note', 'Pick which of your agents gets it: that one can read it' + (r.mode === 'talk' ? ' and ask it questions.' : '.')));
+  const pick = el('select', 'req-pick');
+  pick.setAttribute('aria-label', 'which of your agents gets it');
+  if (!ACC.agents.length) { const o = el('option', '', 'start an agent to receive it'); o.value = ''; pick.append(o); pick.disabled = true; }
+  else for (const a of ACC.agents) { const o = el('option', '', `${a.kind} · ${a.name}${a.project ? `  (${a.project})` : ''}`); o.value = a.id; pick.append(o); }
+  const open = openAgent(); // the agent on screen is the likely one to receive it
+  pick.value = ACC.choice[r.id] || (open && ACC.agents.some((a) => a.id === open.id) ? open.id : pick.value);
+  pick.onchange = () => { ACC.choice[r.id] = pick.value; };
+  const row = el('div', 'req-row'), no = el('button', 'btn', 'Not now'), yes = el('button', 'btn sig', 'Accept');
+  yes.disabled = !ACC.agents.length;
+  no.onclick = async () => { no.disabled = yes.disabled = true; try { await synapse.requests.deny(r.id); toast(`declined ${personName(r.from)}'s ${r.agent?.name || 'agent'}`); done?.(); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; } };
+  yes.onclick = async () => {
+    no.disabled = yes.disabled = true;
+    try { await synapse.requests.acceptOffer(r.id, pick.value); toast(`${personName(r.from)}'s ${r.agent?.name || 'agent'} now shares with your ${ACC.agents.find((a) => a.id === pick.value)?.name || 'agent'}`); done?.(); }
+    catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
+  };
+  row.append(pick, no, yes);
+  box.append(row);
+  return box;
+}
+
+async function openFriends() {
+  const pop = $('#friends-pop');
+  pop.hidden = false;
+  renderFriends();
+  const r = $('#btn-friends').getBoundingClientRect(), w = pop.offsetWidth || 380;
+  pop.style.top = `${Math.round(r.bottom + 6)}px`;
+  pop.style.left = `${Math.round(Math.max(8, Math.min(innerWidth - w - 8, r.right - w)))}px`;
+  await Promise.all([loadPeople(true), synapse.requests.agents().then((a) => { ACC.agents = a; }).catch(() => {})]);
+  if (!pop.hidden) renderFriends();
+}
+const closeFriends = () => { $('#friends-pop').hidden = true; };
+$('#btn-friends').onclick = (e) => { e.stopPropagation(); if ($('#friends-pop').hidden) openFriends(); else closeFriends(); };
+$('#btn-share').onclick = () => openShare();
+addEventListener('mousedown', (e) => { if (!$('#friends-pop').hidden && !e.target.closest('#friends-pop, #btn-friends')) closeFriends(); });
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#friends-pop').hidden) closeFriends(); });
+
+function renderFriends() {
+  const pop = $('#friends-pop');
+  pop.replaceChildren();
+  if (!ACC.user) {
+    pop.append(el('div', 'pop-sec', 'friends'), el('div', 'friends-empty', 'Sign in to share agents with people you trust, and see what they share with you.'));
+    const b = el('button', 'btn sig friends-cta', 'sign in');
+    b.onclick = () => { closeFriends(); showLogin(); };
+    pop.append(b);
+    return;
+  }
+  const offers = offersIn(), trusts = pendingTrust();
+  if (offers.length) { pop.append(el('div', 'pop-sec', `shared with you · ${offers.length}`)); for (const r of offers) pop.append(offerRow(r, renderFriends)); }
+  const asks = asksIn();
+  if (asks.length) { pop.append(el('div', 'pop-sec', `wants yours · ${asks.length}`)); for (const r of asks) pop.append(askRow(r)); }
+  if (trusts.length) { pop.append(el('div', 'pop-sec', `added you · ${trusts.length}`)); for (const p of trusts) pop.append(trustRow(p, () => { loadPeople(true).then(renderFriends); })); }
+  pop.append(el('div', 'pop-sec', `trusted people · ${people.length}`));
+  if (!people.length) pop.append(el('div', 'friends-empty', 'Nobody yet. Add someone by email or @handle; once they add you back, you can share agents with each other.'));
+  const open = openAgent();
+  for (const p of people) {
+    const links = linksOf(p), out = links.filter((l) => l.direction === 'out'), inn = links.filter((l) => l.direction === 'in');
+    const row = el('div', 'friend'), head = el('div', 'friend-head');
+    head.append(avatar(p), el('b', '', p.name || p.handle || p.email || '?'), el('span', 'h', p.handle ? `@${p.handle}` : ''));
+    const share = el('button', 'btn', 'share');
+    share.disabled = !p.trustsYou || !!p.pending || ACC.feed.canOffer === false;
+    share.title = ACC.feed.canOffer === false ? ACC.feed.offersLater : p.pending ? 'they have not joined Synapse yet' : !p.trustsYou ? 'they have not added you back yet' : open ? `offer ${open.name} to ${p.name || p.handle}` : 'pick which agent to share';
+    share.onclick = () => { closeFriends(); openShare(p); };
+    const ask = el('button', 'btn', 'ask');
+    ask.disabled = !p.trustsYou || !!p.pending;
+    ask.title = p.pending ? 'they have not joined Synapse yet' : !p.trustsYou ? 'they have not added you back yet' : `ask ${p.name || p.handle} for one of their agents`;
+    ask.onclick = () => { closeFriends(); openAsk(p); };
+    head.append(ask, share);
+    const meta = el('div', 'friend-meta', p.pending ? 'invited, not on Synapse yet' : !p.trustsYou ? 'has not added you back yet' : out.length || inn.length ? `sees ${out.length} of your agents · you see ${inn.length} of theirs` : 'nothing shared yet');
+    row.append(head, meta);
+    for (const l of out) row.append(el('div', 'friend-flow', `your ${l.local?.name || 'agent'} → their ${l.agent?.name || 'agent'} · ${l.mode === 'talk' ? 'read and ask' : 'read only'}`));
+    for (const l of inn) row.append(el('div', 'friend-flow in', `their ${l.agent?.name || 'agent'} → your ${l.local?.name || 'agent'} · ${l.mode === 'talk' ? 'read and ask' : 'read only'}`));
+    for (const o of offersOut(p)) row.append(el('div', 'friend-flow wait', `offered ${o.agent?.name || 'an agent'} · waiting for them to accept`));
+    for (const o of asksOut(p)) row.append(el('div', 'friend-flow wait', `asked for ${o.target || 'an agent'} into your ${o.agent?.name || 'agent'} · waiting for them`));
+    pop.append(row);
+  }
+  const add = el('div', 'people-add'), inp = el('input'), go = el('button', 'btn', 'add');
+  inp.placeholder = 'add someone: email or @handle'; inp.spellcheck = false;
+  const submit = async () => {
+    const who = inp.value.trim(); if (!who) return;
+    go.disabled = true;
+    try { await synapse.people.add(who); inp.value = ''; toast(`${who} is trusted · they can add you back`); await loadPeople(true); renderFriends(); }
+    catch (e) { toast(e.message, true); go.disabled = false; }
+  };
+  go.onclick = submit;
+  inp.onkeydown = (e) => { if (e.key === 'Enter') { e.stopPropagation(); submit(); } };
+  add.append(inp, go);
+  const more = el('button', 'friends-link', 'manage in settings');
+  more.onclick = () => { closeFriends(); openSettings(); };
+  pop.append(add, more);
+}
+
+// Ask a friend for one of their agents: it comes into the agent of mine picked here (the open one by default) once
+// they accept and choose which of theirs.
+async function openAsk(preset) {
+  if (!ACC.user) return showLogin();
+  await Promise.all([loadPeople(true), synapse.requests.agents().then((a) => { ACC.agents = a; }).catch(() => {})]);
+  const ok = people.filter((p) => p.trustsYou && !p.pending && p.handle);
+  let pick = ok.find((p) => p.handle === preset?.handle)?.handle || ok[0]?.handle;
+  modal(preset?.name || preset?.handle ? `ask ${preset.name || preset.handle} for an agent` : 'ask a friend for an agent', (body, close) => {
+    if (!ok.length || !ACC.agents.length) {
+      body.append(el('div', 'share-empty', !ACC.agents.length ? 'Start an agent first: it is the one that receives theirs.' : 'None of your trusted people has added you back yet. Once they do, you can ask them.'));
+      return;
+    }
+    const list = el('div', 'share-people');
+    const draw = () => list.replaceChildren(...ok.map((p) => {
+      const r = el('button', `share-person${p.handle === pick ? ' on' : ''}`);
+      r.append(avatar(p), el('b', '', p.name || p.handle), el('span', 'h', `@${p.handle}`), el('span', 'note', asksOut(p).length ? 'asked · waiting' : ''));
+      r.onclick = () => { pick = p.handle; draw(); };
+      return r;
+    }));
+    draw();
+    const into = el('select', 'req-pick'), open = openAgent();
+    for (const a of ACC.agents) { const o = el('option', '', `${a.kind} · ${a.name}${a.project ? `  (${a.project})` : ''}`); o.value = a.id; into.append(o); }
+    if (open && ACC.agents.some((a) => a.id === open.id)) into.value = open.id;
+    const what = el('input', 'ask-what'); what.placeholder = 'what for? e.g. their api-auth agent, the payments work'; what.maxLength = 120; what.spellcheck = false;
+    const row = el('div', 'row'), cancel = el('button', 'btn', 'cancel'), go = el('button', 'btn sig', 'ask');
+    cancel.onclick = close;
+    go.onclick = async () => {
+      go.disabled = true;
+      const p = ok.find((x) => x.handle === pick);
+      try { await synapse.requests.ask(pick, into.value, what.value); toast(`asked ${p?.name || pick} · they pick which of their agents to share`); close(); }
+      catch (e) { toast(e.message, true); go.disabled = false; }
+    };
+    what.onkeydown = (e) => { if (e.key === 'Enter') { e.stopPropagation(); go.click(); } };
+    row.append(cancel, go);
+    body.append(el('div', 'hint', 'ask'), list, el('div', 'hint', 'into your agent'), into, el('div', 'hint', 'what you need (optional)'), what,
+      el('div', 'hint share-note', 'They choose which of their agents to share, and whether yours may ask it questions. You can read it once they accept.'), row);
+    body.tabIndex = 0; body.onkeydown = (e) => { if (e.key === 'Escape') close(); };
+  });
+  $('#modal-body').focus();
+}
+
+// Share the open agent: pick a friend who trusts you back and how (read only or read and ask), then offer it.
+async function openShare(preset) {
+  if (!ACC.user) return showLogin();
+  const a = openAgent();
+  if (!a) return toast('open the agent you want to share first', true);
+  if (ACC.feed.canOffer === false) return toast(ACC.feed.offersLater, true);
+  await loadPeople(true);
+  const ok = people.filter((p) => p.trustsYou && !p.pending && p.handle);
+  let pick = ok.find((p) => p.handle === preset?.handle)?.handle || ok[0]?.handle, mode = 'talk';
+  modal(`share ${a.name}`, (body, close) => {
+    if (!ok.length) {
+      body.append(el('div', 'share-empty', people.length ? 'None of your trusted people has added you back yet. Once they do, you can share with them.' : 'Add someone you trust first: friends, at the top right.'));
+      const row = el('div', 'row'), b = el('button', 'btn sig', 'open friends');
+      b.onclick = () => { close(); openFriends(); };
+      row.append(b); body.append(row);
+      return;
+    }
+    body.append(el('div', 'hint', 'with'));
+    const list = el('div', 'share-people');
+    const draw = () => list.replaceChildren(...ok.map((p) => {
+      const r = el('button', `share-person${p.handle === pick ? ' on' : ''}`), already = linksOf(p).find((l) => l.direction === 'out' && l.local?.id === a.id);
+      r.append(avatar(p), el('b', '', p.name || p.handle), el('span', 'h', `@${p.handle}`), el('span', 'note', already ? `sees it · ${already.mode === 'talk' ? 'read and ask' : 'read only'}` : offersOut(p).some((o) => o.agent?.id === a.id) ? 'offered · waiting' : ''));
+      r.onclick = () => { pick = p.handle; draw(); };
+      return r;
+    }));
+    draw();
+    const seg = el('div', 'seg'), explain = el('div', 'hint share-explain');
+    const say = () => { explain.textContent = mode === 'talk' ? 'Their agent can read this one and ask it questions; a copy with no tools answers. Nobody can type into your agent.' : 'Their agent can read what this one is doing. Nothing else.'; };
+    for (const [v, label] of [['sync', 'read only'], ['talk', 'read and ask']]) {
+      const b = el('button', v === mode ? 'on' : '', label);
+      b.onclick = () => { mode = v; [...seg.children].forEach((x) => x.classList.toggle('on', x === b)); say(); };
+      seg.appendChild(b);
+    }
+    say();
+    const row = el('div', 'row'), cancel = el('button', 'btn', 'cancel'), go = el('button', 'btn sig', 'share');
+    cancel.onclick = close;
+    go.onclick = async () => {
+      go.disabled = true;
+      const p = ok.find((x) => x.handle === pick);
+      try { await synapse.requests.offer(pick, a.id, mode); toast(`offered ${a.name} to ${p?.name || pick} · they pick which of their agents gets it`); close(); }
+      catch (e) { toast(e.message, true); go.disabled = false; }
+    };
+    row.append(cancel, go);
+    body.append(list, el('div', 'hint', 'how'), seg, explain, el('div', 'hint share-note', 'They pick which of their agents receives it. Change or stop it any time under friends or Settings.'), row);
+    body.tabIndex = 0; body.onkeydown = (e) => { if (e.key === 'Escape') close(); };
+  });
+  $('#modal-body').focus();
+}
+
+// "Mara wants your context for her web agent": pick which of mine she gets (or all), and whether hers may ask.
+// In the circle and the friends list.
+function askRow(r) {
+  const box = el('div', 'req');
+  const who = el('div', 'req-who');
+  who.append(avatar(r.from), el('b', '', personName(r.from)));
+  if (r.from?.handle && r.from?.name) who.append(el('span', 'h', `@${r.from.handle}`));
+  const what = el('div', 'req-what');
+  what.append('wants your context for ', el('span', 'ag', `${r.agent?.kind || 'agent'} · ${r.agent?.name || '?'}`));
+  if (r.agent?.project) what.append(` in ${r.agent.project}`);
+  box.append(who, what);
+  if (r.target || r.note) box.append(el('div', 'req-note', [r.target && `asks for: ${r.target}`, r.note].filter(Boolean).join(' · ')));
+  const pick = el('select', 'req-pick');
+  pick.setAttribute('aria-label', 'which of your agents to share');
+  if (!ACC.agents.length) { const o = el('option', '', 'no live agents on this Mac'); o.value = ''; pick.append(o); pick.disabled = true; }
+  else {
+    for (const a of ACC.agents) { const o = el('option', '', `${a.kind} · ${a.name}${a.project ? `  (${a.project})` : ''}`); o.value = a.id; pick.append(o); }
+    if (ACC.agents.length > 1) { const o = el('option', '', 'all live agents'); o.value = '*'; pick.append(o); }
+    pick.value = ACC.choice[r.id] || bestAgent(r);
+  }
+  pick.onchange = () => { ACC.choice[r.id] = pick.value; };
+  // ticked by default: their agent may ask the shared agent questions, not only read it
+  const talkBox = el('label', 'req-talk'), tick = el('input');
+  tick.type = 'checkbox';
+  tick.checked = ACC.talk[r.id] ?? true;
+  tick.onchange = () => { ACC.talk[r.id] = tick.checked; };
+  talkBox.append(tick, el('span', '', 'Let their agent ask questions too'));
+  box.append(talkBox);
+  const row = el('div', 'req-row');
+  const no = el('button', 'btn', 'Deny'), yes = el('button', 'btn sig', 'Accept');
+  yes.disabled = !ACC.agents.length;
+  no.onclick = async () => {
+    no.disabled = yes.disabled = true;
+    try { await synapse.requests.deny(r.id); toast(`denied ${personName(r.from)}`); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
+  };
+  yes.onclick = async () => {
+    const ids = pick.value === '*' ? ACC.agents.map((a) => a.id) : [pick.value];
+    no.disabled = yes.disabled = true;
+    try { await synapse.requests.accept(r.id, ids, tick.checked); toast(`synapsed with ${personName(r.from)}`); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
+  };
+  row.append(pick, no, yes);
+  box.append(row);
+  return box;
+}
+
 function renderPop() {
   const pop = $('#syn-pop'), dot = $('#syn-dot');
   pop.replaceChildren();
@@ -1998,46 +2220,7 @@ function renderPop() {
   if (reqs.length) {
     pop.append(el('div', 'pop-sec', `requests · ${reqs.length}`));
     for (const r of reqs) {
-      const box = el('div', 'req');
-      const who = el('div', 'req-who');
-      who.append(avatar(r.from), el('b', '', personName(r.from)));
-      if (r.from?.handle && r.from?.name) who.append(el('span', 'h', `@${r.from.handle}`));
-      const what = el('div', 'req-what');
-      what.append('wants your context for ', el('span', 'ag', `${r.agent?.kind || 'agent'} · ${r.agent?.name || '?'}`));
-      if (r.agent?.project) what.append(` in ${r.agent.project}`);
-      box.append(who, what);
-      if (r.target || r.note) box.append(el('div', 'req-note', [r.target && `asks for: ${r.target}`, r.note].filter(Boolean).join(' · ')));
-      const pick = el('select', 'req-pick');
-      pick.setAttribute('aria-label', 'which of your agents to share');
-      if (!ACC.agents.length) { const o = el('option', '', 'no live agents on this Mac'); o.value = ''; pick.append(o); pick.disabled = true; }
-      else {
-        for (const a of ACC.agents) { const o = el('option', '', `${a.kind} · ${a.name}${a.project ? `  (${a.project})` : ''}`); o.value = a.id; pick.append(o); }
-        if (ACC.agents.length > 1) { const o = el('option', '', 'all live agents'); o.value = '*'; pick.append(o); }
-        pick.value = ACC.choice[r.id] || bestAgent(r);
-      }
-      pick.onchange = () => { ACC.choice[r.id] = pick.value; };
-      // ticked by default: their agent may ask the shared agent questions, not only read it
-      const talkBox = el('label', 'req-talk'), tick = el('input');
-      tick.type = 'checkbox';
-      tick.checked = ACC.talk[r.id] ?? true;
-      tick.onchange = () => { ACC.talk[r.id] = tick.checked; };
-      talkBox.append(tick, el('span', '', 'Let their agent ask questions too'));
-      box.append(talkBox);
-      const row = el('div', 'req-row');
-      const no = el('button', 'btn', 'Deny'), yes = el('button', 'btn sig', 'Accept');
-      yes.disabled = !ACC.agents.length;
-      no.onclick = async () => {
-        no.disabled = yes.disabled = true;
-        try { await synapse.requests.deny(r.id); toast(`denied ${personName(r.from)}`); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
-      };
-      yes.onclick = async () => {
-        const ids = pick.value === '*' ? ACC.agents.map((a) => a.id) : [pick.value];
-        no.disabled = yes.disabled = true;
-        try { await synapse.requests.accept(r.id, ids, tick.checked); toast(`synapsed with ${personName(r.from)}`); } catch (e) { toast(e.message, true); no.disabled = yes.disabled = false; }
-      };
-      row.append(pick, no, yes);
-      box.append(row);
-      pop.append(box);
+      pop.append(r.kind === 'offer' ? offerRow(r) : askRow(r));
     }
   }
   // agent talk: a friend's agent asking mine, or mine asking theirs; a click opens the thread
@@ -2258,7 +2441,7 @@ synapse.account.onChange((u) => {
   ACC.user = u; renderMe();
   if (u && !$('#login').hidden) { hideLogin(); if (!was) toast(`signed in as ${personName(u)}`); }
 });
-synapse.requests.onChange((f) => { ACC.feed = f || ACC.feed; renderDot(); });
+synapse.requests.onChange((f) => { ACC.feed = f || ACC.feed; workspacePost({ type: 'synapse:friends-changed' }); renderDot(); renderShareBar(); if (!$('#friends-pop').hidden) renderFriends(); });
 synapse.requests.onOpen(() => openPop(true));
 
 // ---- updates: the packaged app fetches new versions itself (updater.mjs); this only shows where it is
@@ -2523,6 +2706,226 @@ async function drawTalkHistory(box) {
 }
 const ageOf = (t) => { const m = Math.max(0, Math.round((Date.now() - (t || 0)) / 60000)); return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
 
+
+// The GUI and terminal renderer keep one session model and one PTY per session.
+// Only this packaged renderer owns native capabilities; the local page gets an allowlisted bridge.
+let workspaceOpen = false, workspaceReady = null, workspaceLive = false, workspaceSignature = '', workspaceView = 'session';
+const workspaceFrame = $('#workspace-frame');
+const workspacePost = (data) => {
+  if (workspaceLive && workspaceFrame.src) workspaceFrame.contentWindow.postMessage(data, new URL(workspaceFrame.src).origin);
+};
+function workspaceState() {
+  const pane = (node) => {
+    if (typeof node !== 'number') return { direction: node.direction, first: pane(node.first), second: pane(node.second) };
+    const s = slot(node);
+    return s && top(s) ? { key: `pane-${root(s).key}`, id: `desktop-${top(s).key}` } : null;
+  };
+  const layout = M.layouts.find((node) => paneIds(node).includes(M.focused));
+  return {
+    projects: M.projects, profiles: M.profiles, theme: document.documentElement.dataset.theme,
+    layout: layout == null ? null : pane(layout),
+    active: top(focusedSlot()) ? `desktop-${top(focusedSlot()).key}` : null,
+    sessions: M.slots.flatMap((s) => s.sessions.map((x) => ({
+      id: `desktop-${x.key}`, pty: x.pty, pid: x.pid, backendId: M.agents[x.pty]?.synapseId || null,
+      pane: `pane-${root(s).key}`,
+      name: M.agents[x.pty]?.name || x.title, kind: x.kind, cwd: s.worktree,
+      projectKey: worktreeOf(s.worktree)?.project.key || s.worktree,
+      project: worktreeOf(s.worktree)?.project.label || s.worktree.split('/').pop(),
+      status: x.exited ? 'exited' : statusOf(x) === 'working' ? 'busy' : statusOf(x),
+      lastActivity: x.updatedAt, parent: x.parent == null ? null : `desktop-${sess(s, x.parent)?.key}`,
+      exited: x.exited,
+    }))),
+  };
+}
+function syncWorkspace(force = false) {
+  if (!workspaceLive || !workspaceOpen) return;
+  const state = workspaceState(), signature = JSON.stringify(state);
+  if (!force && signature === workspaceSignature) return;
+  workspaceSignature = signature;
+  workspacePost({ type: 'synapse:desktop-state', state });
+}
+function showWorkspace(open) {
+  if (open !== workspaceOpen && fanOpen) closeFan();
+  workspaceOpen = open;
+  $('.side').inert = $('.main').inert = open;
+  $('#desktop-workspace').inert = !open;
+  $('.side').setAttribute('aria-hidden', String(open)); $('.main').setAttribute('aria-hidden', String(open));
+  workspacePost({ type: 'synapse:desktop-visibility', visible: open });
+  $('#desktop-workspace').hidden = !open;
+  document.body.classList.toggle('gui-mode', open);
+  $('#mode-gui').setAttribute('aria-pressed', String(open));
+  $('#mode-terminal').setAttribute('aria-pressed', String(!open));
+  localStorage.setItem('synapse-desktop-view', open ? 'gui' : 'terminal');
+  if (open) { closeCanvas(); syncWorkspace(true); }
+  else { render(); if (activityOpen) $('#activity').focus(); else top(focusedSlot())?.term.focus(); }
+}
+async function openWorkspace() {
+  showWorkspace(true);
+  $('#workspace-error').hidden = true;
+  try {
+    workspaceReady ||= synapse.canvas().then((url) => { workspaceFrame.src = `${url}?desktop=1`; }).catch((e) => { workspaceReady = null; throw e; });
+    await workspaceReady;
+  } catch (e) { $('#workspace-error p').textContent = e.message; $('#workspace-error').hidden = false; }
+}
+$('#workspace-retry').onclick = () => { workspaceReady = null; openWorkspace(); };
+const ownSession = (id) => {
+  for (const s of M.slots) {
+    const x = s.sessions.find((x) => `desktop-${x.key}` === id);
+    if (x) return { s, x };
+  }
+  throw new Error('This session is no longer open.');
+};
+async function friendsSnapshot() {
+  if (!ACC.user) return { signedIn: false };
+  const [, agents] = await Promise.all([loadPeople(true), synapse.requests.agents().catch(() => [])]);
+  ACC.agents = agents;
+  const who = (x) => x && { handle: x.handle || null, name: x.name || x.handle || null };
+  const req = (r) => ({ id: r.id, kind: r.kind === 'offer' ? 'offer' : 'ask', mode: r.mode || null, from: who(r.from), to: who(r.to), agent: r.agent && { id: r.agent.id, name: r.agent.name, kind: r.agent.kind, project: r.agent.project || null }, target: r.target || null, note: r.note || null, best: r.kind === 'offer' ? null : bestAgent(r) });
+  return {
+    signedIn: true, me: who(ACC.user), canOffer: ACC.feed.canOffer !== false, offersLater: ACC.feed.offersLater || '',
+    people: people.map((p) => ({ handle: p.handle || null, name: p.name || p.handle || p.email || '?', trustsYou: !!p.trustsYou, pending: !!p.pending })),
+    incoming: pendingRequests().map(req), outgoing: (ACC.feed.outgoing || []).filter((r) => r.status === 'pending').map(req),
+    links: (ACC.feed.links || []).map((l) => ({ direction: l.direction, owner: l.owner || null, mode: l.mode || null, agent: l.agent && { name: l.agent.name, kind: l.agent.kind }, local: l.local && { id: l.local.id, name: l.local.name } })),
+    agents: agents.map((a) => ({ id: a.id, name: a.name, kind: a.kind, project: a.project || null })),
+  };
+}
+async function desktopAction(action, args) {
+  switch (action) {
+    case 'state': return workspaceState();
+    case 'view': if (['session', 'overview', 'connections', 'activity', 'canvas'].includes(args.view)) workspaceView = args.view; return;
+    case 'reorder': {
+      if (!['before', 'after'].includes(args.side)) throw new Error('Choose a valid position.');
+      if (args.kind === 'project') {
+        if (![args.from, args.to].every((key) => M.projects.some((p) => p.key === key))) throw new Error('This project is no longer open.');
+        await moveProject(args.from, args.to, args.side);
+      } else if (args.kind === 'worktree') {
+        const p = M.projects.find((p) => p.worktrees.some((w) => w.path === args.from));
+        if (!p?.worktrees.some((w) => w.path === args.to)) throw new Error('Reorder worktrees within the same project.');
+        await moveWorktree(p.key, args.from, args.to, args.side);
+      } else if (args.kind === 'session') {
+        const from = ownSession(args.from), to = ownSession(args.to);
+        if (from.s.worktree !== to.s.worktree || from.x.parent !== to.x.parent) throw new Error('Reorder sessions within the same worktree and parent.');
+        if (from.x.parent == null) M.slots = moveItem(M.slots, from.s, to.s, args.side);
+        else {
+          if (from.s !== to.s) throw new Error('Reorder forks of the same parent.');
+          from.s.sessions = moveItem(from.s.sessions, from.x, to.x, args.side);
+          const walk = (parent = null) => children(from.s, parent).flatMap((x) => [x, ...walk(x.id)]);
+          from.s.sessions = walk();
+        }
+      } else throw new Error('Choose a project, worktree, or session to reorder.');
+      if (persist) { const saved = snapshot(); await synapse.sessions.save(saved); lastSaved = JSON.stringify(saved); }
+      render();
+      return workspaceState();
+    }
+    case 'preference': return synapse.workspace.save(args.key, args.value);
+    case 'new-session': {
+      if (!M.projects.some((p) => p.worktrees.some((w) => w.path === args.cwd))) throw new Error('Choose an open project.');
+      if (!Object.hasOwn(M.profiles, args.kind)) throw new Error('Choose an installed agent profile.');
+      const before = new Set(M.slots.map((s) => s.id));
+      await newSlot(args.cwd, args.kind);
+      const made = M.slots.find((s) => !before.has(s.id));
+      if (!made?.sessions[0]) throw new Error('The session could not start. Check the agent command in Settings.');
+      return { id: `desktop-${made.sessions[0].key}` };
+    }
+    case 'select': { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); render(); return; }
+    case 'terminal': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } showWorkspace(false); return; }
+    case 'submit': { const { x } = ownSession(args.id); if (x.exited) throw new Error('This session has ended.'); return synapse.pty.submit(x.pty, args.text); }
+    case 'output': {
+      const { x } = ownSession(args.id), buffer = x.term.buffer.active, lines = [];
+      for (let i = Math.max(0, buffer.length - 500); i < buffer.length; i++) lines.push(buffer.getLine(i)?.translateToString(true) || '');
+      return { terminal: lines.join('\n').trimEnd(), messages: [], chat: [], hasMore: buffer.length > 500 };
+    }
+    case 'rename': {
+      const { x } = ownSession(args.id);
+      const name = String(args.name || '').trim().slice(0, 48);
+      return renameTab(x, name);
+    }
+    case 'fork': {
+      const { s, x } = ownSession(args.id), before = s.sessions.length;
+      if (typeof args.question !== 'string' || !args.question.trim() || args.question.length > 12000) throw new Error('Write a question for the fork.');
+      if (!M.demo && !['claude', 'codex'].includes(x.kind)) throw new Error('Native conversation forks are supported for Claude Code and Codex.');
+      await fork(args.question.trim(), { parentPty: x.pty });
+      if (s.sessions.length === before) throw new Error('The agent is not ready to fork yet. Send its first prompt, then try again.');
+      return { id: `desktop-${top(s).key}` };
+    }
+    case 'close': { const { s, x } = ownSession(args.id); requestCloseSession(s, x.id); return; }
+    case 'add-project': return promptProject();
+    case 'worktree': {
+      const p = M.projects.find((p) => p.key === args.key);
+      if (!p) throw new Error('Choose an open project.');
+      return promptWorktree(p);
+    }
+    case 'project-menu': {
+      const p = M.projects.find((p) => p.key === args.key);
+      if (!p) throw new Error('Choose an open project.');
+      const rename = (title, current, save) => {
+        promptText(title, 'Enter a new name', current, async (name) => { try { await save(name); await refresh(); } catch (e) { toast(e.message, true); } });
+        const input = $('#modal-body input'); input.value = current; input.select();
+      };
+      const worktrees = p.worktrees.map((w) => ({ label: w.name, sub: [
+        { label: 'New session', sub: agentMenu(w.path) },
+        { label: 'Rename', run: () => rename('Rename worktree', w.name, (name) => synapse.worktree.rename(w.path, name)) },
+        ...(!w.home ? [{ label: 'Delete worktree', danger: true, run: () => removeWorktreeAsk(p, w) }] : []),
+      ] }));
+      contextMenu([
+        { label: 'New worktree', run: () => promptWorktree(p) },
+        { label: 'Worktrees', sub: worktrees },
+        { label: 'Rename project', run: () => rename('Rename project', p.label, (name) => synapse.project.rename(p.key, name)) },
+        '-', { label: 'Remove from sidebar', danger: true, run: () => removeFromSidebar(p.worktrees.map((w) => w.path), p.label) },
+      ], Math.max(0, Number(args.x) || 0), Math.max(48, (Number(args.y) || 0) + 48));
+      return;
+    }
+    case 'settings': return openSettings();
+    // friends, for the GUI's Add connection and Connections view: who you trust, what waits on you, and the four
+    // answers (share, ask, accept, deny). Agents are named by their Synapse id.
+    case 'friends': return friendsSnapshot();
+    case 'sign-in': return showLogin();
+    case 'friend-offer': return synapse.requests.offer(String(args.to || ''), String(args.agent || ''), args.mode === 'sync' ? 'sync' : 'talk');
+    case 'friend-ask': return synapse.requests.ask(String(args.to || ''), String(args.agent || ''), String(args.target || '').slice(0, 120));
+    case 'friend-accept': {
+      const ids = Array.isArray(args.agents) ? args.agents.map(String).filter(Boolean) : [];
+      if (!ids.length) throw new Error('Choose which of your agents to share.');
+      return synapse.requests.accept(String(args.id || ''), ids, args.talk !== false);
+    }
+    case 'friend-accept-offer': return synapse.requests.acceptOffer(String(args.id || ''), String(args.receiver || ''));
+    case 'friend-deny': return synapse.requests.deny(String(args.id || ''));
+    case 'friend-cancel': return synapse.requests.cancel(String(args.id || ''));
+    case 'account': return openAccount();
+    case 'canvas': return openCanvas();
+    case 'canvas-ready': syncCanvasBranches(); return;
+    case 'canvas-menu': return canvasMenu(args, { left: 0, top: 48 });
+    case 'switch-session': if (/^[1-9\[\]]$/.test(args.key)) switchSession(args.key); return;
+    case 'activity': workspacePost({ type: 'synapse:desktop-navigate', view: 'activity' }); return;
+    case 'activity:get': return synapse.activity.get();
+    case 'board:get': return synapse.board.get();
+    case 'board:join': return synapse.board.join();
+    case 'board:leave': return synapse.board.leave();
+    case 'fork-tree': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } return openFan(); }
+    case 'split': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } await splitShell(args.direction === 'down' ? 'down' : 'right'); return workspaceState(); }
+    case 'theme': { if (['night', 'signal'].includes(args.theme)) { document.documentElement.dataset.theme = args.theme; localStorage.setItem('synapse-mode', args.theme); for (const s of M.slots) for (const x of s.sessions) x.term.options.theme = termTheme(); sendTheme(); } return; }
+    default: throw new Error('Unknown workspace action.');
+  }
+}
+addEventListener('message', async (event) => {
+  if (!workspaceFrame.src || event.source !== workspaceFrame.contentWindow || event.origin !== new URL(workspaceFrame.src).origin) return;
+  if (event.data?.type === 'synapse:desktop-bootstrap') {
+    const preferences = await synapse.workspace.load().catch(() => ({}));
+    event.source.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, event.origin);
+    return;
+  }
+  if (event.data?.type === 'synapse:desktop-ready') { workspaceLive = true; syncWorkspace(true); return; }
+  const { type, request, action, args = {} } = event.data || {};
+  if (type !== 'synapse:desktop-call' || typeof request !== 'string' || request.length > 80) return;
+  try {
+    const value = await desktopAction(action, args);
+    workspacePost({ type: 'synapse:desktop-reply', request, value });
+    if (action !== 'preference') syncWorkspace(true);
+  } catch (e) { workspacePost({ type: 'synapse:desktop-reply', request, error: e.message }); }
+});
+$('#mode-gui').onclick = openWorkspace;
+$('#mode-terminal').onclick = () => showWorkspace(false);
+$('#desktop-settings').onclick = openSettings;
+
 // ---------------------------------------------------------------- boot
 
 // ---------------------------------------------------------------- Windows: say Ctrl, not ⌘
@@ -2554,13 +2957,14 @@ if (WIN) {
   M.home = flags.home || '';
   await refresh();
   // first run: the checkout we were started from is the sample workspace
-  if (!M.projects.length) { try { await synapse.project.add(flags.cwd); await refresh(); } catch {} }
+  if (!M.projects.length && !flags.packaged && flags.cwd !== '/' && flags.cwd !== flags.home) { try { await synapse.project.add(flags.cwd); await refresh(); } catch {} }
   const here = M.projects.flatMap((p) => p.worktrees).find((w) => flags.cwd.startsWith(w.path)) || M.projects[0]?.worktrees[0];
   const keep = !flags.demo && !flags.shot;
   const restored = keep ? await restoreSessions(await synapse.sessions.load().catch(() => null)) : 0;
   if (!restored && here) { M.open.add(worktreeOf(here.path)?.project.key); await newSlot(here.path, 'shell'); }
   persist = keep;
   render();
+  if ((flags.view || localStorage.getItem('synapse-desktop-view') || 'gui') === 'gui') await openWorkspace();
   if (flags.demo && here) {
     // a ready-made tree so the deck and the fan-out can be felt without running an agent
     await fork('why not just <= ?');

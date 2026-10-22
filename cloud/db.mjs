@@ -141,6 +141,8 @@ for (const [table, col, def] of [
   ['machines', 'kind', 'TEXT'], ['machines', 'name', 'TEXT'], ['machines', 'public_key', 'TEXT'],
   // the waitlist: accounts made before it stay active
   ['users', 'access', "TEXT NOT NULL DEFAULT 'active'"], ['users', 'approved_at', 'INTEGER'],
+  // a request is an ask (they want one of my agents) or an offer (I share one of mine with them), and an offer says how
+  ['requests', 'kind', "TEXT NOT NULL DEFAULT 'ask'"], ['requests', 'mode', 'TEXT'],
 ]) if (!has(table, col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
 db.exec(`CREATE TABLE IF NOT EXISTS trust_dismissed (
      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -67,7 +67,7 @@ async function mouseButton(button, inFrame = false) {
   await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
   const port = probe.address().port;
   await new Promise((resolve) => probe.close(resolve));
-  const url = `http://127.0.0.1:${port}/`;
+  const url = `http://127.0.0.1:${port}/canvas`;
   server = spawn(process.execPath, [path.join(root, 'server.mjs')], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', PORT: String(port), NO_OPEN: '1' }, stdio: 'ignore',
   });

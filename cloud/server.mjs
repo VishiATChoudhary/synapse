@@ -24,6 +24,8 @@ if (!SECRET) throw new Error('CLOUD_SECRET is not set');
 // Admins are the verified emails in ADMIN_EMAILS (the /admin page), or anyone sending x-admin-secret: ADMIN_SECRET
 const WAITLIST = !!process.env.WAITLIST && process.env.WAITLIST !== '0';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || '';
+// what this cloud can do, on /health, so an app newer than its cloud turns those parts on only once it is updated
+const FEATURES = ['offers'];
 const ADMIN_EMAILS = new Set(String(process.env.ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
 const STARTED = Date.now();
 export const DMG_URL = process.env.DMG_URL || 'https://github.com/VishiATChoudhary/synapse/releases/latest/download/Synapse-arm64.dmg';
@@ -332,7 +334,7 @@ function findUserByWho(who) {
 const requestJSON = (r) => {
   const from = get('SELECT * FROM users WHERE id = ?', r.from_user), to = get('SELECT * FROM users WHERE id = ?', r.to_user);
   return {
-    id: r.id, status: r.status, from: publicUser(from), to: publicUser(to), agent: JSON.parse(r.agent), target: r.target, note: r.note,
+    id: r.id, kind: r.kind || 'ask', mode: r.mode || null, status: r.status, from: publicUser(from), to: publicUser(to), agent: JSON.parse(r.agent), target: r.target, note: r.note,
     createdAt: r.created_at, decidedAt: r.decided_at, fromMachine: r.from_machine, toMachine: r.to_machine, shared: r.shared ? JSON.parse(r.shared) : [],
   };
 };
@@ -645,12 +647,14 @@ const routes = {
     const to = get('SELECT * FROM users WHERE handle = ?', person.handle);
     // only people who trust you can ask you: trust is what lets someone knock, never access by itself
     if (!trusts(to.id, user.id)) fail(403, `${to.name} has not added you to their trusted people yet. Ask them to, then try again.`);
-    const dup = get("SELECT * FROM requests WHERE from_user = ? AND to_user = ? AND status = 'pending' AND json_extract(agent, '$.id') = ?", user.id, to.id, agent.id);
-    if (dup) return json(res, 200, { request: requestJSON(dup) });
+    // an offer: I share one of my agents with them (they pick which of theirs receives it); an ask: theirs for mine
+    const kind = b.kind === 'offer' ? 'offer' : 'ask', mode = kind === 'offer' ? (b.mode === 'talk' ? 'talk' : 'sync') : null;
+    const dup = get("SELECT * FROM requests WHERE from_user = ? AND to_user = ? AND status = 'pending' AND kind = ? AND json_extract(agent, '$.id') = ?", user.id, to.id, kind, agent.id);
+    if (dup) { if (mode && dup.mode !== mode) run('UPDATE requests SET mode = ? WHERE id = ?', mode, dup.id); return json(res, 200, { request: requestJSON(get('SELECT * FROM requests WHERE id = ?', dup.id)) }); }
     const id = `r_${rid(9)}`;
-    run('INSERT INTO requests (id, from_user, to_user, from_machine, agent, target, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      id, user.id, to.id, mine.id, JSON.stringify(agent), clean(b.target, 120) || null, clean(b.note, 500) || null, now());
-    if (to.email && to.email_verified) mail(to.email, emails.request(user.name, agent.name, `${PUBLIC_URL}/settings#requests-card`));
+    run('INSERT INTO requests (id, from_user, to_user, from_machine, agent, target, note, created_at, kind, mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      id, user.id, to.id, mine.id, JSON.stringify(agent), clean(b.target, 120) || null, clean(b.note, 500) || null, now(), kind, mode);
+    if (to.email && to.email_verified) mail(to.email, (kind === 'offer' ? emails.offer : emails.request)(user.name, agent.name, `${PUBLIC_URL}/settings#requests-card`));
     return json(res, 201, { request: requestJSON(get('SELECT * FROM requests WHERE id = ?', id)) });
   },
   'GET /v1/requests': async (req, res) => {
@@ -667,13 +671,16 @@ const routes = {
     const mine = ownMachine(user.id, b.machineId);
     if (mine.id === r.from_machine) fail(400, 'Both agents are on this machine: link them on the canvas instead.');
     if (!trusts(user.id, r.from_user) || !trusts(r.from_user, user.id)) fail(409, 'You no longer trust each other, so this request cannot be accepted. Deny it instead.');
-    const shared = (Array.isArray(b.agents) ? b.agents : []).slice(0, 20).map(cleanAgent).filter((a) => a.id);
+    // an offer is accepted with the one agent of mine that receives it; an ask with the agents of mine I share
+    const offer = r.kind === 'offer', receiver = offer ? cleanAgent(b.receiver) : null;
+    if (offer && !receiver.id) fail(400, 'Pick which of your agents gets it.');
+    const shared = offer ? [receiver] : (Array.isArray(b.agents) ? b.agents : []).slice(0, 20).map(cleanAgent).filter((a) => a.id);
     if (!shared.length) fail(400, 'Pick at least one of your agents to share.');
     const pair = pairOf(mine.id, r.from_machine);
     run("UPDATE requests SET status = 'accepted', decided_at = ?, to_machine = ?, shared = ? WHERE id = ?", now(), mine.id, JSON.stringify(shared), r.id);
     const from = get('SELECT * FROM users WHERE id = ?', r.from_user);
     deliver(r.from_machine, { type: 'paired', via: 'request', from: mine.id, name: user.name, handle: user.handle, pair });
-    deliver(r.from_machine, { type: 'request', id: r.id, status: 'accepted', from: mine.id, pair, shared, agent: JSON.parse(r.agent) });
+    deliver(r.from_machine, { type: 'request', id: r.id, status: 'accepted', from: mine.id, pair, shared, agent: JSON.parse(r.agent), ...(offer ? { kind: 'offer', mode: r.mode || 'sync', receiver } : {}) });
     return json(res, 200, { request: requestJSON(get('SELECT * FROM requests WHERE id = ?', r.id)), pair, peer: { machineId: r.from_machine, name: from.name, handle: from.handle } });
   },
   'POST /v1/requests/:id/deny': async (req, res, b, params) => {
@@ -913,7 +920,7 @@ export const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname;
   try {
-    if (p === '/health') return json(res, 200, { ok: true, service: 'synapse-cloud' });
+    if (p === '/health') return json(res, 200, { ok: true, service: 'synapse-cloud', features: FEATURES });
     // pages on the old railway.app address move to PUBLIC_URL (their cookies only work there); the API stays on both
     if (OLD_HOST?.test(req.headers.host || '') &&!p.startsWith('/v1/') && ['GET', 'HEAD'].includes(req.method)) {
       res.writeHead(301, { location: PUBLIC_URL + req.url });

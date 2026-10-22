@@ -26,7 +26,7 @@ const run = (cmd, a, env = {}) => {
   if (r.status !== 0) process.exit(r.status ?? 1);
 };
 // through node, not node_modules/.bin: on Windows that is a .cmd, which spawn can not run directly
-const builder = (a, env) => run(process.execPath, [path.join(ROOT, 'node_modules', 'electron-builder', 'cli.js'), ...a], env);
+const builder = (a, env) => run(process.execPath, [path.join(ROOT, 'node_modules', 'electron-builder', 'cli.js'), ...a, '--publish', 'never'], env);
 const out = (cmd, a) => { try { return execFileSync(cmd, a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return ''; } };
 
 if (args.includes('--win')) {
@@ -37,7 +37,7 @@ if (args.includes('--win')) {
     process.exit(1);
   }
   await fetchCloudflared('win');
-  builder(['--win', 'nsis', '--x64', '--publish', 'never', '--config', CONFIG]);
+  builder(['--win', 'nsis', '--x64', '--config', CONFIG]);
   process.exit(0);
 }
 

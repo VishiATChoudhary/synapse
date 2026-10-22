@@ -29,6 +29,7 @@ export const FILES = {
   remote: path.join(DATA, 'remote.json'),           // multiplayer: this machine's relay identity and its friends
   peerState: path.join(DATA, 'remote', 'state.json'), // the agents each friend's machine last reported
   account: path.join(DATA, 'account.json'),         // Synapse Cloud sign-in: { cloud, token, user }
+  offers: path.join(DATA, 'offers.json'),           // my agents I offered to friends, by request id, to link once they accept
   requests: path.join(DATA, 'requests.json'),       // synapse requests last fetched from the cloud
   talks: path.join(DATA, 'talks.json'),             // agent talk: conversations with friends' agents
   ptys: path.join(DATA, 'ptys.json'),               // Windows: the desktop app's terminals, { pid: cwd }
@@ -77,13 +78,22 @@ function alive(pid) {
 
 const NOISE = /^<(command-|local-command|system-reminder|task-notification|bash-|user-prompt-submit-hook|environment_context|user_instructions|permissions)/;
 
+// A slash command the user ran (`/goal ship it`): Claude logs it as <command-name>/<command-args> tags. Keep it
+// as the command line it was typed as; its expanded prompt is a meta entry and stays out.
+function claudeSlash(t) {
+  const name = /<command-name>\s*([^<\s]+)\s*<\/command-name>/.exec(t)?.[1];
+  if (!name) return null;
+  const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(t)?.[1].trim();
+  return `${name.startsWith('/') ? name : `/${name}`}${args ? ` ${args}` : ''}`;
+}
+
 function claudeMessage(e) {
   if (e.isMeta || e.isSidechain || e.isCompactSummary) return null;
   const content = e.message?.content;
   if (e.type === 'user') {
     const parts = typeof content === 'string' ? [content]
       : Array.isArray(content) ? content.filter((b) => b.type === 'text').map((b) => b.text) : [];
-    const text = parts.filter((t) => !NOISE.test(t.trim())).join('\n').trim();
+    const text = parts.map((t) => claudeSlash(t) ?? t).filter((t) => !NOISE.test(t.trim())).join('\n').trim();
     return text ? { role: 'user', text, ts: e.timestamp } : null;
   }
   if (e.type === 'assistant' && Array.isArray(content)) {
@@ -484,12 +494,14 @@ function codexCwd(p) {
 
 export function codexTranscript(id, cwd, start, cmd = '') {
   if (transcriptCache.has(id)) return transcriptCache.get(id);
-  if (Date.now() - (transcriptMiss.get(id) || 0) < 60_000) return null;
+  // the rollout appears with the first prompt, so a fresh session is looked for again soon; a resume search
+  // walks every rollout and waits longer
+  const resume = codexResume(cmd);
+  if (Date.now() - (transcriptMiss.get(id) || 0) < (resume ? 60_000 : 3000)) return null;
   const homes = [process.env.CODEX_HOME, path.join(HOME, '.codex')].filter(Boolean);
   const found = (p) => { if (p) transcriptCache.set(id, p); else transcriptMiss.set(id, Date.now()); return p; };
   // `codex resume` (how the app brings agents back after a restart) keeps appending to the session's original
   // rollout, born long before this process: by the id in its name, or for --last the newest one written since
-  const resume = codexResume(cmd);
   if (resume?.id) {
     const suffix = `-${resume.id}.jsonl`;
     for (const p of codexRollouts(homes)) if (p.endsWith(suffix)) return found(p);
@@ -578,6 +590,61 @@ export function cursorTranscript(cwd, start, home = path.join(HOME, '.cursor')) 
   return best?.p || null;
 }
 
+// ---------------------------------------------------------------- working or not
+
+// Whether a turn is under way, from the agent's own transcript: true, false, or null when the transcript cannot
+// tell. CPU says little here, a turn mostly waits on the model. Checked every second, so each answer is kept
+// until the file changes.
+//  codex:    the last of task_started / task_complete / turn_aborted in the rollout
+//  opencode: the session's newest message is the prompt, or a reply that is unfinished or calls tools
+//  gemini:   the chat's last message is the prompt, or a reply that calls tools
+const turnCache = new Map(); // transcript -> { key, busy }
+const CODEX_TURN = /"type":"event_msg","payload":\{"type":"(task_started|task_complete|turn_aborted)"/g;
+
+export function transcriptTouched(src) {
+  const file = transcriptFile(src);
+  if (!file) return 0;
+  let m = 0;
+  for (const f of src.format === 'opencode' || src.format === 'cursor-agent' ? [file, `${file}-wal`] : [file]) { try { m = Math.max(m, fs.statSync(f).mtimeMs); } catch {} }
+  return m;
+}
+
+export function turnBusy(src) {
+  if (!['codex', 'opencode', 'gemini'].includes(src?.format)) return null;
+  const file = transcriptFile(src);
+  let size = 0;
+  try { size = fs.statSync(file).size; } catch { return null; }
+  const key = `${transcriptTouched(src)}:${size}`;
+  const hit = turnCache.get(src.transcript);
+  if (hit?.key === key) return hit.busy;
+  let busy = null;
+  try {
+    if (src.format === 'codex') {
+      const n = Math.min(size, 1 << 20);
+      const fd = fs.openSync(file, 'r'); const buf = Buffer.alloc(n); fs.readSync(fd, buf, 0, n, size - n); fs.closeSync(fd);
+      let last = null;
+      for (const m of buf.toString('utf8').matchAll(CODEX_TURN)) last = m[1];
+      busy = last ? last === 'task_started' : null;
+    } else if (src.format === 'opencode') {
+      const db = openDb(file);
+      try {
+        const row = db?.prepare('SELECT data FROM message WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT 1').get(src.transcript.slice(file.length + 1));
+        const d = row ? JSON.parse(row.data) : null;
+        busy = !d ? null : d.role === 'user' || (d.role === 'assistant' && (!d.time?.completed || d.finish === 'tool-calls'));
+      } finally { try { db?.close(); } catch {} }
+    } else {
+      const last = (readJSON(file, {}).messages || []).at(-1);
+      busy = !last ? null : last.type === 'user' || (last.type === 'gemini' && !!last.toolCalls?.length);
+    }
+  } catch { busy = null; }
+  turnCache.set(src.transcript, { key, busy });
+  return busy;
+}
+
+// A turn the transcript calls open, with nothing written for this long and nothing running, was cut off
+// (the agent crashed or was killed mid-turn) and counts as idle.
+const TURN_STALE = 10 * 60_000;
+
 function processAgents() {
   const rows = processTable();
   const byPid = new Map(rows.map((r) => [r.pid, r]));
@@ -589,8 +656,14 @@ function processAgents() {
     for (let p = byPid.get(h.ppid); p; p = byPid.get(p.ppid)) if (hitPids.get(p.pid)?.kind === h.kind) root = p;
     return root;
   };
-  const busyCpu = new Map();
-  for (const h of hits) { const r = rootOf(h); busyCpu.set(r.pid, Math.max(busyCpu.get(r.pid) || 0, h.cpu)); }
+  // CPU of the agent and everything under it (the commands its tools run)
+  const kids = new Map();
+  for (const r of rows) { if (!kids.has(r.ppid)) kids.set(r.ppid, []); kids.get(r.ppid).push(r); }
+  const treeCpu = (pid, seen = new Set()) => {
+    if (seen.has(pid)) return 0;
+    seen.add(pid);
+    return (byPid.get(pid)?.cpu || 0) + (kids.get(pid) || []).reduce((t, k) => t + treeCpu(k.pid, seen), 0);
+  };
   const roots = hits.filter((h) => rootOf(h) === h);
   const dirs = cwds(roots.map((r) => r.pid));
   return roots.filter((r) => dirs.get(r.pid)).map((r) => {
@@ -599,10 +672,15 @@ function processAgents() {
       : r.kind === 'gemini' ? geminiTranscript(cwd, r.start)
       : r.kind === 'opencode' ? opencodeTranscript(cwd, r.start)
       : r.kind === 'cursor-agent' ? cursorTranscript(cwd, r.start) : null;
+    const format = ['codex', 'gemini', 'opencode', 'cursor-agent'].includes(r.kind) ? r.kind : null;
+    const src = { transcript, format }, cpu = treeCpu(r.pid), touched = transcriptTouched(src);
+    const turn = turnBusy(src);
+    // no transcript to go by: busy while it burns CPU or keeps writing
+    const busy = turn === null ? cpu > 4 || Date.now() - touched < 4000 : turn && (cpu > 4 || Date.now() - touched < TURN_STALE);
     return {
       id, pid: r.pid, kind: r.kind, name: `${r.kind}-${path.basename(cwd)}`.toLowerCase(), cwd,
-      status: (busyCpu.get(r.pid) || 0) > 4 ? 'busy' : 'idle', startedAt: r.start, updatedAt: r.start,
-      transcript, format: ['codex', 'gemini', 'opencode', 'cursor-agent'].includes(r.kind) ? r.kind : null,
+      status: busy ? 'busy' : 'idle', startedAt: r.start, updatedAt: Math.max(r.start, touched || 0),
+      transcript, format,
     };
   });
 }

@@ -224,7 +224,8 @@ async function launch(name) {
   assert.equal(await js(`document.querySelector('#toggle-sidebar').getAttribute('aria-expanded')`), 'false');
   assert.equal(await js(`localStorage.getItem('synapse-sidebar-collapsed')`), 'true');
   assert.ok(await js(`document.querySelector('#stage').clientWidth > ${stageWidth}`));
-  assert.equal(await js(`getComputedStyle(document.querySelector('.main > .top')).paddingLeft`), '86px');
+  assert.equal(await js(`getComputedStyle(document.querySelector('.main > .top')).paddingLeft`), '0px', 'window controls live in the separate mode toolbar');
+  assert.equal(await js(`getComputedStyle(document.querySelector('.desktop-toolbar')).paddingLeft`), '88px');
   await click('#toggle-sidebar');
   assert.equal(await js(`document.querySelector('#stage').clientWidth`), stageWidth);
   assert.equal(await js(`getComputedStyle(document.querySelector('#deck')).webkitAppRegion`), 'drag');

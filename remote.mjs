@@ -340,11 +340,11 @@ async function pull(c, timeout) {
   if (!items?.length) return 0;
   const states = readJSON(FILES.peerState, {});
   let cfgChanged = false;
-  const revoked = new Set();
+  const revoked = new Set(), offered = [];
   for (const it of items) {
     if (!it || typeof it !== 'object') continue; // one bad item must not stop the rest
     // a synapse request was answered (from the cloud, not from a friend's machine)
-    if (it.type === 'request' && typeof it.id === 'string') { noteRequest(it); continue; }
+    if (it.type === 'request' && typeof it.id === 'string') { noteRequest(it); if (it.kind === 'offer' && it.status === 'accepted') offered.push(it); continue; }
     // someone added this user as a trusted person (from the cloud only: friends cannot send it)
     if (it.type === 'trusted') { if (it.from && typeof it.from === 'object') noteTrusted(it.from); continue; }
     // trust ended: the cloud tells both machines to drop the pairing (friends cannot send this, it carries no pair)
@@ -406,7 +406,25 @@ async function pull(c, timeout) {
     saveConfig(latest);
   }
   writeJSON(FILES.peerState, states);
+  for (const it of offered) await linkOffer(it).catch(() => {}); // after the pairing is saved: talk needs the friend known
   return items.length;
+}
+
+// A friend accepted my offer: link my offered agent to the agent of theirs they picked, read only or read and ask
+// as I offered; the next sync ships its context. From the cloud only (friends cannot send 'request' items).
+export async function linkOffer(it) {
+  const m = clean(it.from, 40), r = it.receiver, a = it.agent;
+  if (!m || !r?.id || !a?.id) return;
+  const { createEdge, setMode } = await import('./ops.mjs');
+  const owner = config().peers[m]?.name || 'friend';
+  const kept = readJSON(FILES.offers, {})[it.id];
+  const mine = localAgents().find((x) => x.id === a.id) || { id: a.id, name: clean(a.name, 48) || 'agent', kind: clean(a.kind, 20) || 'agent', cwd: kept?.cwd || os.homedir() };
+  const theirs = { id: remoteId(m, clean(r.id, 120)), name: clean(r.name, 48) || 'agent', kind: clean(r.kind, 20) || 'agent', remote: { machine: m, owner, agentId: clean(r.id, 120), project: clean(r.project, 60) || null } };
+  const { edge } = createEdge(mine, theirs);
+  let talking = false;
+  if (it.mode === 'talk') { try { setMode(edge.id, 'talk'); talking = true; } catch {} } // talk needs the agent running; else it stays read only
+  logEvent({ type: 'offer-linked', id: it.id, to: owner, agent: mine.name, into: theirs.name, talk: talking });
+  const offers = readJSON(FILES.offers, {}); delete offers[it.id]; writeJSON(FILES.offers, offers);
 }
 
 // ---- sending

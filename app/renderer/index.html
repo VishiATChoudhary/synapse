@@ -2,12 +2,24 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-PQ8kUkfI3XptXyyv7ccYhuBGeztHih8jClnedcjmBwU='; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; frame-src http://127.0.0.1:*; connect-src 'self'; object-src 'none'; base-uri 'none'">
 <title>Synapse</title>
 <script>document.documentElement.dataset.theme = localStorage.getItem('synapse-mode') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'signal');</script>
 <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="../../public/activity.css">
+<link rel="stylesheet" href="workspace.css">
 </head>
 <body>
+<header class="desktop-toolbar">
+  <div class="desktop-modes" role="group" aria-label="Workspace mode" hidden><!-- chosen in Settings > view -->
+    <button id="mode-gui" aria-pressed="false">GUI</button>
+    <button id="mode-terminal" aria-pressed="true">Terminal</button>
+  </div>
+  <span class="desktop-title">Synapse</span>
+  <button id="desktop-settings" title="Settings">Settings</button>
+</header>
+<section id="desktop-workspace" hidden aria-label="Graphical workspace"><iframe id="workspace-frame" title="Synapse workspace" allow="clipboard-write"></iframe><div id="workspace-error" hidden role="alert"><p></p><button id="workspace-retry">Try again</button></div></section>
 <aside class="side" id="sidebar">
   <div class="side-head">
     <span class="wordmark">synapse</span>
@@ -33,7 +45,13 @@
       <button class="ghost sig" id="btn-fork" title="⇧⌘F">⑂ fork</button>
     </div>
   </header>
-  <nav class="launch" id="launch"></nav>
+  <div class="launchbar">
+    <nav class="launch" id="launch"></nav>
+    <div class="share-bar">
+      <button class="share-btn" id="btn-friends" title="your trusted people, and what you share with each" aria-haspopup="true"><span class="glyph" aria-hidden="true">◎</span>friends<span class="share-count" id="friends-count" hidden></span></button>
+      <button class="share-btn sig" id="btn-share" title="share the open agent with a friend"><span class="glyph" aria-hidden="true">↗</span>share</button>
+    </div>
+  </div>
   <section class="stage" id="stage">
     <div class="empty" id="empty">
       <div class="empty-title">Nothing<br>running</div>
@@ -63,6 +81,7 @@
 </div>
 
 <div class="syn-pop" id="syn-pop" hidden></div>
+<div class="syn-pop friends-pop" id="friends-pop" hidden></div>
 
 <div class="login onboard" id="onboard" hidden tabindex="-1">
   <div class="login-card onboard-card" id="onboard-card"></div>
