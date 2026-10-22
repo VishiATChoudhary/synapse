@@ -951,7 +951,7 @@ function initialize() {
   }
 
   function messageRecords(data) {
-    const conversation = (data.messages || []).map((message, index) => ({ ...message, type: 'transcript', time: Date.parse(message.ts) || 0, key: `transcript-${message.ts}-${index}-${hash(message.text)}` }));
+    const conversation = (data.messages || []).map((message, index) => ({ ...message, type: 'transcript', time: new Date(message.ts).getTime() || 0, key: `transcript-${message.ts}-${index}-${hash(message.text)}` }));
     const messages = (data.chat || []).map((message) => ({ ...message, type: 'shared', time: message.t, key: message.id || `shared-${message.t}-${hash(message.text)}`, human: message.from === 'synapse-user' }));
     return (tab === 'messages' ? messages : [...conversation, ...messages.filter((message) => message.human)]).sort((a, b) => a.time - b.time);
   }
@@ -1028,7 +1028,7 @@ function initialize() {
   async function loadRecent(force = false) {
     const agent = byId.get(selectedId); if (view !== 'session' || !agent || (!paneKey && paneFrames.size && !$('split-view').hidden)) return;
     const cached = recentCache.get(agent.id), revision = state.messageRevision, activity = agent.lastActivity;
-    if (!force && cached?.activity === activity && cached?.revision === revision && cached?.limit === limit && cached?.backend === agent.backendId) return; // a new session's transcript is found after it starts
+    if (!force && cached?.activity === activity && cached?.revision === revision && cached?.limit === limit && cached?.backend === agent.backendId && cached?.transcript === agent.transcript) return; // a new session's transcript is found after it starts
     if (recentTarget === agent.id) { recentDirty = true; return; }
     recentController?.abort(); recentController = new AbortController();
     const request = ++recentRequest, id = agent.id, requestedLimit = limit;
@@ -1038,7 +1038,7 @@ function initialize() {
         ? await desktopCall('output', { id })
         : await api(`/api/agents/${encodeURIComponent(agent.backendId || id)}/recent?limit=${requestedLimit}`, { signal: recentController.signal });
       if (agent.owned && !data.messages?.length && !data.chat?.length) Object.assign(data, await desktopCall('output', { id }));
-      recentCache.delete(id); recentCache.set(id, { data, activity, revision, limit: requestedLimit, backend: agent.backendId });
+      recentCache.delete(id); recentCache.set(id, { data, activity, revision, limit: requestedLimit, backend: agent.backendId, transcript: agent.transcript });
       if (paneKey) parent.postMessage({ type: 'synapse:pane-recent', id, cached: recentCache.get(id) }, location.origin);
       if (recentCache.size > 30) recentCache.delete(recentCache.keys().next().value);
       if (request === recentRequest && selectedId === id && view === 'session') { renderTimeline(); renderInspector(); }

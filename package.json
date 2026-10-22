@@ -21,7 +21,7 @@
     "mobile": "npm --prefix mobile start",
     "app": "npm --prefix app start",
     "app:setup": "npm ci && npm --prefix app ci",
-    "test:desktop": "node app/tests/restore.cjs && node app/tests/desktop.cjs && node app/tests/gui.cjs"
+    "test:desktop": "node app/tests/restore.cjs && node app/tests/desktop.cjs && node app/tests/gui.cjs && node app/tests/opencode-gui.cjs"
   },
   "keywords": [
     "claude-code",
