@@ -1,0 +1,9 @@
+{
+  "date": "2026-10-21",
+  "framework": "Vanilla HTML, CSS and JavaScript; Node HTTP server",
+  "fontStack": "Bundled Geist and Fragment Mono; Big Shoulders retained on the canvas",
+  "palette": "Existing Synapse orange, warm neutrals, light and dark modes",
+  "motion": "No animation dependencies; minimal CSS transitions",
+  "spacing": "4px scale introduced for the workspace",
+  "sources": ["package.json", "public/index.html", "server.mjs"]
+}

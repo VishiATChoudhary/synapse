@@ -7,14 +7,27 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const HOME = os.homedir();
-const ROOT = path.dirname(new URL(import.meta.url).pathname);
-const NODE = process.execPath;
-const MCP = path.join(ROOT, 'mcp.mjs');
-const HOOK = `"${NODE}" "${path.join(ROOT, 'hook.mjs')}"`;
+const HOME = process.env.SYNAPSE_USER_HOME || os.homedir();
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DRY = process.argv.includes('--dry-run');
 const report = [];
+const quote = (s) => "'" + s.replace(/'/g, "'\\''") + "'";
+// A desktop install has its own Node runtime. Every agent uses the same small wrapper,
+// so an MCP request can never open another GUI and a separate Node install is unnecessary.
+const NODE = process.versions.electron
+  ? path.join(process.env.SYNAPSE_HOME || path.join(HOME, '.synapse'), 'bin', process.platform === 'win32' ? 'synapse-node.cmd' : 'synapse-node')
+  : process.execPath;
+if (NODE !== process.execPath) {
+  const script = process.platform === 'win32'
+    ? `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${process.execPath}" %*\r\n`
+    : `#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\nexec ${quote(process.execPath)} "$@"\n`;
+  if (!DRY) { fs.mkdirSync(path.dirname(NODE), { recursive: true }); fs.writeFileSync(NODE, script, { mode: 0o755 }); }
+  report.push(`added bundled runtime: ${NODE}`);
+}
+const MCP = path.join(ROOT, 'mcp.mjs');
+const HOOK = process.platform === 'win32' ? `"${NODE}" "${path.join(ROOT, 'hook.mjs')}"` : `${quote(NODE)} ${quote(path.join(ROOT, 'hook.mjs'))}`;
 
 function backup(file) {
   if (fs.existsSync(file) && !fs.existsSync(`${file}.bak-synapse`)) fs.copyFileSync(file, `${file}.bak-synapse`);
@@ -60,7 +73,7 @@ function addHooks(d, events) {
   for (const ev of events) {
     const groups = (d.hooks[ev] ||= []);
     // drop older synapse hook entries (e.g. a different node path), then add the current one
-    for (const g of groups) g.hooks = (g.hooks || []).filter((h) => !String(h.command).includes('synapse/hook.mjs') || h.command === HOOK);
+    for (const g of groups) g.hooks = (g.hooks || []).filter((h) => !(/synapse/i.test(h.command) && /[/\\]hook\.mjs/.test(h.command)) || h.command === HOOK);
     d.hooks[ev] = groups.filter((g) => g.hooks.length);
     if (!d.hooks[ev].some((g) => g.hooks.some((h) => h.command === HOOK))) {
       d.hooks[ev].push({ hooks: [{ type: 'command', command: HOOK, timeout: 5 }] });
@@ -98,7 +111,7 @@ editJSON('opencode mcp', path.join(HOME, '.config', 'opencode', 'opencode.json')
 // `synapse` launcher, so the skill and hook messages never depend on where the repo lives
 {
   const bin = path.join(process.env.SYNAPSE_HOME || path.join(HOME, '.synapse'), 'bin', 'synapse');
-  const script = `#!/bin/sh\nexec "${NODE}" "${path.join(ROOT, 'cli.mjs')}" "$@"\n`;
+  const script = `#!/bin/sh\nexec ${quote(NODE)} ${quote(path.join(ROOT, 'cli.mjs'))} "$@"\n`;
   const current = fs.existsSync(bin) ? fs.readFileSync(bin, 'utf8') : '';
   if (current === script) report.push(`ok    launcher: ${bin}`);
   else {

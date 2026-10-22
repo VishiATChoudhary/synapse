@@ -4,13 +4,17 @@
 //                    sent to it, and prints a visible "synapse ..." line in the terminal.
 //  SessionStart:     prints which agents this session is linked with.
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import {
   FILES, readJSON, writeJSON, listAgents, readAgentMessages, formatMessages, takeInbox, logEvent, agentForProcess,
 } from './lib.mjs';
+import { isConnected, sync } from './remote.mjs';
 
 const BUDGET = Number(process.env.SYNAPSE_BUDGET || 8000);
 
-function main() {
+async function main() {
+  // an answering fork for a friend's agent: no context in, nothing printed
+  if (process.env.SYNAPSE_EXTERNAL === '1') return;
   const input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
   const event = input.hook_event_name || 'UserPromptSubmit';
   // Claude's session_id is its Synapse id; Codex's is not, so find ourselves in the process tree
@@ -22,6 +26,26 @@ function main() {
     if (self) me = self.id;
   }
   if (!me) return;
+
+  // `/sfork <question>`: file a fork request and block the prompt so it never enters this session.
+  // The Synapse app (or `synapse fork` when no app runs) picks the request up and spawns the child.
+  const sfork = event === 'UserPromptSubmit' && /^\/sfork\s+(\S[\s\S]*)$/.exec(String(input.prompt || '').trim());
+  if (sfork) {
+    const question = sfork[1].trim();
+    const reqs = readJSON(FILES.forks, []).filter((r) => Date.now() - r.requestedAt < 86400_000);
+    reqs.push({
+      id: crypto.randomUUID(), parent: input.session_id || me, parentKind: input.session_id ? 'claude' : 'codex',
+      cwd: input.cwd || process.cwd(), question, requestedAt: Date.now(), status: 'pending',
+      host: process.env.SYNAPSE_APP ? 'app' : 'tab',
+    });
+    writeJSON(FILES.forks, reqs);
+    logEvent({ type: 'fork', parent: input.session_id || me, question });
+    process.stdout.write(JSON.stringify({
+      decision: 'block', reason: `synapse  ⑂ forked: ${question}`,
+      hookSpecificOutput: { hookEventName: event, suppressOriginalPrompt: true },
+    }));
+    return;
+  }
 
   if (event === 'SessionStart') {
     const ins = edgesAll.filter((e) => e.to === me).map((e) => e.fromName);
@@ -36,7 +60,20 @@ function main() {
   const blocks = [];
   const seen = []; // for the line shown to the user
 
-  const incoming = edgesAll.filter((e) => e.to === me);
+  // multiplayer: collect what friends shared (and send ours) first; never hold the prompt up for long
+  let edgesNow = edgesAll;
+  if (isConnected()) { await sync({ timeout: 2500 }).catch(() => {}); edgesNow = readJSON(FILES.edges, []); }
+
+  // on-demand links (a collapsed fork child) are not pulled in: the agent hears once that it can read them
+  const onDemand = edgesNow.filter((e) => e.to === me && e.onDemand && !e.noticed);
+  if (onDemand.length) {
+    blocks.push(`<linked-agents-on-demand>\n${onDemand.map((e) => `"${e.fromName}" (a fork of this session) shares its context with you. ` +
+      `It is not included here: read it with synapse_read("${e.fromName}") when the user asks or it would help.`).join('\n')}\n</linked-agents-on-demand>`);
+    const ids = new Set(onDemand.map((e) => e.id));
+    writeJSON(FILES.edges, readJSON(FILES.edges, []).map((e) => ids.has(e.id) ? { ...e, noticed: true } : e));
+  }
+
+  const incoming = edgesNow.filter((e) => e.to === me && !e.onDemand);
   if (incoming.length) {
     const agents = new Map(listAgents().map((a) => [a.id, a]));
     const cursors = readJSON(FILES.cursors, {});
@@ -49,11 +86,14 @@ function main() {
       if (!messages.length) continue;
       const body = formatMessages(messages, BUDGET);
       blocks.push(
-        `<linked-agent name="${src.name}" kind="${src.kind}" cwd="${src.cwd}" transcript="${src.transcript}">\n` +
-        `${first ? 'Recent context' : 'New activity since your last prompt'} from agent "${src.name}".\n\n${body}\n</linked-agent>`
+        (src.remote
+          ? `<linked-agent name="${src.name}" kind="${src.kind}" owner="${src.remote.owner}" project="${src.remote.project}" machine="remote">\n` +
+            `${first ? 'Recent context' : 'New activity since your last prompt'} from agent "${src.name}", which runs on ${src.remote.owner}'s machine and is shared with you by them. You cannot message it.\n\n${body}\n</linked-agent>`
+          : `<linked-agent name="${src.name}" kind="${src.kind}" cwd="${src.cwd}" transcript="${src.transcript}">\n` +
+            `${first ? 'Recent context' : 'New activity since your last prompt'} from agent "${src.name}".\n\n${body}\n</linked-agent>`)
       );
       logEvent({ type: 'context', edge: e.id, chars: body.length });
-      seen.push(`${src.name} (${messages.length} msg${messages.length === 1 ? '' : 's'}, ${(body.length / 1000).toFixed(1)}k chars)`);
+      seen.push(`${src.remote ? `${src.name}@${src.remote.owner}` : src.name} (${messages.length} msg${messages.length === 1 ? '' : 's'}, ${(body.length / 1000).toFixed(1)}k chars)`);
     }
     writeJSON(FILES.cursors, cursors);
   }
@@ -66,6 +106,7 @@ function main() {
 
   const shown = [];
   if (seen.length) shown.push(`⇢ pulled context from ${seen.join(', ')}`);
+  if (onDemand.length) shown.push(`⇠ can read ${onDemand.map((e) => e.fromName).join(', ')} on demand`);
   if (inbox.length) {
     const from = [...new Set(inbox.map((m) => m.fromName))].join(', ');
     shown.push(`✉ ${inbox.length} message${inbox.length === 1 ? '' : 's'} from ${from}`);
@@ -83,4 +124,4 @@ function main() {
   }));
 }
 
-try { main(); } catch {} // never block the user's prompt
+main().catch(() => {}); // never block the user's prompt

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-PQ8kUkfI3XptXyyv7ccYhuBGeztHih8jClnedcjmBwU='; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; frame-src http://127.0.0.1:*; connect-src 'self'; object-src 'none'; base-uri 'none'">
+<title>Synapse</title>
+<script>document.documentElement.dataset.theme = localStorage.getItem('synapse-mode') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'signal');</script>
+<link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="workspace.css">
+</head>
+<body>
+<header class="desktop-toolbar">
+  <div class="desktop-modes" role="group" aria-label="Workspace mode">
+    <button id="mode-gui" aria-pressed="false">GUI</button>
+    <button id="mode-terminal" aria-pressed="true">Terminal</button>
+  </div>
+  <span class="desktop-title">Synapse</span>
+  <button id="desktop-settings" title="Settings">Settings</button>
+</header>
+<section id="desktop-workspace" hidden aria-label="Graphical workspace"><iframe id="workspace-frame" title="Synapse workspace" allow="clipboard-write"></iframe></section>
+<aside class="side" id="sidebar">
+  <div class="side-head">
+    <span class="wordmark">synapse</span>
+    <button class="icon" id="theme" title="light / dark">◐</button>
+  </div>
+  <nav class="tree" id="tree"></nav>
+  <div class="side-foot">
+    <button class="ghost" id="add-project">+ workspace</button>
+    <button class="ghost me" id="me" title="account"></button>
+  </div>
+</aside>
+
+<main class="main">
+  <header class="top">
+    <button class="icon" id="toggle-sidebar" title="Toggle sidebar  ⌘B" aria-label="Toggle sidebar" aria-controls="sidebar" aria-expanded="true">◧</button>
+    <div class="deck" id="deck"></div>
+    <div class="top-right">
+      <button class="ghost sig" id="btn-update" hidden></button>
+      <button class="icon" id="split-right" title="Split side by side  ⌘D" aria-label="Split side by side">◫</button>
+      <button class="icon" id="split-down" title="Split top and bottom  ⇧⌘D" aria-label="Split top and bottom">⊟</button>
+      <button class="ghost" id="btn-activity" title="activity: your year in code and prompts"><span class="glyph" aria-hidden="true">▦</span>activity</button>
+      <button class="ghost" id="btn-canvas" title="node view  ⌃Tab or ⌘G · ⌘-click a node opens its session"><span class="glyph" aria-hidden="true">◇</span><span id="syn-dot" hidden role="button" tabindex="0" aria-label="synapse requests"></span>synapse</button>
+      <button class="ghost sig" id="btn-fork" title="⇧⌘F">⑂ fork</button>
+    </div>
+  </header>
+  <nav class="launch" id="launch"></nav>
+  <section class="stage" id="stage">
+    <div class="empty" id="empty">
+      <div class="empty-title">Nothing<br>running</div>
+      <div class="empty-sub"><kbd>⌃1</kbd> claude &nbsp; <kbd>⌃2</kbd> codex &nbsp; <kbd>⌘T</kbd> shell &nbsp; <kbd>⌘N</kbd> pick &nbsp; <kbd>⇧⌘N</kbd> worktree</div>
+    </div>
+  </section>
+  <div class="activity" id="activity" hidden tabindex="-1"></div>
+  <div class="canvas" id="canvas" hidden><iframe id="canvas-frame" title="Synapse canvas"></iframe></div>
+  <footer class="bar" id="bar">
+    <span class="bar-left" id="bar-left"></span>
+    <span class="bar-right" id="bar-right"></span>
+    <button class="gear" id="settings" title="settings  ⌘," aria-label="Settings">⚙</button>
+  </footer>
+</main>
+
+<div class="fan" id="fan" hidden>
+  <div class="fan-inner" id="fan-inner"></div>
+  <div class="fan-title"><b>Fork tree</b><span id="fan-meta"></span><span class="esc" id="fan-esc">esc</span></div>
+  <div class="fan-hint"><span>click a card: bring to front</span><span>⌫ close branch</span><span>⌘E / esc close</span></div>
+</div>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-title" id="modal-title"></div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<div class="syn-pop" id="syn-pop" hidden></div>
+
+<div class="login onboard" id="onboard" hidden tabindex="-1">
+  <div class="login-card onboard-card" id="onboard-card"></div>
+</div>
+
+<div class="login" id="login" hidden>
+  <div class="login-card" id="login-card"></div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+<div class="grain" aria-hidden="true"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

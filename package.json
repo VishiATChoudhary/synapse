@@ -1,15 +1,36 @@
 {
   "name": "synapse",
-  "version": "0.3.0",
+  "version": "0.6.0-gui.1",
   "description": "See every coding agent on your machine as a live node, link them, and let them share context and message each other",
   "type": "module",
   "license": "MIT",
-  "bin": { "synapse": "./cli.mjs" },
-  "engines": { "node": ">=18" },
+  "bin": {
+    "synapse": "./cli.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.mjs",
     "demo": "rm -rf /tmp/synapse-demo && SYNAPSE_DEMO=1 SYNAPSE_HOME=/tmp/synapse-demo PORT=${PORT:-4848} node server.mjs",
-    "install-agents": "node install.mjs"
+    "install-agents": "node install.mjs",
+    "app:build": "node scripts/build-app.mjs",
+    "test": "node --test test/*.test.mjs",
+    "app": "npm --prefix app start",
+    "app:setup": "npm ci && npm --prefix app ci",
+    "test:desktop": "node app/tests/restore.cjs && node app/tests/desktop.cjs"
   },
-  "keywords": ["claude-code", "codex", "gemini-cli", "mcp", "agents", "multi-agent", "context"]
+  "keywords": [
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "mcp",
+    "agents",
+    "multi-agent",
+    "context"
+  ],
+  "main": "app/main.mjs",
+  "devDependencies": {
+    "electron-builder": "^26.0.12"
+  }
 }
