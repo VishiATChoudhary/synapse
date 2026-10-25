@@ -1645,7 +1645,8 @@ function initialize() {
   if (embedded) parent.postMessage({ type: 'synapse:desktop-ready' }, '*');
 }
 
-if (typeof document !== 'undefined') {
+// other pages (the file viewer) import the helpers above without starting a workspace
+if (typeof document !== 'undefined' && document.getElementById('workspace')) {
   // The desktop server uses an available port on each launch. Keep drafts and preferences
   // with the session store, instead of tying them to a temporary HTTP origin.
   if (parent !== window && new URLSearchParams(location.search).get('desktop') === '1') {

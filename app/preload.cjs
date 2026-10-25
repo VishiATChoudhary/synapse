@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('synapse', {
   worktree: { list: (repo) => call('worktree:list', { repo }), open: (a) => call('worktree:open', a), fetch: (repo) => call('worktree:fetch', { repo }), prs: (repo, choices) => call('worktree:prs', { repo, choices }), add: (a) => call('worktree:add', a), remove: (a) => call('worktree:remove', a), rename: (path, name) => call('worktree:rename', { path, name }), order: (paths) => call('worktree:order', { paths }) },
   settings: { usage: () => call('talk:usage'), get: () => call('settings:get'), set: (patch) => call('settings:set', patch) },
   git: { dirty: (cwd) => call('git:dirty', { cwd }) },
+  files: { exists: (cwd, paths) => call('files:exists', { cwd, paths }) },
   agent: { kill: (pid) => call('agent:kill', { pid }), rename: (pty, name) => call('agent:rename', { pty, name }) },
   account: {
     get: () => call('account:get'),

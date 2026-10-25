@@ -1008,6 +1008,12 @@ handle('worktree:order', ({ paths }) => {
 handle('project:remove', ({ path: p }) => { const c = config(); c.workspaces = c.workspaces.filter((w) => w !== p); writeJSON(FILES.app, c); });
 // how many uncommitted changes a folder has (0 when it is not a repo); the renderer asks before anything destructive
 handle('git:dirty', ({ cwd }) => { try { return git(cwd, ['status', '--porcelain']).split('\n').filter(Boolean).length; } catch { return 0; } });
+// which of the paths a terminal shows exist ("src/x.ts:12", "~/notes.md", "/abs/dir"), resolved against the session's folder
+handle('files:exists', ({ cwd, paths }) => Object.fromEntries((Array.isArray(paths) ? paths : []).slice(0, 200).map((raw) => {
+  let p = String(raw).replace(/^file:\/\//, '').replace(/(#L\d+(-L?\d+)?|:\d+(:\d+)?(-\d+)?)$/, '');
+  if (p === '~' || p.startsWith('~/')) p = path.join(os.homedir(), p.slice(1));
+  try { fs.statSync(path.resolve(cwd || os.homedir(), p)); return [raw, true]; } catch { return [raw, false]; }
+})));
 // end an agent the app did not start; only pids Synapse knows as agents, never anything else
 handle('agent:kill', ({ pid }) => {
   pid = Number(pid);

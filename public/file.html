@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en" data-theme="signal">
+<head>
+  <meta charset="utf-8">
+  <meta name="color-scheme" content="light dark">
+  <title>Synapse · File</title>
+  <link rel="stylesheet" href="/workspace.css">
+  <style>
+    html, body { height: 100%; }
+    /* the inspector fills the page: the app's pane already draws the edge */
+    .inspector.file-mode { position: static; width: auto; height: 100%; box-sizing: border-box; border: 0; box-shadow: none; padding: 16px 18px 0; }
+  </style>
+  <script type="module" src="/file.mjs"></script>
+</head>
+<body>
+  <main class="inspector file-mode" id="inspector" aria-live="polite"></main>
+</body>
+</html>
