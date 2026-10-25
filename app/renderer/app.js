@@ -102,13 +102,86 @@ const termTheme = () => {
   };
 };
 
+// Paths in a terminal ("app/main.mjs:12", "~/notes.md", "Update(src/x.ts)") underline once Synapse confirms they
+// exist in the session's folder; ⌘-click (Ctrl-click on Windows) opens one beside the terminal (public/file.html)
+const FILE_RE = /(?<![\w/.:@-])~?\/?[\w.@+-]+(?:\/[\w.@+-]+)*\/?(?::\d+(?:[-:]\d+)?|#L\d+(?:-L?\d+)?)?/g;
+const looksLikeFile = (t) => t.length > 2 && (t.includes('/') || /\.[A-Za-z]\w{0,7}(?::\d|#L|$)/.test(t)) && !/^\/+$/.test(t) && !/^\d+(\.\d+)+$/.test(t);
+const pathSeen = new Map(); // cwd + path -> true, or the time it was missing (asked again a few seconds later)
+const linkMod = (e) => (WIN ? e.ctrlKey : e.metaKey);
+async function pathsExist(cwd, paths) {
+  const ask = paths.filter((p) => { const v = pathSeen.get(cwd + '\0' + p); return v !== true && !(v > Date.now() - 5000); });
+  if (ask.length) {
+    const found = await synapse.files.exists(cwd, ask).catch(() => ({}));
+    for (const p of ask) pathSeen.set(cwd + '\0' + p, found[p] ? true : Date.now());
+  }
+  return paths.filter((p) => pathSeen.get(cwd + '\0' + p) === true);
+}
+function pathLinks(term, cwd) {
+  const cell = term.buffer.active.getNullCell();
+  return {
+    async provideLinks(y, callback) {
+      const buf = term.buffer.active;
+      // a long path wraps: read the whole wrapped line, cell by cell so wide characters keep columns right
+      let start = y - 1, end = y - 1;
+      while (start > 0 && buf.getLine(start)?.isWrapped) start--;
+      while (buf.getLine(end + 1)?.isWrapped) end++;
+      let text = '';
+      const at = [];
+      for (let r = start; r <= end; r++) {
+        const line = buf.getLine(r);
+        for (let c = 0; line && c < line.length; c++) {
+          if (!line.getCell(c, cell)?.getWidth()) continue;
+          const ch = cell.getChars() || ' ';
+          text += ch; for (let i = 0; i < ch.length; i++) at.push([r, c]);
+        }
+      }
+      const hits = [...text.matchAll(FILE_RE)].map((m) => ({ i: m.index, t: m[0].replace(/[.,;:)]+$/, '') }))
+        .filter((m) => looksLikeFile(m.t) && at[m.i][0] <= y - 1 && at[m.i + m.t.length - 1][0] >= y - 1);
+      if (!hits.length) return callback(undefined);
+      const ok = new Set(await pathsExist(cwd(), [...new Set(hits.map((m) => m.t))]));
+      callback(hits.filter((m) => ok.has(m.t)).map((m) => {
+        const [r0, c0] = at[m.i], [r1, c1] = at[m.i + m.t.length - 1];
+        return {
+          range: { start: { x: c0 + 1, y: r0 + 1 }, end: { x: c1 + 1, y: r1 + 1 } }, text: m.t,
+          decorations: { underline: true, pointerCursor: true },
+          activate: (e, t) => { if (linkMod(e)) openFile(t, cwd()); },
+        };
+      }));
+    },
+  };
+}
+// links a program prints itself (OSC 8): files open beside the terminal, web pages in the browser
+const termLinks = (cwd) => ({
+  allowNonHttpProtocols: true,
+  activate: (e, uri) => {
+    if (!linkMod(e)) return;
+    if (/^file:/.test(uri)) openFile(decodeURIComponent(new URL(uri).pathname), cwd());
+    else if (/^https?:/.test(uri)) window.open(uri);
+  },
+});
+let fileBase = null;
+async function openFile(target, cwd) {
+  try {
+    const base = await (fileBase ||= synapse.canvas().catch((e) => { fileBase = null; throw e; }));
+    $('#file-frame').src = new URL(`file?${new URLSearchParams({ path: target, cwd: cwd || '', theme: document.documentElement.dataset.theme })}`, base).href;
+    $('#file-pane').hidden = false;
+  } catch (e) { toast(e.message, true); }
+}
+function closeFile() {
+  if ($('#file-pane').hidden) return;
+  $('#file-pane').hidden = true;
+  top(focusedSlot())?.term.focus();
+}
+addEventListener('message', (ev) => { if (ev.source === $('#file-frame').contentWindow && ev.data?.type === 'synapse:file-close') closeFile(); });
+
 async function makeSession(s, { kind, title, question = null, parent = null, key = null, spawn }) {
   const wrap = el('div', 'term');
   $('#stage').appendChild(wrap);
   const term = new Terminal({
     fontFamily: "'Fragment Mono', Menlo, monospace", fontSize: 13, lineHeight: 1.25, cursorBlink: true, cursorStyle: 'bar',
-    allowProposedApi: true, scrollback: 5000, theme: termTheme(), macOptionIsMeta: true,
+    allowProposedApi: true, scrollback: 5000, theme: termTheme(), macOptionIsMeta: true, linkHandler: termLinks(() => s.worktree),
   });
+  term.registerLinkProvider(pathLinks(term, () => s.worktree));
   const fit = new FitAddon();
   term.loadAddon(fit);
   // measure while shown: a hidden element makes fit() fall back to 80x24, and the pty would start at that size
@@ -1799,7 +1872,7 @@ function toggleTheme() {
   sendTheme();
 }
 // the node view runs on another origin and cannot read our choice: tell it when it loads and whenever it changes
-const sendTheme = () => $('#canvas-frame').contentWindow?.postMessage({ type: 'synapse:theme', theme: document.documentElement.dataset.theme }, '*');
+const sendTheme = () => { for (const f of ['#canvas-frame', '#file-frame']) $(f).contentWindow?.postMessage({ type: 'synapse:theme', theme: document.documentElement.dataset.theme }, '*'); };
 $('#canvas-frame').addEventListener('load', sendTheme);
 
 $('#theme').onclick = toggleTheme;

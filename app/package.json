@@ -11,6 +11,7 @@
     "test:worktrees": "node tests/worktrees.mjs && node tests/worktrees-ui.cjs",
     "test:navigation": "node tests/navigation.cjs",
     "test:keys": "electron tests/keys.cjs",
+    "test:paths": "electron tests/terminal-paths.cjs",
     "test:library": "electron tests/library.cjs",
     "test:tabs": "node tests/tabs.cjs",
     "test:drag": "node tests/drag.cjs",

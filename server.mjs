@@ -37,6 +37,8 @@ const STATIC = new Map([
   ['/workspace.css', ['public/workspace.css', 'text/css']],
   ['/workspace.mjs', ['public/workspace.mjs', 'text/javascript']],
   ['/activity.mjs', ['public/activity.mjs', 'text/javascript']],
+  ['/file', ['public/file.html', 'text/html']],
+  ['/file.mjs', ['public/file.mjs', 'text/javascript']],
   ['/activity.css', ['public/activity.css', 'text/css']],
   ['/tokens.css', ['tokens.css', 'text/css']],
 ]);
