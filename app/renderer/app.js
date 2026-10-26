@@ -163,16 +163,41 @@ let fileBase = null;
 async function openFile(target, cwd) {
   try {
     const base = await (fileBase ||= synapse.canvas().catch((e) => { fileBase = null; throw e; }));
-    $('#file-frame').src = new URL(`file?${new URLSearchParams({ path: target, cwd: cwd || '', theme: document.documentElement.dataset.theme })}`, base).href;
+    const wide = $('.work').classList.contains('file-wide') ? { wide: '1' } : {};
+    $('#file-frame').src = new URL(`file?${new URLSearchParams({ path: target, cwd: cwd || '', theme: document.documentElement.dataset.theme, ...wide })}`, base).href;
     $('#file-pane').hidden = false;
   } catch (e) { toast(e.message, true); }
 }
 function closeFile() {
   if ($('#file-pane').hidden) return;
   $('#file-pane').hidden = true;
+  $('.work').classList.remove('file-wide');
   top(focusedSlot())?.term.focus();
 }
-addEventListener('message', (ev) => { if (ev.source === $('#file-frame').contentWindow && ev.data?.type === 'synapse:file-close') closeFile(); });
+addEventListener('message', (ev) => {
+  if (ev.source !== $('#file-frame').contentWindow) return;
+  if (ev.data?.type === 'synapse:file-close') closeFile();
+  if (ev.data?.type === 'synapse:file-wide') $('.work').classList.toggle('file-wide', !!ev.data.wide);
+});
+// the pane's width follows its left edge and is kept for next time
+{
+  const pane = $('#file-pane'), saved = +localStorage.getItem('synapse-file-width');
+  if (saved) pane.style.setProperty('--file-w', `${saved}px`);
+  $('#file-grip').addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    $('#file-grip').setPointerCapture(e.pointerId);
+    pane.classList.add('dragging');
+    const right = pane.getBoundingClientRect().right;
+    const move = (m) => pane.style.setProperty('--file-w', `${Math.round(right - m.clientX)}px`);
+    const up = () => {
+      pane.classList.remove('dragging');
+      $('#file-grip').removeEventListener('pointermove', move);
+      localStorage.setItem('synapse-file-width', String(Math.round(pane.getBoundingClientRect().width)));
+    };
+    $('#file-grip').addEventListener('pointermove', move);
+    $('#file-grip').addEventListener('pointerup', up, { once: true });
+  });
+}
 
 async function makeSession(s, { kind, title, question = null, parent = null, key = null, spawn }) {
   const wrap = el('div', 'term');

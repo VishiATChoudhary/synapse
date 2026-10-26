@@ -113,12 +113,12 @@ const flowTimer = setInterval(() => {
 }, 400);
 
 // --- HTTP ---
-function body(req) {
+function body(req, limit = 64 * 1024) {
   return new Promise((resolve, reject) => {
     let data = '', size = 0;
     req.on('data', (chunk) => {
       size += chunk.length;
-      if (size > 64 * 1024) return reject(Object.assign(new Error('Request is too large.'), { status: 413 }));
+      if (size > limit) return reject(Object.assign(new Error('Request is too large.'), { status: 413 }));
       data += chunk;
     });
     req.on('error', reject);
@@ -172,6 +172,29 @@ async function handleRequest(req, res) {
     return fs.createReadStream(path.join(ROOT, file)).pipe(res);
   }
   // bundled fonts, so the canvas makes no third-party requests
+  // pdf.js for the file viewer, from the desktop app's dependencies (not there when the server runs on its own)
+  const pdfjs = p.match(/^\/pdfjs\/((?:build|web|cmaps|standard_fonts|wasm|iccs)\/[\w./-]+)$/);
+  if (pdfjs && !pdfjs[1].includes('..') && ['GET', 'HEAD'].includes(req.method)) {
+    const file = path.join(ROOT, 'app', 'node_modules', 'pdfjs-dist', pdfjs[1]), st = stat(file);
+    if (!st?.isFile()) { res.writeHead(404); return res.end(); }
+    const type = { mjs: 'text/javascript', css: 'text/css', svg: 'image/svg+xml', wasm: 'application/wasm', json: 'application/json' }[extOf(file)] || 'application/octet-stream';
+    res.writeHead(200, { 'content-type': type, 'content-length': st.size, 'cache-control': 'max-age=86400' });
+    return req.method === 'HEAD' ? res.end() : fs.createReadStream(file).pipe(res);
+  }
+  // a pdf the viewer annotated or filled in, as bytes; same mtime rule as text saves
+  if (p === '/api/file/bytes' && req.method === 'POST') {
+    if (!ownPage(req)) return json(res, 403, { error: 'forbidden' });
+    const file = resolveFile('', url.searchParams.get('path')), st = file && stat(file);
+    if (!st?.isFile() || extOf(file) !== 'pdf') return json(res, 400, { error: 'not a pdf' });
+    if (!url.searchParams.get('force') && Math.abs(st.mtimeMs - Number(url.searchParams.get('mtime'))) > 1) return json(res, 409, { error: 'changed on disk', mtime: st.mtimeMs });
+    const chunks = []; let size = 0;
+    for await (const chunk of req) { size += chunk.length; if (size > 256 << 20) return json(res, 413, { error: 'too large' }); chunks.push(chunk); }
+    const bytes = Buffer.concat(chunks);
+    if (bytes.subarray(0, 5).toString() !== '%PDF-') return json(res, 400, { error: 'not a pdf' });
+    const tmp = `${file}.synapse-${process.pid}.tmp`;
+    fs.writeFileSync(tmp, bytes); fs.renameSync(tmp, file);
+    return json(res, 200, { mtime: fs.statSync(file).mtimeMs });
+  }
   const font = p.match(/^\/fonts\/([a-z-]+\.woff2)$/);
   if (font) {
     const file = path.join(ROOT, 'public', 'fonts', font[1]);
@@ -334,7 +357,8 @@ async function handleRequest(req, res) {
   }
   if (p.startsWith('/api/file') || p === '/api/link') {
     if (!ownPage(req)) return json(res, 403, { error: 'forbidden' });
-    const q = req.method === 'POST' ? await body(req) : Object.fromEntries(url.searchParams);
+    // a file the viewer saves can be up to FILE_MAX characters, escaped as JSON
+    const q = req.method === 'POST' ? await body(req, p === '/api/file/save' ? 8 * FILE_MAX : undefined) : Object.fromEntries(url.searchParams);
     try { return await files(req, res, p, q); } catch (e) { return json(res, 500, { error: e.code || e.message }); }
   }
   json(res, 404, { error: 'not found' });
@@ -365,6 +389,14 @@ async function files(req, res, p, q) {
     else execFile('open', q.reveal ? ['-R', file] : [file], () => {});
     return json(res, 200, { ok: true });
   }
+  // the viewer's editor writes text files it opened; mtime says which version it edited, so an agent's
+  // change in between is never overwritten silently (409, the viewer offers to reload or overwrite)
+  if (p === '/api/file/save' && req.method === 'POST') {
+    if (!st.isFile() || typeof q.text !== 'string' || q.text.length > FILE_MAX) return json(res, 400, { error: 'not a text file' });
+    if (!q.force && Math.abs(st.mtimeMs - Number(q.mtime)) > 1) return json(res, 409, { error: 'changed on disk', mtime: st.mtimeMs });
+    fs.writeFileSync(file, q.text);
+    return json(res, 200, { mtime: fs.statSync(file).mtimeMs });
+  }
   // fifos and sockets would block the event loop on open, so only regular files are read
   if (p !== '/api/file/open' && !st.isFile() && !st.isDirectory()) return json(res, 415, { error: 'not a regular file' });
   if (p === '/api/file/raw') {
@@ -376,6 +408,7 @@ async function files(req, res, p, q) {
   }
   if (p === '/api/file') {
     const base = { path: file, name: path.basename(file), mtime: st.mtimeMs, size: st.size };
+    if (q.stat) return json(res, 200, base); // the viewer watching for changes on disk
     if (st.isDirectory()) {
       const entries = fs.readdirSync(file, { withFileTypes: true }).filter((d) => d.name !== '.DS_Store')
         .map((d) => ({ name: d.name, dir: d.isDirectory() || (d.isSymbolicLink() && !!stat(path.join(file, d.name))?.isDirectory()) }))
