@@ -39,6 +39,8 @@
     "!app/node_modules/@napi-rs/**",
     "!app/node_modules/pdfjs-dist/{legacy,types,image_decoders}/**",
     "!app/node_modules/pdfjs-dist/**/*.map",
+    "!app/node_modules/pdf-lib/{cjs,es,src}/**",
+    "!app/node_modules/pdf-lib/dist/{pdf-lib.js,pdf-lib.min.js,pdf-lib.esm.js,*.map}",
     "!app/node_modules/@electron/**",
     "!app/node_modules/@electron-internal/**",
     "!app/node_modules/node-gyp/**",

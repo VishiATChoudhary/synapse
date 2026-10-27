@@ -144,40 +144,61 @@ function pathLinks(term, cwd) {
         return {
           range: { start: { x: c0 + 1, y: r0 + 1 }, end: { x: c1 + 1, y: r1 + 1 } }, text: m.t,
           decorations: { underline: true, pointerCursor: true },
-          activate: (e, t) => { if (linkMod(e)) openFile(t, cwd()); },
+          activate: (e, t) => { if (linkMod(e)) openFile(t, cwd(), term); },
         };
       }));
     },
   };
 }
 // links a program prints itself (OSC 8): files open beside the terminal, web pages in the browser
-const termLinks = (cwd) => ({
+const termLinks = (cwd, term) => ({
   allowNonHttpProtocols: true,
   activate: (e, uri) => {
     if (!linkMod(e)) return;
-    if (/^file:/.test(uri)) openFile(decodeURIComponent(new URL(uri).pathname), cwd());
+    if (/^file:/.test(uri)) openFile(decodeURIComponent(new URL(uri).pathname), cwd(), term());
     else if (/^https?:/.test(uri)) window.open(uri);
   },
 });
+// each tab keeps its own file: the pane shows the file opened from the tab in front, and switching back finds it as it
+// was left (scroll, zoom, unsaved typing)
+const files = new Map(); // session -> { frame, wide }
 let fileBase = null;
-async function openFile(target, cwd) {
+const ownerOf = (term) => { for (const s of M.slots) for (const x of s.sessions) if (x.term === term) return x; return null; };
+async function openFile(target, cwd, term) {
+  const x = ownerOf(term);
+  if (!x) return;
   try {
     const base = await (fileBase ||= synapse.canvas().catch((e) => { fileBase = null; throw e; }));
-    const wide = $('.work').classList.contains('file-wide') ? { wide: '1' } : {};
-    $('#file-frame').src = new URL(`file?${new URLSearchParams({ path: target, cwd: cwd || '', theme: document.documentElement.dataset.theme, ...wide })}`, base).href;
-    $('#file-pane').hidden = false;
+    let f = files.get(x);
+    if (!f) {
+      const frame = el('iframe', 'file-frame');
+      frame.title = 'File'; frame.allow = 'clipboard-write';
+      $('#file-pane').appendChild(frame);
+      files.set(x, f = { frame, wide: false });
+    }
+    f.frame.src = new URL(`file?${new URLSearchParams({ path: target, cwd: cwd || '', theme: document.documentElement.dataset.theme, ...(f.wide ? { wide: '1' } : {}) })}`, base).href;
+    syncFile();
   } catch (e) { toast(e.message, true); }
 }
-function closeFile() {
-  if ($('#file-pane').hidden) return;
-  $('#file-pane').hidden = true;
-  $('.work').classList.remove('file-wide');
+function syncFile() {
+  const live = new Set(M.slots.flatMap((s) => s.sessions));
+  for (const [x, f] of files) if (!live.has(x)) { f.frame.remove(); files.delete(x); }
+  const cur = workspaceOpen ? null : files.get(top(focusedSlot()));
+  for (const f of files.values()) f.frame.hidden = f !== cur;
+  $('#file-pane').hidden = !cur;
+  $('.work').classList.toggle('file-wide', !!cur?.wide);
+}
+function closeFile(x) {
+  files.get(x)?.frame.remove();
+  files.delete(x);
+  syncFile();
   top(focusedSlot())?.term.focus();
 }
 addEventListener('message', (ev) => {
-  if (ev.source !== $('#file-frame').contentWindow) return;
-  if (ev.data?.type === 'synapse:file-close') closeFile();
-  if (ev.data?.type === 'synapse:file-wide') $('.work').classList.toggle('file-wide', !!ev.data.wide);
+  const [x, f] = [...files].find(([, f]) => f.frame.contentWindow === ev.source) || [];
+  if (!f) return;
+  if (ev.data?.type === 'synapse:file-close') closeFile(x);
+  if (ev.data?.type === 'synapse:file-wide') { f.wide = !!ev.data.wide; syncFile(); }
 });
 // the pane's width follows its left edge and is kept for next time
 {
@@ -204,7 +225,7 @@ async function makeSession(s, { kind, title, question = null, parent = null, key
   $('#stage').appendChild(wrap);
   const term = new Terminal({
     fontFamily: "'Fragment Mono', Menlo, monospace", fontSize: 13, lineHeight: 1.25, cursorBlink: true, cursorStyle: 'bar',
-    allowProposedApi: true, scrollback: 5000, theme: termTheme(), macOptionIsMeta: true, linkHandler: termLinks(() => s.worktree),
+    allowProposedApi: true, scrollback: 5000, theme: termTheme(), macOptionIsMeta: true, linkHandler: termLinks(() => s.worktree, () => term),
   });
   term.registerLinkProvider(pathLinks(term, () => s.worktree));
   const fit = new FitAddon();
@@ -514,6 +535,7 @@ function render() {
     renderBar();
   }
   renderStage();
+  syncFile();
   scheduleSave();
   syncCanvasBranches();
   syncWorkspace();
@@ -1897,7 +1919,7 @@ function toggleTheme() {
   sendTheme();
 }
 // the node view runs on another origin and cannot read our choice: tell it when it loads and whenever it changes
-const sendTheme = () => { for (const f of ['#canvas-frame', '#file-frame']) $(f).contentWindow?.postMessage({ type: 'synapse:theme', theme: document.documentElement.dataset.theme }, '*'); };
+const sendTheme = () => { for (const f of [$('#canvas-frame'), ...[...files.values()].map((v) => v.frame)]) f.contentWindow?.postMessage({ type: 'synapse:theme', theme: document.documentElement.dataset.theme }, '*'); };
 $('#canvas-frame').addEventListener('load', sendTheme);
 
 $('#theme').onclick = toggleTheme;
@@ -2537,7 +2559,7 @@ function drawLogin() {
     card.append(forgot);
   }
   const prov = st.providers;
-  const list = [['github', 'GitHub'], ['google', 'Google'], ['x', 'X']].filter(([k]) => !prov || prov[k]);
+  const list = [['apple', 'Apple'], ['github', 'GitHub'], ['google', 'Google'], ['x', 'X']].filter(([k]) => !prov || prov[k]);
   if (list.length) {
     card.append(el('div', 'login-or', 'or continue with'));
     const row = el('div', 'login-prov');
