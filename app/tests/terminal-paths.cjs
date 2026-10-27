@@ -2,7 +2,7 @@
 // Paths that exist in the session's folder become links; ⌘-click opens the file beside the terminal at its line,
 // a plain click does not, and missing paths and version numbers stay plain text. Text files edit and save themselves
 // (an agent's change is never overwritten silently); the pane resizes and fills the window; pdfs show just their pages
-// and drawing on one saves into the file.
+// and drawing on one or retyping its text saves into the file.
 // Run: SYNAPSE_APP_PORT=<free port> npx electron tests/terminal-paths.cjs
 const electron = require('electron');
 const { app, BrowserWindow } = electron;
@@ -175,6 +175,39 @@ const hovered = () => js(`!!document.querySelector('.term.visible .xterm-screen'
   assert.equal(fs.readFileSync(doc, 'latin1').slice(0, 5), '%PDF-');
   await sleep(800);
   await shot('pdf-drawn');
+
+  // Edit retypes the pdf's own text: a click on "Hello Synapse" opens it for typing, and the new words save into the file
+  const drawn = fs.readFileSync(doc);
+  await fx(`document.querySelector('[data-tool="Edit"]').click()`);
+  await until(() => fx(`document.querySelector('#pdf-scroll').classList.contains('editing')`), 'edit tool on');
+  await fx(`(() => {
+    const page = document.querySelector('.page'), r = page.getBoundingClientRect(), v = page.getBoundingClientRect().width / 300;
+    const x = r.left + 70 * v, y = r.top + (200 - 108) * v, at = document.elementFromPoint(x, y);
+    at.dispatchEvent(new MouseEvent('click', { clientX: x, clientY: y, bubbles: true }));
+  })()`);
+  await until(() => fx(`document.activeElement?.classList.contains('pdf-edit') && document.activeElement.textContent`), 'the text open for typing');
+  assert.equal(await fx(`document.activeElement.textContent`), 'Hello Synapse');
+  await fx(`document.execCommand('selectAll'); document.execCommand('insertText', false, 'Hi there')`);
+  await until(() => !fs.readFileSync(doc).equals(drawn) && fx(`document.querySelector('.bar .state').textContent === 'saved'`), 'the text edit saved', 15000);
+  const words = await fx(`(async () => {
+    const bytes = new Uint8Array(await (await fetch('/api/file/raw?path=' + encodeURIComponent(${JSON.stringify(doc)}) + '&t=' + Date.now())).arrayBuffer());
+    const d = await pdfjsLib.getDocument({ data: bytes }).promise, t = await (await d.getPage(1)).getTextContent();
+    return t.items.map((i) => i.str).join('|');
+  })()`);
+  assert.match(words, /Hi there/);
+  assert.match(fs.readFileSync(doc, 'latin1'), /\/Ink/); // the drawing is still there
+  await fx(`document.activeElement.blur(); document.querySelector('[data-tool="Edit"]').click()`);
+  await sleep(500);
+  await shot('pdf-text-edited');
+
+  // the pane belongs to its tab: another tab hides it, and coming back shows the pdf as it was left
+  const mine = await js(`document.querySelector('.slot.focused').dataset.slot`);
+  await js(`[...document.querySelectorAll('#launch .launch-item')].find((b) => b.textContent.trim() === 'Shell').click()`);
+  await until(() => js(`document.querySelector('#file-pane').hidden`), 'pane hidden in the other tab');
+  await js(`document.querySelector('.slot[data-slot="${mine}"]').click()`);
+  await until(() => js(`!document.querySelector('#file-pane').hidden`), 'pane back with its tab');
+  assert.equal(await fx(`document.querySelector('.bar .name').textContent`), 'doc.pdf');
+  assert.equal(await fx(`!!document.querySelector('.pdfViewer .page canvas')`), true);
 
   // a path inside "Update(...)" works too
   await click('src/app.js', [process.platform === 'win32' ? 'control' : 'meta']);

@@ -181,6 +181,13 @@ async function handleRequest(req, res) {
     res.writeHead(200, { 'content-type': type, 'content-length': st.size, 'cache-control': 'max-age=86400' });
     return req.method === 'HEAD' ? res.end() : fs.createReadStream(file).pipe(res);
   }
+  // pdf-lib, which writes text edits into a pdf
+  if (p === '/pdf-lib.mjs' && ['GET', 'HEAD'].includes(req.method)) {
+    const file = path.join(ROOT, 'app', 'node_modules', 'pdf-lib', 'dist', 'pdf-lib.esm.min.js'), st = stat(file);
+    if (!st?.isFile()) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'content-type': 'text/javascript', 'content-length': st.size, 'cache-control': 'max-age=86400' });
+    return req.method === 'HEAD' ? res.end() : fs.createReadStream(file).pipe(res);
+  }
   // a pdf the viewer annotated or filled in, as bytes; same mtime rule as text saves
   if (p === '/api/file/bytes' && req.method === 'POST') {
     if (!ownPage(req)) return json(res, 403, { error: 'forbidden' });
