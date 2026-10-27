@@ -259,7 +259,7 @@ function sendVerification(user) {
 
 // ---- the friends board: people who trust each other both ways and have both joined see each other's last
 // 7 days. Joining is sending your own numbers; leaving deletes them.
-const BOARD_KEYS = ['tokens', 'tokensOut', 'prompts', 'code', 'activeDays', 'streak', 'level', 'xp'];
+const BOARD_KEYS = ['tokens', 'tokensOut', 'pushed', 'prompts', 'code', 'activeDays', 'streak', 'level', 'xp'];
 const boardStats = (b) => Object.fromEntries(BOARD_KEYS.map((k) => [k, Math.max(0, Math.min(1e13, Math.floor(Number(b?.[k]) || 0)))]));
 const mutual = (a, b) => trusts(a, b) && trusts(b, a);
 function boardOf(userId) {

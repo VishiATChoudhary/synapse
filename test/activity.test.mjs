@@ -52,6 +52,24 @@ test('collect counts prompts per day and your commits once, and caches transcrip
   assert.equal(gh.totals.code, 5, 'GitHub contributions are the code count when gh is signed in');
 });
 
+test('pushed: tokens of the lines you added on a remote branch, not unpushed work, theirs or lockfiles', async () => {
+  const repo = path.join(tmp, 'pushrepo'), remote = path.join(tmp, 'remote.git');
+  const g = (...a) => execFileSync('git', ['-C', repo, ...a], { env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' } });
+  execFileSync('git', ['init', '-q', '--bare', remote]);
+  fs.mkdirSync(repo); g('init', '-q', '-b', 'main'); g('config', 'user.email', 'me@x.dev'); g('config', 'user.name', 'Me');
+  g('remote', 'add', 'origin', remote);
+  const commit = (file, text, ...who) => { fs.writeFileSync(path.join(repo, file), text); g('add', file); g(...who, 'commit', '-q', '-m', file); };
+  commit('a.js', 'x'.repeat(39) + '\n' + 'y'.repeat(8) + '\n'); // "+" and the line: 40 and 9 characters, 10 + 3 tokens
+  commit('package-lock.json', 'z'.repeat(400) + '\n');
+  commit('b.js', 'w'.repeat(400) + '\n', '-c', 'user.email=other@x.dev');
+  g('push', '-q', 'origin', 'main');
+  commit('c.js', 'v'.repeat(400) + '\n'); // not pushed
+  const homes = { claude: path.join(tmp, 'pc'), codex: path.join(tmp, 'px') };
+  const a = await collect({ repos: [repo], cacheFile: path.join(tmp, 'pcache.json'), homes, now, gh: async () => null });
+  assert.deepEqual(a.pushed, { [dayOf(now)]: 13 });
+  assert.equal(a.totals.weekPushed, 13);
+});
+
 test('tokens: a Claude reply counts once though its usage repeats and a fork copies it; Codex counts each step', async () => {
   const homes = { claude: path.join(tmp, 'tc'), codex: path.join(tmp, 'tx') };
   const reply = { type: 'assistant', timestamp: iso(now), message: { id: 'msg_1', model: 'claude-opus-5-5', usage: { input_tokens: 10, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, output_tokens: 5 } } };

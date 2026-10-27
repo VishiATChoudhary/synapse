@@ -664,7 +664,7 @@ test('the phone app signs in with GitHub through its browser sheet: a one-time c
 test('friends board: only people who trust each other both ways and both joined see each other', async () => {
   const [ann, bob, cat] = await Promise.all([signup('ann@example.com', 'Ann'), signup('bob@example.com', 'Bob'), signup('cat@example.com', 'Cat')]);
   const tok = (x) => x.json.token;
-  const week = (n) => ({ tokens: n * 1000, tokensOut: n * 10, prompts: n, code: 2, activeDays: 5, streak: 4, level: 3, xp: 900, evil: '<script>' });
+  const week = (n) => ({ tokens: n * 1000, tokensOut: n * 10, pushed: n, prompts: n, code: 2, activeDays: 5, streak: 4, level: 3, xp: 900, evil: '<script>' });
   // Ann and Bob trust each other; Cat trusts Ann, Ann does not trust Cat
   await call('/v1/trusted', { token: tok(ann), body: { who: '@bob' } });
   await call('/v1/trusted', { token: tok(bob), body: { who: '@ann' } });
@@ -679,6 +679,7 @@ test('friends board: only people who trust each other both ways and both joined 
   assert.equal(joined.joined, true);
   assert.deepEqual(joined.people.map((p) => [p.handle, p.me, p.prompts]), [['ann', true, 20], ['bob', false, 50]], 'Cat is not on Ann\'s board: Ann does not trust her');
   assert.equal(joined.people[0].evil, undefined, 'only known numbers are kept');
+  assert.equal(joined.people[1].pushed, 50, 'pushed tokens are shared');
   assert.equal((await call('/v1/board', { token: tok(cat) })).json.people.length, 1, 'Cat sees only herself');
 
   // leaving takes Ann off Bob's board

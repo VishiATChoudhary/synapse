@@ -5,6 +5,9 @@ export function createActivityView(box, api) {
   let activityAt = 0, loading = null;
   const fmt = (n) => n.toLocaleString('en-US');
   const compact = (n) => n.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+  // token efficiency: tokens of code you pushed per token your agents read and wrote, a tiny share, so two significant digits
+  const pct = (r) => (r ? (100 * r).toLocaleString('en-US', { maximumSignificantDigits: 2 }) : '0') + '%';
+  const efficiency = (p) => (p.tokens ? (p.pushed || 0) / p.tokens : 0);
   const dayKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   // 53 weeks of days, Sunday on top, like GitHub's; four shades split at the busiest tenth of active days
   function heatmap(days, unit) {
@@ -66,7 +69,7 @@ export function createActivityView(box, api) {
       row.append(el('span', 'name', m.name), bar, el('span', 'n', compact(m.tokens)));
       models.appendChild(row);
     }
-    const tokens = section('Tokens', `${compact(a.totals.tokens)} read and written · ${compact(a.totals.tokensOut)} written by your agents`, heatmap(tokenDays, 'tokens'));
+    const tokens = section('Tokens', `${compact(a.totals.tokens)} read and written · ${compact(a.totals.tokensOut)} written by your agents · ${compact(a.totals.weekPushed)} pushed in code this week, ${pct(efficiency({ pushed: a.totals.weekPushed, tokens: a.totals.weekTokens }))} efficiency`, heatmap(tokenDays, 'tokens'));
     if (a.models.length) tokens.appendChild(models);
     const badges = el('div', 'act-badges');
     for (const b of a.badges) { const c = el('div', 'act-badge' + (b.got ? ' got' : '')); c.append(el('b', '', b.name), el('span', '', b.what)); badges.appendChild(c); }
@@ -81,7 +84,7 @@ export function createActivityView(box, api) {
   }
   // the friends board: you and the people you trust both ways who joined, ranked by one number at a time
   let boardBy = 'tokens';
-  const BOARD_BY = [['tokens', 'tokens', compact], ['prompts', 'prompts', fmt], ['activeDays', 'active days', fmt], ['streak', 'streak', fmt]];
+  const BOARD_BY = [['tokens', 'tokens', compact], ['efficiency', 'efficiency', pct, efficiency], ['prompts', 'prompts', fmt], ['activeDays', 'active days', fmt], ['streak', 'streak', fmt]];
   async function drawBoard(box, act) {
     let b;
     try { b = await (act ? api.board[act]() : api.board.get()); } catch (e) { box.replaceChildren(el('div', 'act-board-note', e.message)); return; }
@@ -92,10 +95,10 @@ export function createActivityView(box, api) {
       box.replaceChildren(n);
     };
     if (!b.signedIn) return note('Sign in to Synapse (settings) to compete with the people you trust.');
-    if (!b.joined) return note(`See how your week compares with the people you trust. Joining shows them your last 7 days: tokens, prompts, commits, active days and streak.${b.waiting ? ` ${b.waiting} of them ${b.waiting === 1 ? 'is' : 'are'} on the board already.` : ''}`, 'join the board', 'join');
-    const [key, , show] = BOARD_BY.find((x) => x[0] === boardBy);
-    const people = [...b.people].sort((x, y) => (y[key] || 0) - (x[key] || 0));
-    const top = Math.max(1, people[0]?.[key] || 0);
+    if (!b.joined) return note(`See how your week compares with the people you trust. Joining shows them your last 7 days: tokens, tokens of code pushed, prompts, commits, active days and streak.${b.waiting ? ` ${b.waiting} of them ${b.waiting === 1 ? 'is' : 'are'} on the board already.` : ''}`, 'join the board', 'join');
+    const [key, , show, of = (p) => p[key] || 0] = BOARD_BY.find((x) => x[0] === boardBy);
+    const people = [...b.people].sort((x, y) => of(y) - of(x));
+    const top = of(people[0] || {}) || 1;
     const tabs = el('div', 'act-board-by');
     for (const [k, label] of BOARD_BY) { const t = el('button', k === boardBy ? 'on' : '', label); t.onclick = () => { boardBy = k; drawBoard(box); }; tabs.appendChild(t); }
     const list = el('div', 'act-board-list');
@@ -104,8 +107,8 @@ export function createActivityView(box, api) {
       const who = el('div', 'who');
       who.append(el('b', '', p.me ? 'You' : p.name || p.handle), el('span', '', p.handle ? `@${p.handle}` : ''));
       const bar = el('span', 'bar'), fill = el('i');
-      fill.style.width = `${Math.max(1.5, (100 * (p[key] || 0)) / top)}%`; bar.appendChild(fill);
-      row.append(el('span', 'pos', String(i + 1)), who, bar, el('span', 'n', show(p[key] || 0)));
+      fill.style.width = `${Math.max(1.5, (100 * of(p)) / top)}%`; bar.appendChild(fill);
+      row.append(el('span', 'pos', String(i + 1)), who, bar, el('span', 'n', show(of(p))));
       list.appendChild(row);
     });
     const foot = el('div', 'act-board-foot');

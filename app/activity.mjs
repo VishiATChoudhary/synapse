@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
@@ -115,7 +115,7 @@ async function transcripts({ homes, cache, since, onProgress }) {
 }
 
 // Commits in the workspaces' repos by any of your git emails, each commit once however many worktrees share it.
-async function commits({ repos, since }) {
+async function commits({ repos, since, week = since }) {
   const run = (cwd, args) => exec('git', ['-C', cwd, ...args], { timeout: 20000, maxBuffer: 64 * 1024 * 1024 }).then((r) => r.stdout.trim(), () => '');
   const emails = new Set([(await run(os.homedir(), ['config', '--global', 'user.email'])).toLowerCase()].filter(Boolean));
   const common = new Map();
@@ -124,7 +124,7 @@ async function commits({ repos, since }) {
     if (dir && !common.has(dir)) common.set(dir, r);
     const mine = (await run(r, ['config', 'user.email'])).toLowerCase(); if (mine) emails.add(mine);
   }
-  const days = {}, hashes = new Set();
+  const days = {}, hashes = new Set(), pushed = {}, sent = new Set();
   for (const r of common.values()) {
     const log = await run(r, ['log', '--all', '--no-merges', `--since=${new Date(since).toISOString()}`, '--format=%H%x09%ae%x09%at']);
     for (const l of log.split('\n')) {
@@ -132,8 +132,31 @@ async function commits({ repos, since }) {
       if (!h || hashes.has(h) || !emails.has((email || '').toLowerCase())) continue;
       hashes.add(h); bump(days, Number(at) * 1000);
     }
+    await pushedTokens(r, week, emails, sent, pushed).catch(() => {});
   }
-  return days;
+  return { days, pushed };
+}
+
+// Tokens of code you pushed: the lines your commits on a remote branch added, at about 4 characters a token.
+// Only the last week (what the board shows), since reading every patch of a year is slow. Lockfiles, minified
+// and generated files are left out, they are not what you wrote.
+const SKIP = ['*.lock', '*-lock.json', '*-lock.yaml', '*.min.*', '*.map', '*.snap', '*.svg'].map((g) => `:(exclude,glob)**/${g}`);
+function pushedTokens(cwd, since, emails, sent, days) {
+  return new Promise((resolve, reject) => {
+    const git = spawn('git', ['-C', cwd, 'log', '--remotes', '--no-merges', '--no-ext-diff', '--no-color', '-p', '--unified=0',
+      `--since=${new Date(since).toISOString()}`, '--format=%x01%H%x09%ae%x09%at', '--', '.', ...SKIP], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const timer = setTimeout(() => git.kill(), 60_000);
+    let at = null;
+    readline.createInterface({ input: git.stdout, crlfDelay: Infinity }).on('line', (l) => {
+      if (l[0] === '\x01') {
+        const [h, email, t] = l.slice(1).split('\t');
+        at = !sent.has(h) && emails.has((email || '').toLowerCase()) ? Number(t) * 1000 : null;
+        sent.add(h);
+      } else if (at !== null && l[0] === '+' && !l.startsWith('+++ ')) bump(days, at, Math.ceil(l.length / 4));
+    });
+    git.on('error', reject);
+    git.on('close', () => { clearTimeout(timer); resolve(); });
+  });
 }
 
 const QUERY = 'query{viewer{login contributionsCollection{contributionCalendar{totalContributions weeks{contributionDays{date contributionCount}}}}}}';
@@ -152,9 +175,9 @@ export function collect(opts) { return (running ||= scan(opts).finally(() => { r
 async function scan({ repos = [], cacheFile, homes = defaultHomes(), env = process.env, now = Date.now(), onProgress, gh = github }) {
   const since = now - WINDOW;
   let cache = {}; try { const c = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); if (c.version === CACHE_VERSION) cache = c.files || {}; } catch {}
-  const [t, c, g] = await Promise.all([transcripts({ homes, cache, since, onProgress }), commits({ repos, since }), gh(env)]);
+  const [t, c, g] = await Promise.all([transcripts({ homes, cache, since, onProgress }), commits({ repos, since, week: now - 7 * 86400_000 }), gh(env)]);
   try { fs.writeFileSync(cacheFile, JSON.stringify({ version: CACHE_VERSION, files: t.cache })); } catch {}
-  const data = { github: g, commits: c, prompts: t.prompts, tokens: t.tokens, models: t.models, files: t.files };
+  const data = { github: g, commits: c.days, pushed: c.pushed, prompts: t.prompts, tokens: t.tokens, models: t.models, files: t.files };
   return { ...data, ...summarize(data, now) };
 }
 
@@ -166,7 +189,7 @@ export function lastWeek(a, now = Date.now()) {
   const prompts = add(a.prompts.claude) + add(a.prompts.codex);
   return {
     tokens: days.reduce((n, d) => n + (a.tokens[d]?.all || 0), 0), tokensOut: days.reduce((n, d) => n + (a.tokens[d]?.out || 0), 0),
-    prompts, code: add(code),
+    pushed: add(a.pushed), prompts, code: add(code),
     activeDays: days.filter((d) => (code[d] || 0) + (a.commits[d] || 0) + (a.prompts.claude[d] || 0) + (a.prompts.codex[d] || 0) > 0).length,
     streak: a.streak, level: a.level, xp: a.xp,
   };
@@ -179,7 +202,7 @@ export function defaultHomes() {
 // The game: a day counts once anything happened in it; code is worth more than a prompt, and every thousand
 // tokens your agents wrote is worth a point.
 export const levelAt = (xp) => Math.floor(Math.sqrt(xp / 100)) + 1;
-export function summarize({ github, commits, prompts, tokens = {}, models = {} }, now = Date.now()) {
+export function summarize({ github, commits, prompts, tokens = {}, models = {}, pushed = {} }, now = Date.now()) {
   const code = github ? github.days : commits;
   const sum = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
   const active = (d) => (code[d] || 0) + (commits[d] || 0) + (prompts.claude[d] || 0) + (prompts.codex[d] || 0) > 0;
@@ -190,6 +213,8 @@ export function summarize({ github, commits, prompts, tokens = {}, models = {} }
   for (let i = 370; i >= 0; i--) { run = active(day(i)) ? run + 1 : 0; longest = Math.max(longest, run); }
   const codeTotal = sum(code), promptTotal = sum(prompts.claude) + sum(prompts.codex);
   const tok = Object.values(tokens), tokAll = tok.reduce((a, t) => a + t.all, 0), tokOut = tok.reduce((a, t) => a + t.out, 0);
+  const week = [...Array(7)].map((_, i) => day(i));
+  const weekPushed = week.reduce((n, d) => n + (pushed[d] || 0), 0), weekTokens = week.reduce((n, d) => n + (tokens[d]?.all || 0), 0);
   const xp = codeTotal * 10 + promptTotal * 2 + Math.floor(tokOut / 1000), level = levelAt(xp);
   const promptDays = new Set([...Object.keys(prompts.claude), ...Object.keys(prompts.codex)]);
   const busiest = Math.max(0, ...[...promptDays].map((d) => (prompts.claude[d] || 0) + (prompts.codex[d] || 0)));
@@ -212,7 +237,7 @@ export function summarize({ github, commits, prompts, tokens = {}, models = {} }
   ].map(([id, name, what, got]) => ({ id, name, what, got }));
   return {
     today, streak, longest, xp, level, levelFrom: 100 * (level - 1) ** 2, levelTo: 100 * level ** 2, badges,
-    totals: { code: codeTotal, claude: sum(prompts.claude), codex: sum(prompts.codex), todayCode: code[today] || 0, todayPrompts: (prompts.claude[today] || 0) + (prompts.codex[today] || 0), tokens: tokAll, tokensOut: tokOut, todayTokens: tokens[today]?.all || 0 },
+    totals: { code: codeTotal, claude: sum(prompts.claude), codex: sum(prompts.codex), todayCode: code[today] || 0, todayPrompts: (prompts.claude[today] || 0) + (prompts.codex[today] || 0), tokens: tokAll, tokensOut: tokOut, todayTokens: tokens[today]?.all || 0, weekPushed, weekTokens },
     models: Object.entries(models).sort((x, y) => y[1] - x[1]).map(([name, n]) => ({ name, tokens: n })),
   };
 }
