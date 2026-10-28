@@ -88,7 +88,7 @@ function claudeSlash(t) {
   return `${name.startsWith('/') ? name : `/${name}`}${args ? ` ${args}` : ''}`;
 }
 
-function claudeMessage(e) {
+export function claudeMessage(e) {
   if (e.isMeta || e.isSidechain || e.isCompactSummary) return null;
   const content = e.message?.content;
   if (e.type === 'user') {
@@ -108,7 +108,7 @@ function claudeMessage(e) {
   return null;
 }
 
-function codexMessage(e) {
+export function codexMessage(e) {
   const p = e.payload || {};
   // newer Codex logs each shell command as a CommandExecution item, often with no matching function_call
   if (e.type === 'event_msg' && p.type === 'item_completed' && p.item?.type === 'CommandExecution') {

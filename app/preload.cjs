@@ -1,5 +1,5 @@
 // Bridge between the renderer and the main process. Nothing from Node leaks into the page.
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const call = (ch, args) => ipcRenderer.invoke(ch, args).then((r) => { if (!r.ok) throw new Error(r.error); return r.value; });
 const on = (ch, fn) => { const h = (_e, a) => fn(a); ipcRenderer.on(ch, h); return () => ipcRenderer.removeListener(ch, h); };
@@ -7,8 +7,16 @@ const on = (ch, fn) => { const h = (_e, a) => fn(a); ipcRenderer.on(ch, h); retu
 contextBridge.exposeInMainWorld('synapse', {
   state: () => call('state'),
   flags: () => call('flags'),
+  // where a dropped file or folder lives on disk (the page itself only sees a File)
+  pathForFile: (file) => webUtils.getPathForFile(file),
   onState: (fn) => on('state', fn),
   notify: { done: (a) => call('notify:done', a), onOpen: (fn) => on('notify:open', fn) },
+  history: {
+    sources: () => call('history:sources'),
+    import: (kind) => call('history:import', { kind }),
+    remove: (kind) => call('history:remove', { kind }),
+    past: () => call('history:past'),
+  },
   pty: {
     spawn: (a) => call('pty:spawn', a),
     restore: (a) => call('pty:restore', a),

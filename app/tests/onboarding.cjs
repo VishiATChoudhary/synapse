@@ -1,5 +1,5 @@
 // Real Electron test for the first-run tour: a new install (no app.json yet) opens on it, the arrows and dots move
-// through the five steps, "not now" on the last one ends it without the sign-in screen coming back, it is marked
+// through the six steps, "not now" on the last one ends it without the sign-in screen coming back, it is marked
 // seen in seen.json (so it does not come back), and settings can replay it.
 // Run: SYNAPSE_APP_PORT=<free port> npx electron tests/onboarding.cjs
 const { app, BrowserWindow } = require('electron');
@@ -39,10 +39,10 @@ const button = (label) => js(`[...document.querySelectorAll('#onboard .ob-action
   assert.equal(await title(), 'Your agents, connected');
   assert.equal(await js(`document.querySelector('#login').hidden`), true, 'the tour comes before the sign-in screen');
   await key('ArrowRight');
-  assert.equal(await title(), 'Start an agent');
+  assert.equal(await title(), 'Bring your chats');
   await key('ArrowLeft');
   assert.equal(await title(), 'Your agents, connected');
-  await js(`document.querySelectorAll('#onboard .ob-dots button')[4].click()`);
+  await js(`document.querySelectorAll('#onboard .ob-dots button')[5].click()`);
   assert.equal(await title(), 'Keep score');
   assert.deepEqual(await js(`[...document.querySelectorAll('#onboard .ob-actions button')].map((b) => b.textContent)`), ['back', 'not now', 'sign in'], 'the last step offers sign-in');
   await button('not now');

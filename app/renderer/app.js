@@ -162,6 +162,23 @@ const termLinks = (cwd, term) => ({
 // each tab keeps its own file: the pane shows the file opened from the tab in front, and switching back finds it as it
 // was left (scroll, zoom, unsaved typing)
 const files = new Map(); // session -> { frame, wide }
+// files and folders dropped on a terminal type their paths into it, quoted like Terminal.app does, so Claude, Codex
+// and the rest get them as if pasted (an image path dropped on Claude attaches the image)
+const shellQuote = (p) => (/^[\w@%+=:,./~-]+$/.test(p) ? p : WIN ? `"${p}"` : `'${p.replace(/'/g, "'\\''")}'`);
+function dropPaths(wrap, term) {
+  const files = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+  wrap.addEventListener('dragover', (e) => { if (!files(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; wrap.classList.add('drop-on'); });
+  wrap.addEventListener('dragleave', (e) => { if (!wrap.contains(e.relatedTarget)) wrap.classList.remove('drop-on'); });
+  wrap.addEventListener('drop', (e) => {
+    wrap.classList.remove('drop-on');
+    if (!files(e)) return;
+    e.preventDefault();
+    const paths = [...e.dataTransfer.files].map((f) => synapse.pathForFile(f)).filter(Boolean);
+    if (!paths.length) return;
+    term.paste(`${paths.map(shellQuote).join(' ')} `);
+    term.focus();
+  });
+}
 let fileBase = null;
 const ownerOf = (term) => { for (const s of M.slots) for (const x of s.sessions) if (x.term === term) return x; return null; };
 async function openFile(target, cwd, term) {
@@ -228,6 +245,7 @@ async function makeSession(s, { kind, title, question = null, parent = null, key
     allowProposedApi: true, scrollback: 5000, theme: termTheme(), macOptionIsMeta: true, linkHandler: termLinks(() => s.worktree, () => term),
   });
   term.registerLinkProvider(pathLinks(term, () => s.worktree));
+  dropPaths(wrap, term);
   const fit = new FitAddon();
   term.loadAddon(fit);
   // measure while shown: a hidden element makes fit() fall back to 80x24, and the pty would start at that size
@@ -241,9 +259,8 @@ async function makeSession(s, { kind, title, question = null, parent = null, key
     // (claude typed at the prompt): the shell tab asks which program is in front
     if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey && !e.isComposing) {
       e.preventDefault();
-      const id = kind === 'shell' && ownerOf(term)?.pty;
       if (kind !== 'shell') term.input('\x1b[13;2u');
-      else (id ? synapse.pty.foreground(id).catch(() => '') : Promise.resolve('')).then((fg) => term.input(!fg || SHELL_RE.test(fg) ? '\r' : '\x1b[13;2u'));
+      else foreground(term).then((fg) => term.input(!fg || SHELL_RE.test(fg.split(/\s+/)[0]) ? '\r' : '\x1b[13;2u'));
       return false;
     }
     if (e.type === 'keydown' && agentKey(e)) return false; // ⌃1-9 launch agents, never reach the pty
@@ -292,6 +309,7 @@ synapse.pty.onExit(({ id, code }) => {
 // `/sfork <question>` typed into any agent. The app sees every keystroke, so it catches the line itself,
 // erases it with backspaces (every TUI understands those) and forks: no hook needed, works for all agents.
 const SFORK = /^\/sfork\s+(\S[\s\S]*)$/;
+const SYNAPSE_CMD = /^\/synapse(\s|$)/;
 const EDIT_KEY = /^(\x1b(\[|O)[ABCDHF]|\x1b\[[0-9;]*[ABCDHF~]|\x1b[bfdBF\x7f]|[\t\x01\x02\x05\x06\x0b\x0e\x10\x19])$/;
 function sforkFilter(get) {
   let line = ''; // typed since the last Enter; null once cursor keys or control input make it unknowable
@@ -301,6 +319,16 @@ function sforkFilter(get) {
       const m = line !== null && x.kind !== 'shell' && SFORK.exec(line.trim());
       const typed = line; line = '';
       if (m) { synapse.pty.write(x.pty, '\x7f'.repeat(typed.length)); fork(m[1].trim(), { parentPty: x.pty }); return; }
+      // Codex has no custom slash commands: `/synapse ...` there becomes `$synapse ...`, how Codex calls a skill
+      if (typed !== null && SYNAPSE_CMD.test(typed)) {
+        const toCodex = () => {
+          synapse.pty.write(x.pty, '\x7f'.repeat(typed.length));
+          setTimeout(() => synapse.pty.write(x.pty, `\x1b[200~$${typed.slice(1)}\x1b[201~`), 120);
+          setTimeout(() => synapse.pty.write(x.pty, '\r'), 400);
+        };
+        if (x.kind === 'codex') return toCodex();
+        if (x.kind === 'shell') { synapse.pty.foreground(x.pty).catch(() => '').then((fg) => (CODEX_RE.test(fg) ? toCodex() : synapse.pty.write(x.pty, '\r'))); return; }
+      }
     } else if (line !== null) {
       const t = d.replace(/\x1b\[20[01]~/g, ''); // bracketed paste markers
       if (t === '\x7f' || t === '\b') line = line.slice(0, -1);
@@ -316,7 +344,7 @@ function sforkFilter(get) {
   };
 }
 
-async function newSlot(worktreePath, kind, split = null, phoneReq = null) {
+async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resume = null, cwd = worktreePath, title = kind } = {}) {
   closeCanvas();
   const prof = M.profiles[kind] || { command: kind };
   const s = { id: nextId++, worktree: worktreePath, sessions: [], path: [] };
@@ -325,7 +353,11 @@ async function newSlot(worktreePath, kind, split = null, phoneReq = null) {
   M.focused = s.id;
   const home = worktreeOf(worktreePath); if (home) M.open.add(home.project.key); // a new session unfolds its project, once
   try {
-    await makeSession(s, { kind, title: kind, spawn: (cols, rows) => synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows, phoneReq }) });
+    const made = await makeSession(s, {
+      kind, title,
+      spawn: (cols, rows) => (resume ? synapse.pty.restore({ cwd, kind, resume, cols, rows }) : synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows, phoneReq })),
+    });
+    if (resume) made.resume = resume;
     if (split && slot(split.target)) {
       const insert = (node) => typeof node === 'number'
         ? node === split.target ? { direction: split.direction, first: node, second: s.id } : node
@@ -532,6 +564,10 @@ function renderLaunch() {
       b.onclick = () => { const wt = focusedSlot()?.worktree || M.projects[0]?.worktrees[0]?.path; if (wt) newSlot(wt, k); else toast('add a workspace first', true); };
       return b;
     }));
+    const past = el('button', 'launch-item past', 'Past chats');
+    past.title = 'pick up a Claude Code or Codex chat from before Synapse  ·  ⇧⌘H';
+    past.onclick = () => openPastChats();
+    bar.append(past);
   }
 }
 
@@ -1419,6 +1455,97 @@ async function promptProject(mode) {
   });
 }
 
+// ---------------------------------------------------------------- past chats
+// Claude Code and Codex chats from before Synapse. Importing links each CLI's session folder into ~/.synapse/history
+// (app/history.mjs); the list reads them through it, and a pick resumes the chat in its own folder.
+function importRows({ browse = false, remove = false } = {}) {
+  const box = el('div', 'imports');
+  const draw = (list) => {
+    box.replaceChildren();
+    for (const src of list) {
+      const row = el('div', 'import' + (src.soon ? ' soon' : ''));
+      row.append(logo(src.kind), el('span', 'k', src.label));
+      if (src.soon) { row.append(el('span', 'c', 'coming soon')); box.append(row); continue; }
+      row.append(el('span', 'c', src.found ? `${src.found} chat${src.found === 1 ? '' : 's'}` : 'none found'));
+      const b = el('button', 'btn' + (src.imported ? '' : ' sig'), src.imported ? (remove ? 'unlink' : 'imported ✓') : 'import');
+      b.disabled = !src.found || (src.imported && !remove);
+      b.title = src.imported ? `linked from ${src.dir}${remove ? ': unlinking leaves the chats where they are' : ''}` : `links ${src.dir} into ~/.synapse/history`;
+      b.onclick = async () => {
+        b.disabled = true;
+        try { draw(await (src.imported ? synapse.history.remove(src.kind) : synapse.history.import(src.kind))); if (!src.imported) toast(`${src.label} chats imported · ⇧⌘H opens them`); }
+        catch (e) { b.disabled = false; toast(e.message, true); }
+      };
+      row.append(b);
+      box.append(row);
+    }
+    if (browse && list.some((x) => x.imported)) {
+      const go = el('button', 'btn', 'see my chats');
+      go.onclick = () => { endOnboarding(false); openPastChats(); };
+      box.append(go);
+    }
+  };
+  box.append(el('div', 'hint', 'looking for chats…'));
+  synapse.history.sources().then(draw, (e) => { box.replaceChildren(el('div', 'hint err', e.message)); });
+  return box;
+}
+
+const ago = (t) => { const m = (Date.now() - t) / 60000; return m < 60 ? `${Math.max(1, Math.round(m))}m` : m < 1440 ? `${Math.round(m / 60)}h` : m < 43200 ? `${Math.round(m / 1440)}d` : new Date(t).toLocaleDateString(); };
+function openPastChats() {
+  modal('past chats', (body, close) => {
+    const inp = el('input'), list = el('div', 'lib past-list'), hint = el('div', 'hint', 'reading your chats…');
+    inp.type = 'search'; inp.placeholder = 'Search chats by what you asked or the folder…'; inp.setAttribute('aria-label', 'Search past chats');
+    let all = [], matches = [], sel = 0;
+    const home = M.home || '';
+    const shown = (p) => (home && p.startsWith(home) ? `~${p.slice(home.length)}` : p);
+    const draw = () => {
+      list.replaceChildren();
+      const q = inp.value.trim().toLowerCase();
+      matches = (q ? all.filter((c) => c.title.toLowerCase().includes(q) || c.cwd.toLowerCase().includes(q)) : all).slice(0, 300);
+      matches.forEach((c, i) => {
+        const o = el('div', 'opt' + (i === sel ? ' sel' : '') + (c.missing ? ' gone' : ''));
+        o.append(logo(c.kind), el('span', 'k', c.title), el('span', 'c', `\u200e${shown(c.cwd)}\u200e`), el('span', 'ago', ago(c.updatedAt))); // the marks keep the folder in order while it cuts from the left
+        o.title = c.missing ? `${c.cwd} no longer exists` : `resume in ${c.cwd}`;
+        o.onclick = () => pick(c);
+        list.appendChild(o);
+      });
+      if (!matches.length && all.length) list.appendChild(el('div', 'hint', 'No matching chats.'));
+    };
+    const pick = async (c) => {
+      if (c.missing) { hint.textContent = `${shown(c.cwd)} is gone, so this chat can't run there anymore.`; hint.classList.add('err'); return; }
+      close();
+      await resumeChat(c);
+    };
+    inp.oninput = () => { sel = 0; draw(); list.scrollTop = 0; };
+    inp.onkeydown = (e) => {
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && matches.length) {
+        e.preventDefault(); sel = (sel + (e.key === 'ArrowDown' ? 1 : matches.length - 1)) % matches.length;
+        draw(); list.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
+      }
+      if (e.key === 'Enter' && matches[sel]) { e.preventDefault(); pick(matches[sel]); }
+      if (e.key === 'Escape') close();
+    };
+    body.append(inp, list, hint);
+    synapse.history.past().then((chats) => {
+      all = chats;
+      if (!all.length) {
+        hint.textContent = 'No chats imported yet. Import them here:';
+        body.append(importRows());
+        return;
+      }
+      hint.textContent = `${all.length} chats · ↑↓ enter resumes one in its folder · import more in Settings`;
+      draw();
+    }, (e) => { hint.textContent = e.message; hint.classList.add('err'); });
+  });
+}
+// a past chat comes back as a tab in its own folder: that folder becomes a workspace if it is not one yet
+async function resumeChat(c) {
+  try {
+    let wt = M.projects.flatMap((p) => p.worktrees).filter((w) => c.cwd === w.path || c.cwd.startsWith(`${w.path}/`)).sort((a, b) => b.path.length - a.path.length)[0]?.path;
+    if (!wt) { wt = await synapse.project.add(c.cwd); await refresh(); }
+    await newSlot(wt, c.kind, null, null, { resume: { synapseId: c.id, transcript: c.transcript }, cwd: c.cwd, title: c.title.slice(0, 40) });
+  } catch (e) { toast(e.message, true); }
+}
+
 // ---------------------------------------------------------------- right-click menus
 // items: { label, run, danger, sub: [items] } or '-' for a rule. Escape, a click elsewhere or losing focus closes it.
 let menuEl = null;
@@ -1686,9 +1813,12 @@ async function openSettings() {
     }
     viewRow.append(el('span', 'k', 'view'), el('span', 'c', 'GUI shows sessions, connections and friends as a workspace; Terminal is the raw terminals with forks'), viewSeg);
     const tourRow = el('div', 'opt set'), tourBtn = el('button', 'btn', 'replay');
-    tourRow.append(el('span', 'k', 'tour'), el('span', 'c', 'the five steps a new install starts with'), tourBtn);
+    tourRow.append(el('span', 'k', 'tour'), el('span', 'c', 'the six steps a new install starts with'), tourBtn);
     tourBtn.onclick = () => { close(); showOnboarding(false); };
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), viewRow, themeRow, linkRow, forkRow, doneRow, soundRow, errRow, loginRow, updRow, tourRow);
+    const pastRow = el('div', 'opt set past-set'), pastBtn = el('button', 'btn', 'browse');
+    pastRow.append(el('span', 'k', 'past chats'), el('span', 'c', 'import your Claude Code and Codex chats from before Synapse, and pick them up here  ·  ⇧⌘H'), pastBtn);
+    pastBtn.onclick = () => { close(); openPastChats(); };
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), viewRow, pastRow, importRows({ remove: true }), themeRow, linkRow, forkRow, doneRow, soundRow, errRow, loginRow, updRow, tourRow);
     const commands = el('div', 'agent-commands'), commandInputs = new Map();
     for (const [kind, profile] of Object.entries(s.profiles || {})) {
       const row = el('label', 'opt set'), input = el('input');
@@ -1777,8 +1907,11 @@ const keyName = (e) => (WIN ? (e.altKey ? 'shift+' : '') + winKey(e) : (e.shiftK
 // ⌃1 ⌃2 … start the nth agent (claude, codex, …; the shell is not in this list) in the focused worktree
 const agentProfiles = () => profileOrder().filter((k) => k !== 'shell');
 const SHELL_RE = /(^|[\\/])-?(zsh|bash|fish|sh|dash|ksh|tcsh|csh|nu|login|pwsh|powershell|cmd)(\.exe)?$/i;
+// the command line of the program in front in a terminal's pty ('' when unknown)
+const CODEX_RE = /(^|\/)codex(\.js)?(\s|$)/;
+const foreground = (term) => { const id = ownerOf(term)?.pty; return id ? synapse.pty.foreground(id).catch(() => '') : Promise.resolve(''); };
 const agentKey = (e) => (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key) ? agentProfiles()[e.key - 1] : null);
-const APP_KEYS = new Set(['b', 'd', 'shift+d', 't', 'n', 'shift+n', 'shift+f', 'e', 'w', '[', ']', 'shift+backspace', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',']);
+const APP_KEYS = new Set(['shift+h', 'b', 'd', 'shift+d', 't', 'n', 'shift+n', 'shift+f', 'e', 'w', '[', ']', 'shift+backspace', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',']);
 // ⌘ + editing key -> what a macOS terminal sends for it (iTerm's natural editing, Ghostty's defaults)
 const META_EDIT = { Backspace: '\x15', ArrowLeft: '\x01', ArrowRight: '\x05' };
 window.addEventListener('keydown', (e) => {
@@ -1799,6 +1932,7 @@ window.addEventListener('keydown', (e) => {
   const s = focusedSlot();
   switch (k) {
     case 'b': toggleSidebar(); break;
+    case 'shift+h': openPastChats(); break;
     case 'd': splitShell('right'); break;
     case 'shift+d': splitShell('down'); break;
     case 't': { const wt = s?.worktree || M.projects[0]?.worktrees[0]?.path; if (wt) newSlot(wt, 'shell'); break; }
@@ -2448,8 +2582,10 @@ let loginState = { mode: 'signin', startup: false, device: null };
 const chip = (kind, name) => { const c = el('span', 'ob-chip'); c.append(el('b', '', kind), el('span', '', name)); return c; };
 const wire = (label = '') => el('span', 'ob-wire', label);
 const TOUR = [
-  { title: 'Your agents, connected', body: 'Synapse runs Claude, Codex, Gemini and the rest side by side, and lets them read each other and pass messages. Here is how, in five quick steps.',
+  { title: 'Your agents, connected', body: 'Synapse runs Claude, Codex, Gemini and the rest side by side, and lets them read each other and pass messages. Here is how, in six quick steps.',
     art: () => [chip('claude', 'api'), wire(), chip('codex', 'web'), wire(), chip('gemini', 'tests')] },
+  { title: 'Bring your chats', body: 'Already chatting with Claude Code or Codex? Import those chats and pick any of them up right here, in its own folder, where it left off. Nothing is copied or moved: Synapse links to them.',
+    imports: true },
   { title: 'Start an agent', body: 'Add a workspace (a folder or a repo), then start agents in it. Each gets its own terminal tab, and you can split them side by side.',
     keys: [['⌃1', 'Claude'], ['⌃2', 'Codex'], ['⌘N', 'any agent'], ['⌘T', 'shell'], ['⇧⌘N', 'new worktree'], ['⌘D', 'split']] },
   { title: 'Link them', body: "The node view shows every agent on this Mac. Drag from one agent's ring to another to share its context; linked agents can message each other. Fork an agent to ask a side question without derailing it.",
@@ -2482,6 +2618,7 @@ function drawOnboarding() {
   const body = el('div', 'ob-body');
   body.append(el('div', 'ob-title', s.title), el('p', 'ob-text', s.body));
   if (s.art) { const art = el('div', 'ob-art'); art.append(...s.art()); body.appendChild(art); }
+  if (s.imports) body.appendChild(importRows({ browse: true }));
   if (s.keys) { const keys = el('div', 'ob-keys'); for (const [k, what] of s.keys) { const r = el('span'); r.append(el('kbd', '', k), what); keys.appendChild(r); } body.appendChild(keys); }
   const foot = el('div', 'ob-foot'), dots = el('div', 'ob-dots');
   TOUR.forEach((_, i) => { const d = el('button', i === tour.step ? 'on' : ''); d.title = `step ${i + 1}`; d.onclick = () => { tour.step = i; drawOnboarding(); }; dots.appendChild(d); });

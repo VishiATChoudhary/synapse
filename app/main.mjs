@@ -18,6 +18,7 @@ import { createUpdater, bundleOf, MANIFEST_URL } from './updater.mjs';
 import * as phone from './phone.mjs';
 import { collect as collectActivity, lastWeek } from './activity.mjs';
 import { createDiscovery } from '../discovery.mjs';
+import * as chats from './history.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 if (process.env.SYNAPSE_USER_DATA) app.setPath('userData', path.resolve(process.env.SYNAPSE_USER_DATA));
@@ -870,8 +871,17 @@ handle('pty:submit', ({ id, text }) => {
   if (typeof text !== 'string' || !text.trim() || text.length > 12000) throw new Error('Write a prompt between 1 and 12,000 characters.');
   submit(id, text);
 });
-// the program in front in a terminal (zsh, claude, vim...): node-pty reads it from the tty's foreground process group
-handle('pty:foreground', ({ id }) => ptys.get(id)?.p.process || '');
+// the program in front in a terminal (zsh, claude, `node .../codex.js`): its command line, from the tty's foreground
+// process group. Windows has no such thing to ask: there it is the name node-pty knows
+handle('pty:foreground', ({ id }) => {
+  const t = ptys.get(id);
+  if (!t) return '';
+  if (WIN) return t.p.process || '';
+  try {
+    const pgid = execFileSync('ps', ['-o', 'tpgid=', '-p', String(t.pid)], { encoding: 'utf8', timeout: 2000 }).trim();
+    return execFileSync('ps', ['-o', 'args=', '-p', pgid], { encoding: 'utf8', timeout: 2000 }).trim();
+  } catch { return t.p.process || ''; }
+});
 handle('pty:resize', ({ id, cols, rows }) => { try { ptys.get(id)?.p.resize(cols, rows); } catch {} });
 handle('pty:kill', ({ id }) => { ptys.get(id)?.p.kill(); });
 handle('fork:spawn', (a) => spawnFork(a));
@@ -906,15 +916,17 @@ function setupIntegrations(dry) {
 // The installed app wires itself into the agent CLIs (MCP server, prompt hook, the synapse skill, the `synapse`
 // launcher) on its first launch and again after each update, so nobody has to find "Set up" in Settings. Not from
 // the DMG or Downloads (the paths would point into a volume that goes away) and not in dev or tests, unless
-// SYNAPSE_AUTO_SETUP=1. The tunnel helper for the phone ships inside the app, so it needs nothing here.
+// SYNAPSE_AUTO_SETUP=1. It runs again when a new agent CLI shows up. The tunnel helper for the phone ships inside the app, so it needs nothing here.
 async function autoSetup() {
   const forced = process.env.SYNAPSE_AUTO_SETUP === '1';
   if (!forced && (!app.isPackaged || process.env.SYNAPSE_HOME || (process.platform === 'darwin' && !app.isInApplicationsFolder()))) return;
   const version = app.getVersion();
-  if (!forced && seen().setup === version) return;
+  // also when an agent CLI turns up after the last setup (Codex installed a week after Synapse)
+  const home = os.homedir(), clis = ['.claude', '.codex', '.gemini', '.cursor', '.copilot', '.config/amp', '.config/opencode'].filter((d) => fs.existsSync(path.join(home, d))).join(' ');
+  if (!forced && seen().setup === version && (seen().setupClis ?? clis) === clis) return;
   try {
     const report = await setupIntegrations(false);
-    writeJSON(SEEN, { ...seen(), setup: version });
+    writeJSON(SEEN, { ...seen(), setup: version, setupClis: clis });
     const added = report.split('\n').filter((l) => l.startsWith('added')).length;
     if (added) win?.webContents.send('setup:done', { report, added });
   } catch (e) { console.error('Agent setup:', e.message); }
@@ -926,6 +938,11 @@ handle('project:create', ({ name }) => createWorkspace(name));
 handle('project:clone', ({ url, name }) => cloneWorkspace(url, name));
 handle('project:pick', () => pickFolder());
 handle('project:library', () => library());
+// chats from before Synapse (Claude Code, Codex): import links their session folders in, past lists them
+handle('history:sources', () => chats.sources());
+handle('history:import', ({ kind }) => { const out = chats.importChats(kind); chats.pastChats().catch(() => {}); return out; }); // index it now, so the list opens quick
+handle('history:remove', ({ kind }) => chats.removeChats(kind));
+handle('history:past', () => chats.pastChats());
 handle('project:rename', ({ key, name }) => {
   const all = projects();
   if (!all.some((p) => p.key === key)) throw new Error('workspace is no longer open');

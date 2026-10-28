@@ -576,3 +576,22 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .share-empty { padding: 16px 18px; font: 13px/1.5 var(--sans); color: var(--ink-2); }
 .modal .req-pick, .modal .ask-what { display: block; width: 100%; box-sizing: border-box; height: 40px; padding: 0 18px; border: 0; border-top: 1px solid var(--rule); background: none; color: var(--ink); font: 12px var(--mono); outline: 0; }
 .modal .req-pick:focus-visible, .modal .ask-what:focus { background: var(--wash); }
+
+/* past chats: the import rows (tour step and settings) and the list a pick resumes from */
+.imports { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+[data-kind="settings"] .imports { margin: 0; padding: 0 22px 13px; }
+.import { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--rule); font-size: 13px; }
+.import .k { flex: none; }
+.import .c { flex: 1; font: 11px var(--mono); color: var(--ink-3); }
+.import .btn { padding: 5px 12px; border: 1px solid var(--rule); }
+.import.soon { opacity: .55; border-style: dashed; }
+.imports > .btn { align-self: flex-start; padding: 6px 12px; border: 1px solid var(--rule); }
+.modal .past-list .opt .k { flex: 1; width: auto; min-width: 0; }
+.modal .past-list .opt .c { flex: none; max-width: 42%; direction: rtl; text-align: left; } /* long folders keep their last part */
+.modal .past-list .opt .ago { flex: none; width: 34px; text-align: right; font: 10.5px var(--mono); color: var(--ink-3); }
+.modal .past-list .opt.gone { opacity: .45; }
+.modal-card[data-kind="past chats"] { width: 760px; }
+.launch-item.past { margin-left: auto; border-left: 1px solid var(--rule); color: var(--ink-3); }
+
+/* a file or folder dragged over a terminal: where it lands */
+.term.drop-on { outline: 2px dashed var(--sig); outline-offset: -6px; }
