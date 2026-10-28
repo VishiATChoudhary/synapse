@@ -870,6 +870,8 @@ handle('pty:submit', ({ id, text }) => {
   if (typeof text !== 'string' || !text.trim() || text.length > 12000) throw new Error('Write a prompt between 1 and 12,000 characters.');
   submit(id, text);
 });
+// the program in front in a terminal (zsh, claude, vim...): node-pty reads it from the tty's foreground process group
+handle('pty:foreground', ({ id }) => ptys.get(id)?.p.process || '');
 handle('pty:resize', ({ id, cols, rows }) => { try { ptys.get(id)?.p.resize(cols, rows); } catch {} });
 handle('pty:kill', ({ id }) => { ptys.get(id)?.p.kill(); });
 handle('fork:spawn', (a) => spawnFork(a));

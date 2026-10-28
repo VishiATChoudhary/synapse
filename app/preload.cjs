@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('synapse', {
     write: (id, data) => call('pty:write', { id, data }),
     submit: (id, text) => call('pty:submit', { id, text }),
     resize: (id, cols, rows) => call('pty:resize', { id, cols, rows }),
+    foreground: (id) => call('pty:foreground', { id }),
     kill: (id) => call('pty:kill', { id }),
     onData: (fn) => on('pty:data', fn),
     onExit: (fn) => on('pty:exit', fn),

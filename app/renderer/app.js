@@ -237,9 +237,14 @@ async function makeSession(s, { kind, title, question = null, parent = null, key
   // app shortcuts pass through; the macOS editing keys xterm drops or mis-sends become their readline
   // bytes (⌘⌫ clears the line, ⌘← / ⌘→ jump to its ends); everything else goes to the pty as is
   term.attachCustomKeyEventHandler((e) => {
-    // Shells keep Enter; agents receive the enhanced-keyboard newline sequence.
+    // Shells keep Enter; agents receive the enhanced-keyboard newline sequence, also when one runs inside a shell tab
+    // (claude typed at the prompt): the shell tab asks which program is in front
     if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey && !e.isComposing) {
-      e.preventDefault(); term.input(kind === 'shell' ? '\r' : '\x1b[13;2u'); return false;
+      e.preventDefault();
+      const id = kind === 'shell' && ownerOf(term)?.pty;
+      if (kind !== 'shell') term.input('\x1b[13;2u');
+      else (id ? synapse.pty.foreground(id).catch(() => '') : Promise.resolve('')).then((fg) => term.input(!fg || SHELL_RE.test(fg) ? '\r' : '\x1b[13;2u'));
+      return false;
     }
     if (e.type === 'keydown' && agentKey(e)) return false; // ⌃1-9 launch agents, never reach the pty
     // ⌥ is meta, except where the layout types ASCII with it (German ⌥L is @, ⌥5 is [): send that character
@@ -1771,6 +1776,7 @@ const winKey = (e) => (/^(Key|Digit)/.test(e.code) ? e.code.slice(-1).toLowerCas
 const keyName = (e) => (WIN ? (e.altKey ? 'shift+' : '') + winKey(e) : (e.shiftKey ? 'shift+' : '') + e.key.toLowerCase());
 // ⌃1 ⌃2 … start the nth agent (claude, codex, …; the shell is not in this list) in the focused worktree
 const agentProfiles = () => profileOrder().filter((k) => k !== 'shell');
+const SHELL_RE = /(^|[\\/])-?(zsh|bash|fish|sh|dash|ksh|tcsh|csh|nu|login|pwsh|powershell|cmd)(\.exe)?$/i;
 const agentKey = (e) => (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key) ? agentProfiles()[e.key - 1] : null);
 const APP_KEYS = new Set(['b', 'd', 'shift+d', 't', 'n', 'shift+n', 'shift+f', 'e', 'w', '[', ']', 'shift+backspace', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',']);
 // ⌘ + editing key -> what a macOS terminal sends for it (iTerm's natural editing, Ghostty's defaults)
