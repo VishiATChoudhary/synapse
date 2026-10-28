@@ -10,7 +10,7 @@ import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
 import { git, listChoices, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
-import { DATA, FILES, WIN, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, readAgentMessages } from '../lib.mjs';
+import { DATA, FILES, WIN, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, readAgentMessages, takeInbox } from '../lib.mjs';
 import { createEdge, allowTalkRequest, dismissTalkRequest, setMode, removeEdge } from '../ops.mjs';
 import { openRequests, talkPerHour, talkModel, clampPerHour } from '../talk.mjs';
 import { isConnected } from '../remote.mjs';
@@ -54,6 +54,7 @@ function config() {
   if (!c.workspaces) { c.workspaces = []; dirty = true; }
   if (c.autoSymlink === undefined) { c.autoSymlink = true; dirty = true; }
   if (c.autoSendFork === undefined) { c.autoSendFork = false; dirty = true; }
+  if (c.wakeAgents === undefined) { c.wakeAgents = true; dirty = true; }
   if (dirty) writeJSON(FILES.app, c);
   return c;
 }
@@ -359,7 +360,7 @@ function state() {
   const messages = readJSON(FILES.messages, []);
   const unread = {};
   for (const m of messages) if (!m.delivered) unread[m.to] = (unread[m.to] || 0) + 1;
-  return { projects: projects(), agents: byPty, edges, unread, talks: openTalks(), talkRequests: openTalkRequests(edges), profiles: config().profiles, autoSendFork: !!config().autoSendFork, demo: DEMO };
+  return { projects: projects(), agents: byPty, edges, unread, talks: openTalks(), talkRequests: openTalkRequests(edges), profiles: config().profiles, autoSendFork: !!config().autoSendFork, wakeAgents: config().wakeAgents !== false, demo: DEMO };
 }
 
 // ---------------------------------------------------------------- agent talk
@@ -873,6 +874,10 @@ handle('pty:submit', ({ id, text }) => {
   if (typeof text !== 'string' || !text.trim() || text.length > 12000) throw new Error('Write a prompt between 1 and 12,000 characters.');
   submit(id, text);
 });
+// messages for an agent, taken (marked delivered) so the app can type them into its prompt: how an idle agent of
+// any kind hears from the others (renderer: wakeAgents)
+handle('messages:take', ({ id }) => takeInbox(id).map((m) => ({ from: m.fromName, text: m.text, t: m.t })));
+
 // the program in front in a terminal (zsh, claude, `node .../codex.js`): its command line, from the tty's foreground
 // process group. Windows has no such thing to ask: there it is the name node-pty knows
 handle('pty:foreground', ({ id }) => {

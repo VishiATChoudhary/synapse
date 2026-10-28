@@ -4,6 +4,7 @@
 import readline from 'node:readline';
 import { agentForProcess } from './lib.mjs';
 import * as ops from './ops.mjs';
+import * as plan from './plan.mjs';
 import * as remote from './remote.mjs';
 import * as account from './account.mjs';
 
@@ -16,6 +17,10 @@ The user links agents on the Synapse canvas, or you can link yourself with synap
 - To get context from an agent on someone else's machine: synapse_people lists the user's trusted people,
   synapse_request asks one of them to share an agent with you (they accept or deny in their Synapse app),
   synapse_requests shows the answer. Once accepted, read it with synapse_read name@owner.
+- To work something out with other agents (any kind: Claude, Codex, ...), start a shared plan with synapse_plan_start
+  (a goal and the agents to plan with). Members add notes and tasks, claim and finish tasks with synapse_plan_update;
+  every change reaches the others. synapse_plan shows the plan. When a plan message arrives, read the plan and answer
+  on it before going on.
 - If their agent is shared for talk, synapse_ask name@owner puts a question to it and waits for the answer;
   later answers arrive in synapse_inbox. synapse_end closes the conversation. If it is shared for reading only
   (through a request), synapse_ask asks its owner to allow questions (status "requested", not an error: do not retry); a note arrives in synapse_inbox once they allow it.`;
@@ -37,6 +42,21 @@ const TOOLS = [
     run: (me, a) => ops.send(me, a.agent, a.message) },
   { name: 'synapse_inbox', description: 'Fetch messages other agents sent you (each is returned once).',
     inputSchema: { type: 'object', properties: {} }, run: (me) => ops.inbox(me) },
+  { name: 'synapse_plan_start', description: 'Start a shared plan with other agents on this machine, of any kind (Claude, Codex, Gemini, ...). Links you with them and sends them the goal; they answer with synapse_plan_update.',
+    inputSchema: { type: 'object', properties: {
+      goal: { type: 'string', description: 'What the plan is for' },
+      agents: { type: 'array', items: { type: 'string' }, description: 'Agents to plan with: names or ids (synapse_peers all=true lists them)' },
+      tasks: { type: 'array', items: { type: 'string' }, description: 'First tasks, if you already have some' } }, required: ['goal', 'agents'] },
+    run: (me, a) => plan.start(me, a) },
+  { name: 'synapse_plan', description: 'Show a shared plan you are on: goal, members, tasks with owners, and the notes so far. Without id, your latest plan and a list of the others.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'Plan id or its first characters' } } },
+    run: (me, a) => plan.list(me, a) },
+  { name: 'synapse_plan_update', description: 'Change a shared plan; the other members get the change. Give any of: note (an idea, concern, question or answer), add_tasks, claim (a task number you will do), done (a task number you finished), reopen, close. Without id, your latest plan.',
+    inputSchema: { type: 'object', properties: {
+      id: { type: 'string' }, note: { type: 'string' },
+      add_tasks: { type: 'array', items: { type: 'string' } },
+      claim: { type: 'number' }, done: { type: 'number' }, reopen: { type: 'number' }, close: { type: 'boolean' } } },
+    run: (me, a) => plan.update(me, a) },
   { name: 'synapse_ask', description: 'Ask an agent on a friend\'s machine a question. It is answered by a copy of that agent with no tools, from what it already knows. Waits up to 90 s; later answers arrive in synapse_inbox. If the agent is shared with you for reading only through a request, this asks its owner to allow questions and returns status "requested".',
     inputSchema: { type: 'object', properties: {
       agent: { type: 'string', description: 'Their agent, as name@owner or name@handle' },

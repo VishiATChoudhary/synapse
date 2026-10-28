@@ -74,6 +74,21 @@ test('Codex setup installs discoverable skills and preserves global guidance acr
   assert.equal(fs.readFileSync(agents, 'utf8'), installed);
 });
 
+test('Codex setup approves the Synapse MCP tools, also in a table an older install wrote', (t) => {
+  const f = fixture(t);
+  const config = path.join(f.profile, 'config.toml');
+  const approvals = () => fs.readFileSync(config, 'utf8').match(/^default_tools_approval_mode = "approve"$/gm)?.length || 0;
+  f.ok('install.mjs');
+  assert.match(fs.readFileSync(config, 'utf8'), /\[mcp_servers\.synapse\]\ncommand = .*\nargs = .*\ndefault_tools_approval_mode = "approve"\n/);
+
+  // an older install: the table without approval, then another table after it
+  fs.writeFileSync(config, '[mcp_servers.synapse]\ncommand = "node"\nargs = ["mcp.mjs"]\n\n[mcp_servers.other]\ncommand = "custom"\n');
+  f.ok('install.mjs');
+  assert.equal(fs.readFileSync(config, 'utf8'), '[mcp_servers.synapse]\ndefault_tools_approval_mode = "approve"\ncommand = "node"\nargs = ["mcp.mjs"]\n\n[mcp_servers.other]\ncommand = "custom"\n');
+  f.ok('install.mjs');
+  assert.equal(approvals(), 1, 'reruns add it once');
+});
+
 test('Codex thread identity works through a shared daemon for CLI, MCP, and hooks', (t) => {
   const f = fixture(t), now = new Date();
   const [day, month, date, year, time] = now.toString().split(' ');

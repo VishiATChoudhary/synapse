@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('synapse', {
     onData: (fn) => on('pty:data', fn),
     onExit: (fn) => on('pty:exit', fn),
   },
+  messages: { take: (id) => call('messages:take', { id }) },
   sessions: { load: () => call('sessions:load'), save: (data) => call('sessions:save', data) },
   workspace: { load: () => call('workspace:load'), save: (key, value) => call('workspace:save', { key, value }) },
   phone: {

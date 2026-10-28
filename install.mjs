@@ -91,22 +91,32 @@ function addHooks(d, events) {
 if (installed('claude hooks', path.join(HOME, '.claude'))) editJSON('claude hooks', path.join(HOME, '.claude', 'settings.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart']));
 if (installed('codex hooks', CODEX)) editJSON('codex hooks', path.join(CODEX, 'hooks.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart', 'SubagentStart']));
 
-// Codex: TOML, append a table if missing
+// Codex: TOML, append a table if missing. Codex asks before every MCP tool call unless told otherwise, and
+// refuses outright where it cannot ask (codex exec, approval "never"): Synapse's tools are approved up front
+const APPROVE = 'default_tools_approval_mode = "approve"';
 if (installed('codex mcp', CODEX)) {
   const file = path.join(CODEX, 'config.toml');
   const toml = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  if (/^\[mcp_servers\.synapse\]/m.test(toml)) report.push('ok    codex mcp: already configured');
-  else {
+  const table = /^\[mcp_servers\.synapse\][^\n]*\n/m.exec(toml);
+  if (table) {
+    const end = toml.slice(table.index + table[0].length).search(/^\[/m);
+    const body = toml.slice(table.index, end < 0 ? toml.length : table.index + table[0].length + end);
+    if (/^default_tools_approval_mode\s*=/m.test(body)) report.push('ok    codex mcp: already configured');
+    else {
+      if (!DRY) { backup(file); fs.writeFileSync(file, toml.slice(0, table.index + table[0].length) + APPROVE + '\n' + toml.slice(table.index + table[0].length)); }
+      report.push(`added codex mcp approval: ${file}`);
+    }
+  } else {
     if (!DRY) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       backup(file);
-      fs.appendFileSync(file, `\n[mcp_servers.synapse]\ncommand = ${JSON.stringify(NODE)}\nargs = [${JSON.stringify(MCP)}]\n`);
+      fs.appendFileSync(file, `\n[mcp_servers.synapse]\ncommand = ${JSON.stringify(NODE)}\nargs = [${JSON.stringify(MCP)}]\n${APPROVE}\n`);
     }
     report.push(`added codex mcp: ${file}`);
   }
 }
 
-if (installed('gemini mcp', path.join(HOME, '.gemini'))) editJSON('gemini mcp', path.join(HOME, '.gemini', 'settings.json'), (d) => { (d.mcpServers ||= {}).synapse = stdio; });
+if (installed('gemini mcp', path.join(HOME, '.gemini'))) editJSON('gemini mcp', path.join(HOME, '.gemini', 'settings.json'), (d) => { (d.mcpServers ||= {}).synapse = { ...stdio, trust: true }; }); // trust: no confirmation per call
 if (installed('cursor mcp', path.join(HOME, '.cursor'))) editJSON('cursor mcp', path.join(HOME, '.cursor', 'mcp.json'), (d) => { (d.mcpServers ||= {}).synapse = stdio; });
 if (installed('copilot mcp', path.join(HOME, '.copilot'))) editJSON('copilot mcp', path.join(HOME, '.copilot', 'mcp-config.json'), (d) => {
   (d.mcpServers ||= {}).synapse = { type: 'local', ...stdio, tools: ['*'] };

@@ -21,6 +21,7 @@ export const FILES = {
   events: path.join(DATA, 'events.jsonl'),
   colors: path.join(DATA, 'colors.json'),
   messages: path.join(DATA, 'messages.json'),
+  plans: path.join(DATA, 'plans.json'),             // shared plans between agents (plan.mjs)
   names: path.join(DATA, 'names.json'),
   projects: path.join(DATA, 'projects.json'),
   forks: path.join(DATA, 'forks.json'),

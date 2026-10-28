@@ -1633,7 +1633,11 @@ function initialize() {
   });
   document.addEventListener('keydown', (event) => {
     const editing = event.target.matches('input, textarea, select, [contenteditable="true"]');
-    const key = event.key.toLowerCase(), mod = event.metaKey || event.ctrlKey;
+    // the layout's letter, or the physical key where the layout gives no shortcut key (Italian ⌘& is ⌘1, ⌘è is ⌘[)
+    const named = event.key.toLowerCase();
+    const key = /^[a-z0-9]$/.test(named) || named === 'tab' || named === ',' ? named
+      : /^(Key|Digit)/.test(event.code) ? event.code.slice(-1).toLowerCase() : { BracketLeft: '[', BracketRight: ']', Comma: ',' }[event.code] || named;
+    const mod = event.metaKey || event.ctrlKey;
     if (paneKey && ((mod && ['b', 'k', 'g'].includes(key)) || (mod && key === 'f' && !event.shiftKey) || (event.ctrlKey && key === 'tab'))) {
       event.preventDefault(); parent.postMessage({ type: 'synapse:pane-command', command: key === 'b' ? 'sidebar' : ['g', 'tab'].includes(key) ? 'canvas' : 'search' }, location.origin); return;
     }

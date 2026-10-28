@@ -12,6 +12,7 @@
   "files": [
     "lib.mjs",
     "ops.mjs",
+    "plan.mjs",
     "remote.mjs",
     "talk.mjs",
     "account.mjs",

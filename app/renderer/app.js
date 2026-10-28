@@ -340,6 +340,7 @@ function sforkFilter(get) {
       // device attributes) also arrive here and are ignored
       else if (EDIT_KEY.test(t)) line = null;
     }
+    if (line !== x.draft) { x.draft = line; x.typedAt = Date.now(); } // what wakeAgents must not type over
     synapse.pty.write(x.pty, d);
   };
 }
@@ -1985,15 +1986,24 @@ function toast(text, sig = false, onClick = null) {
 
 const appMod = (e) => (WIN ? e.ctrlKey && e.shiftKey && !e.metaKey : e.metaKey);
 // on Windows Shift is part of the modifier, so e.key is the shifted character: name the physical key instead
-const winKey = (e) => (/^(Key|Digit)/.test(e.code) ? e.code.slice(-1).toLowerCase() : { BracketLeft: '[', BracketRight: ']', Comma: ',' }[e.code] || e.key.toLowerCase());
-const keyName = (e) => (WIN ? (e.altKey ? 'shift+' : '') + winKey(e) : (e.shiftKey ? 'shift+' : '') + e.key.toLowerCase());
+const winKey = (e) => (/^(Key|Digit)/.test(e.code) ? e.code.slice(-1).toLowerCase() : { BracketLeft: '[', BracketRight: ']', Comma: ',', Backspace: 'backspace' }[e.code] || e.key.toLowerCase());
+// on a Mac the layout's own letter counts (AZERTY ⌘Z stays undo), but where the layout gives something that is no
+// shortcut (Italian ⌘& for ⌘1, ⌘è for ⌘[, Cyrillic letters, a dead key) the physical key names it
+const keyName = (e) => {
+  if (WIN) return (e.altKey ? 'shift+' : '') + winKey(e);
+  const shift = e.shiftKey ? 'shift+' : '', k = shift + e.key.toLowerCase();
+  if (APP_KEYS.has(k) || /^[a-z0-9]$/i.test(e.key)) return k;
+  return shift + winKey(e);
+};
 // ⌃1 ⌃2 … start the nth agent (claude, codex, …; the shell is not in this list) in the focused worktree
 const agentProfiles = () => profileOrder().filter((k) => k !== 'shell');
 const SHELL_RE = /(^|[\\/])-?(zsh|bash|fish|sh|dash|ksh|tcsh|csh|nu|login|pwsh|powershell|cmd)(\.exe)?$/i;
 // the command line of the program in front in a terminal's pty ('' when unknown)
 const CODEX_RE = /(^|\/)codex(\.js)?(\s|$)/;
 const foreground = (term) => { const id = ownerOf(term)?.pty; return id ? synapse.pty.foreground(id).catch(() => '') : Promise.resolve(''); };
-const agentKey = (e) => (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key) ? agentProfiles()[e.key - 1] : null);
+// the digit by its key, or by its place where the layout types something else on it (Italian, French: & é " ...)
+const digitOf = (e) => (/^[1-9]$/.test(e.key) ? e.key : /^Digit[1-9]$/.test(e.code) ? e.code.slice(-1) : null);
+const agentKey = (e) => (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && digitOf(e) ? agentProfiles()[digitOf(e) - 1] : null);
 const APP_KEYS = new Set(['shift+h', 'b', 'd', 'shift+d', 't', 'n', 'shift+n', 'shift+f', 'e', 'w', '[', ']', 'shift+backspace', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',']);
 // ⌘ + editing key -> what a macOS terminal sends for it (iTerm's natural editing, Ghostty's defaults)
 const META_EDIT = { Backspace: '\x15', ArrowLeft: '\x01', ArrowRight: '\x05' };
@@ -2177,7 +2187,7 @@ async function refreshPullRequests() {
 }
 async function refresh() { apply(await synapse.state()); }
 function apply(st) {
-  M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo; M.autoSendFork = !!st.autoSendFork;
+  M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo; M.autoSendFork = !!st.autoSendFork; M.wakeAgents = !!st.wakeAgents;
   const talks = JSON.stringify([st.talks || [], st.talkRequests || []]);
   if (talks !== M.talksSig) { M.talksSig = talks; M.talks = st.talks || []; M.talkRequests = st.talkRequests || []; renderDot(); }
   // remember which agent each session runs while it is alive: that id is what a restart resumes. A resumed
@@ -2193,10 +2203,43 @@ function apply(st) {
     if (a) watchTurn(x, a);
     if (a && x.named === false) { x.named = true; nameForkAgent(x); }
   }
+  wakeAgents();
   refreshPullRequests();
   render();
 }
 synapse.onState(apply);
+
+// An idle agent with messages waiting gets them typed in as its next prompt, whatever kind it is (Claude, Codex,
+// Gemini, OpenCode, Amp, ...): the hooks that bring messages in only exist for Claude and Codex, and only fire when
+// the user prompts. It waits for a quiet terminal and an empty prompt, so nothing the user is typing gets mixed in,
+// and skips an agent that is working or asking for input. At most WAKE_MAX wakes per agent in ten minutes, so two
+// agents cannot keep each other going forever. Off with "wakeAgents": false in ~/.synapse/app.json.
+const WAKE_QUIET = 3000, WAKE_TYPING = 10_000, WAKE_MAX = 12, WAKE_WINDOW = 600_000;
+function wakeAgents() {
+  if (!M.wakeAgents) return;
+  const now = Date.now();
+  for (const sl of M.slots) for (const x of sl.sessions) {
+    const a = M.agents[x.pty];
+    if (!a || x.exited || x.waking || !M.unread[a.synapseId]) continue;
+    if (agentWorking(a) || statusOf(x) === 'waiting') continue;
+    if (now - (x.updatedAt || 0) < WAKE_QUIET || now - (x.typedAt || 0) < WAKE_TYPING || (x.draft !== undefined && x.draft !== '')) continue;
+    x.wakes = (x.wakes || []).filter((t) => now - t < WAKE_WINDOW);
+    if (x.wakes.length >= WAKE_MAX) continue;
+    x.waking = true;
+    x.wakes.push(now);
+    synapse.messages.take(a.synapseId)
+      .then((msgs) => { if (msgs.length) return synapse.pty.submit(x.pty, wakePrompt(msgs)); })
+      .catch(() => {})
+      .finally(() => setTimeout(() => { x.waking = false; }, 5000));
+  }
+}
+function wakePrompt(msgs) {
+  const clip = (t, n) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+  const body = msgs.slice(-8).map((m) => `From "${m.from}":\n${clip(m.text, 3000)}`).join('\n\n');
+  return clip(`Synapse: messages from other agents (sent to you, not typed by the user):\n\n${body}\n\n` +
+    'Answer them with synapse_send (or ~/.synapse/bin/synapse send <agent> "<message>"). If a message is about a shared ' +
+    'plan, read it with synapse_plan and answer on it with synapse_plan_update.', 11500);
+}
 
 // An agent that finishes a turn while you look elsewhere says so: a toast when Synapse is in front, a
 // notification when it is not. A turn has to have run a few seconds and then stayed quiet for two checks, so

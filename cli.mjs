@@ -8,6 +8,9 @@
 //   synapse read <agent> [--max N]     read an agent's recent conversation (it must share with you)
 //   synapse send <agent> <message...>  message a linked agent
 //   synapse inbox                      messages sent to you
+//   synapse plan [id]                  your latest shared plan (or that one); plans are with agents of any kind
+//   synapse plan start "<goal>" <agent>...   start one; they are linked with you and get the goal
+//   synapse plan note|task <text> | claim|done|reopen <n> | close   [--id id] change it; the others hear of it
 //   synapse ask <agent> <question...> [--conversation id]   ask a friend's agent (name@owner) and wait for the answer
 //   synapse end <conversation>         end a conversation with a friend's agent
 //   synapse agents                     every live agent
@@ -35,6 +38,7 @@
 //                                      (accept lets their agent ask yours questions too, unless --no-talk)
 import { FILES, readJSON, agentForProcess, listAgents, localAgents, findAgent, renameAgent, projectOf, renameProject } from './lib.mjs';
 import * as ops from './ops.mjs';
+import * as plan from './plan.mjs';
 import * as remote from './remote.mjs';
 import * as account from './account.mjs';
 
@@ -137,6 +141,18 @@ try {
     case 'sync': out = await remote.sync(); break;
     case 'send': out = ops.send(whoami(), args[0], args.slice(1).join(' ')); break;
     case 'inbox': out = ops.inbox(whoami()); break;
+    case 'plan': {
+      // plan [id] | plan start "<goal>" <agent>... | plan note|task|claim|done|reopen|close [--id id] <text or n>
+      const [sub, ...more] = args, id = opt('--id');
+      const words = more.filter((a) => a !== id);
+      if (sub === 'start') out = plan.start(whoami(), { goal: words[0], agents: words.slice(1) });
+      else if (sub === 'note') out = plan.update(whoami(), { id, note: words.join(' ') });
+      else if (sub === 'task') out = plan.update(whoami(), { id, add_tasks: [words.join(' ')] });
+      else if (['claim', 'done', 'reopen'].includes(sub)) out = plan.update(whoami(), { id, [sub]: Number(words[0]) });
+      else if (sub === 'close') out = plan.update(whoami(), { id, close: true });
+      else out = plan.list(whoami(), { id: sub });
+      break;
+    }
     case 'ask': {
       const conversation = opt('--conversation');
       const words = args.filter((a) => a !== conversation);
