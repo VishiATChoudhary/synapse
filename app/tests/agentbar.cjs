@@ -1,4 +1,4 @@
-// Real Electron test for the active-agents bar under the top bar: every running agent across workspaces, the most
+// Real Electron test for the active-agents bar in the GUI window toolbar (terminal mode lists them in the sidebar): every running agent across workspaces, the most
 // recently started first, a click switches to it, and it collapses to its status squares (remembered).
 // `cat` stands in for the agents. Run: SYNAPSE_APP_PORT=<free port> npx electron tests/agentbar.cjs
 const { app, BrowserWindow } = require('electron');
@@ -64,15 +64,14 @@ const chips = () => js(`[...document.querySelectorAll('#agentbar .agent-chip')].
   assert.equal(await js(`document.querySelectorAll('#agentbar .agent-chip .label').length`), 2, 'expanded again');
   assert.equal(await js(`document.querySelector('#agentbar').parentElement.className`), 'desktop-toolbar', 'GUI mode: in the window toolbar');
   if (process.env.AGENTBAR_SHOT) fs.writeFileSync(`${process.env.AGENTBAR_SHOT}-gui.png`, (await win.webContents.capturePage()).toPNG());
-  // terminal mode: the same bar, under the top bar
+  // terminal mode: no bar, the sidebar lists the same agents instead
   await js(`document.querySelector('#mode-terminal').click()`);
-  await until(() => js(`document.querySelector('#agentbar').parentElement.classList.contains('main')`), 'bar moves under the terminal top bar');
-  assert.deepEqual((await chips()).length, 2);
-  await js(`document.querySelectorAll('#agentbar .agent-chip')[0].click()`);
-  await until(() => js(`document.querySelectorAll('#agentbar .agent-chip')[0].classList.contains('on')`), 'terminal mode: click switches');
+  await until(() => js(`document.querySelector('#agentbar').hidden && document.querySelectorAll('#tree .agent-row').length === 2`), 'terminal mode: the agents in the sidebar, not a bar');
+  await js(`document.querySelectorAll('#tree .agent-row')[1].click()`);
+  await until(() => js(`document.querySelectorAll('#tree .agent-row')[1].classList.contains('focused')`), 'terminal mode: click switches');
   if (process.env.AGENTBAR_SHOT) fs.writeFileSync(`${process.env.AGENTBAR_SHOT}-term.png`, (await win.webContents.capturePage()).toPNG());
   assert.deepEqual(errors, []);
-  console.log('PASS active agents bar: newest first, click switches, collapses to status squares');
+  console.log('PASS active agents bar: newest first, click switches, collapses to status squares; sidebar list in terminal mode');
 })().catch((error) => { console.error(error); process.exitCode = 1; }).finally(() => {
   app.once('will-quit', () => { fs.rmSync(fixture, { recursive: true, force: true }); app.exit(process.exitCode || 0); });
   app.quit();

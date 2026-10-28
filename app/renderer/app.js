@@ -551,12 +551,12 @@ function logo(kind) {
 const profileOrder = () => Object.keys(M.profiles).sort((a, b) => (a === 'shell') - (b === 'shell'));
 
 // every running agent across workspaces, the one that last started, worked or asked for input first.
-// Collapsed it keeps only the count and their status squares. It sits under the top bar in terminal mode and in the
-// window's toolbar in GUI mode.
+// Collapsed it keeps only the count and their status squares. It sits in the window's toolbar in GUI mode; terminal
+// mode has the same list in its sidebar instead (agentList).
 function renderAgentBar() {
   const bar = $('#agentbar');
-  if (workspaceOpen && bar.parentElement !== $('.desktop-toolbar')) $('#desktop-settings').before(bar);
-  if (!workspaceOpen && bar.parentElement !== $('.main')) $('.main .launchbar').before(bar);
+  if (!workspaceOpen) { bar.hidden = true; return; }
+  if (bar.parentElement !== $('.desktop-toolbar')) $('#desktop-settings').before(bar);
   const live = M.slots.flatMap((s) => s.sessions.filter((x) => x.kind !== 'shell' && !x.exited).map((x) => ({ s, x })))
     .sort((a, b) => (b.x.activeAt || 0) - (a.x.activeAt || 0));
   bar.hidden = !live.length;
@@ -834,6 +834,54 @@ async function nameForkAgent(x) {
   }
 }
 
+// every running agent in one list above the workspaces, not split by workspace, the most recently active first.
+// Agents you are not using can be settled: they move to a folded "settled" group at the bottom until you bring
+// them back. Which are settled is kept by session key, so it survives a restart.
+const settled = new Set(JSON.parse(localStorage.getItem('synapse.settled') || '[]'));
+function settle(x, on) {
+  if (on) settled.add(x.key); else settled.delete(x.key);
+  localStorage.setItem('synapse.settled', JSON.stringify([...settled].slice(-200)));
+  renderTree();
+}
+function agentList() {
+  const live = M.slots.flatMap((s) => s.sessions.filter((x) => x.kind !== 'shell' && !x.exited).map((x) => ({ s, x })))
+    .sort((a, b) => (b.x.activeAt || 0) - (a.x.activeAt || 0));
+  if (!live.length) return null;
+  const open = localStorage.getItem('synapse.agentlist') !== 'collapsed';
+  const box = el('div', 'agents' + (open ? '' : ' closed'));
+  const active = live.filter(({ x }) => !settled.has(x.key)), rest = live.filter(({ x }) => settled.has(x.key));
+  const head = el('div', 'agents-head');
+  head.append(el('span', 'agents-caret', open ? '▾' : '▸'), el('span', 'proj-name', 'active'), el('span', 'proj-count', String(active.length)));
+  head.title = open ? 'Hide active agents' : 'Show active agents';
+  head.onclick = () => { localStorage.setItem('synapse.agentlist', open ? 'collapsed' : 'open'); renderTree(); };
+  box.appendChild(head);
+  if (!open) return box;
+  const focused = top(focusedSlot());
+  const row = ({ s, x }, isSettled) => {
+    const r = el('div', 'agent-row' + (x === focused ? ' focused' : '')); r.dataset.session = x.id;
+    const name = x.title !== x.kind ? x.title : x.question || x.title;
+    const where = worktreeOf(s.worktree);
+    r.append(el('span', 'dot ' + statusOf(x)), logo(x.kind), el('span', 'slot-title', name), el('span', 'slot-kind', where?.project.label || s.worktree.split(/[\\/]/).pop()));
+    r.title = `${name} · ${where ? `${where.project.label} / ${where.worktree.name}` : s.worktree} · ${statusOf(x)}`;
+    const b = el('button', 'agent-settle', isSettled ? '↑' : '–');
+    b.title = b.ariaLabel = isSettled ? `Bring ${name} back` : `Settle ${name}: move it to settled`;
+    b.onclick = (e) => { e.stopPropagation(); settle(x, !isSettled); };
+    r.appendChild(b);
+    r.onclick = () => selectSession(s, x.id);
+    return r;
+  };
+  for (const a of active) box.appendChild(row(a, false));
+  if (rest.length) {
+    const showSettled = localStorage.getItem('synapse.settledOpen') === 'open';
+    const sh = el('div', 'agents-settled', `${showSettled ? '▾' : '▸'} settled ${rest.length}`);
+    sh.title = showSettled ? 'Hide settled agents' : 'Show settled agents';
+    sh.onclick = () => { localStorage.setItem('synapse.settledOpen', showSettled ? 'closed' : 'open'); renderTree(); };
+    box.appendChild(sh);
+    if (showSettled) for (const a of rest) box.appendChild(row(a, true));
+  }
+  return box;
+}
+
 // a session named after its folder would repeat the checkout row above it: say what runs in it instead
 const slotTitle = (s, t, w) => (!t ? 'gone' : t.title === w.name && s.path.length < 2 ? (M.profiles[t.kind]?.label || t.kind) : t.title);
 function renderTree() {
@@ -843,6 +891,8 @@ function renderTree() {
   const cur = focusedSlot();
   const asking = askingTalks(), placed = new Set();
   let n = 0;
+  const agents = agentList();
+  if (agents) tree.appendChild(agents);
   for (const p of M.projects) {
     const box = el('div', 'proj' + (M.open.has(p.key) ? '' : ' closed')); box.dataset.key = p.key;
     const head = el('div', 'proj-head');
