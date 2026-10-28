@@ -61,6 +61,15 @@ async function press(keyCode, modifiers = []) {
     shiftMetaBackspace: await press('Backspace', ['meta', 'shift']),
     shellShiftEnter: await press('Enter', ['shift']),
   };
+  // German layout: ⌥L types @ and ⌥5 types [, so Option is not meta for them
+  const optionKey = async (key, code) => {
+    written.length = 0;
+    await js(`document.querySelector('.term.visible .xterm-helper-textarea').dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, code: ${JSON.stringify(code)}, altKey: true, bubbles: true, cancelable: true }))`);
+    await sleep(150);
+    return written.join('');
+  };
+  assert.equal(await optionKey('@', 'KeyL'), '@', '⌥L on a German layout types @');
+  assert.equal(await optionKey('[', 'Digit5'), '[', '⌥5 on a German layout types [');
   // ⇧Enter in an agent tab is the CSI u form Claude Code and Codex read as a newline; a shell gets plain Enter
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode: '1', modifiers: ['control'] });
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: '1', modifiers: ['control'] });
