@@ -91,6 +91,16 @@ try {
 } finally {
   for (const t of terms) try { t.kill(); } catch {}
   await sleep(500);
-  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+  // Remove junctions first: recursive Windows cleanup must not walk into the source skill.
+  let unlinked = true;
+  for (const dir of ['.agents', '.codex']) {
+    try { fs.unlinkSync(path.join(tmp, 'user', dir, 'skills', 'synapse')); }
+    catch (e) { if (e.code !== 'ENOENT') unlinked = false; }
+  }
+  if (unlinked) try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+  if (!fs.existsSync(new URL('../../skill/SKILL.md', import.meta.url)) || !fs.existsSync(new URL('../../skill/bootstrap.md', import.meta.url))) {
+    log('FAIL fixture cleanup removed the source skill');
+    process.exitCode = 1;
+  }
   process.stdout.write('', () => process.exit(process.exitCode || 0)); // node-pty keeps the loop alive; flush first
 }
