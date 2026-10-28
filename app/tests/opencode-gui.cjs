@@ -68,7 +68,8 @@ async function shot(name) {
   assert.equal(await ui(`document.querySelector('#message-list .terminal-transcript')`), null);
   assert.equal(await ui(`document.querySelector('#message-list strong')?.textContent`), 'backoff');
   assert.equal(await ui(`document.querySelector('#message-list pre code')?.textContent.trim()`), 'await fetch(url);');
-  assert.equal(await ui(`document.querySelector('#message-list .tool-message summary span')?.textContent`), 'edit: src/fetch.js');
+  assert.equal(await ui(`document.querySelector('#message-list .tool-message .tool-verb')?.textContent`), 'Edited');
+  assert.equal(await ui(`document.querySelector('#message-list .tool-message .tool-what')?.textContent`), 'src/fetch.js');
   assert.doesNotMatch(await ui(`document.querySelector('#message-list').textContent`), /private|TUI chrome/);
   assert.ok(await ui(`document.querySelectorAll('#message-list time').length > 0`), 'OpenCode millisecond timestamps render as message times');
   const pid = await native(`synapse.state().then((s) => Object.values(s.agents).find((a) => a.kind === 'opencode')?.synapseId)`);
