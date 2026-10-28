@@ -13,6 +13,7 @@
     "test:keys": "electron tests/keys.cjs",
     "test:paths": "electron tests/terminal-paths.cjs",
     "test:shift-enter": "electron tests/shift-enter.cjs",
+    "test:agentbar": "electron tests/agentbar.cjs",
     "test:library": "electron tests/library.cjs",
     "test:tabs": "node tests/tabs.cjs",
     "test:drag": "node tests/drag.cjs",

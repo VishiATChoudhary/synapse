@@ -286,7 +286,7 @@ async function makeSession(s, { kind, title, question = null, parent = null, key
   try { ({ id: pty, pid } = await spawn(term.cols, term.rows)); }
   catch (error) { term.dispose(); wrap.remove(); throw error; }
   synapse.pty.resize(pty, term.cols, term.rows); // whatever the spawner defaulted to, the pty and the view agree from the first frame
-  const x = { id: nextId++, key: /^[\w-]{1,80}$/.test(key || '') ? key : crypto.randomUUID(), pty, pid, updatedAt: Date.now(), kind, title, question, parent, exited: false, term, fit, el: wrap };
+  const x = { id: nextId++, key: /^[\w-]{1,80}$/.test(key || '') ? key : crypto.randomUUID(), pty, pid, updatedAt: Date.now(), activeAt: Date.now(), kind, title, question, parent, exited: false, term, fit, el: wrap };
   wrap.addEventListener('pointerdown', () => { if (M.focused !== s.id) selectSession(s, x.id); });
   wrap.addEventListener('focusin', () => { if (M.focused !== s.id) selectSession(s, x.id); });
   term.onData(sforkFilter(() => x));
@@ -550,6 +550,38 @@ function logo(kind) {
 }
 const profileOrder = () => Object.keys(M.profiles).sort((a, b) => (a === 'shell') - (b === 'shell'));
 
+// every running agent across workspaces, the one that last started, worked or asked for input first.
+// Collapsed it keeps only the count and their status squares. It sits under the top bar in terminal mode and in the
+// window's toolbar in GUI mode.
+function renderAgentBar() {
+  const bar = $('#agentbar');
+  if (workspaceOpen && bar.parentElement !== $('.desktop-toolbar')) $('#desktop-settings').before(bar);
+  if (!workspaceOpen && bar.parentElement !== $('.main')) $('.main .launchbar').before(bar);
+  const live = M.slots.flatMap((s) => s.sessions.filter((x) => x.kind !== 'shell' && !x.exited).map((x) => ({ s, x })))
+    .sort((a, b) => (b.x.activeAt || 0) - (a.x.activeAt || 0));
+  bar.hidden = !live.length;
+  bar.replaceChildren();
+  if (!live.length) return;
+  const collapsed = localStorage.getItem('synapse.agentbar') === 'collapsed';
+  bar.classList.toggle('collapsed', collapsed);
+  const head = el('button', 'agentbar-toggle', `${collapsed ? '▸' : '▾'} active ${live.length}`);
+  head.title = collapsed ? 'Show active agents' : 'Hide active agents';
+  head.setAttribute('aria-expanded', String(!collapsed));
+  head.onclick = () => { localStorage.setItem('synapse.agentbar', collapsed ? 'open' : 'collapsed'); renderAgentBar(); };
+  bar.appendChild(head);
+  const focused = top(focusedSlot());
+  for (const { s, x } of live) {
+    const status = statusOf(x), name = x.title !== x.kind ? x.title : x.question || x.title;
+    const c = el('button', 'agent-chip' + (x === focused ? ' on' : ''));
+    c.dataset.session = x.id;
+    c.title = `${name} · ${worktreeOf(s.worktree)?.worktree.name || s.worktree.split('/').pop()} · ${status}`;
+    c.appendChild(el('span', 'dot ' + status));
+    if (!collapsed) { c.appendChild(logo(x.kind)); c.appendChild(el('span', 'label', name)); }
+    c.onclick = () => selectSession(s, x.id);
+    bar.appendChild(c);
+  }
+}
+
 // the launcher strip under the top bar: one click starts that agent in the focused worktree
 function renderLaunch() {
   const bar = $('#launch');
@@ -572,6 +604,7 @@ function renderLaunch() {
 }
 
 function render() {
+  renderAgentBar();
   if (!workspaceOpen) {
     renderLaunch();
     renderShareBar();
@@ -2103,6 +2136,10 @@ function apply(st) {
     const a = M.agents[x.pty];
     if (a?.synapseId && (a.transcript || !x.resume)) x.resume = { synapseId: a.synapseId, transcript: a.transcript || null };
     if (a && agentWorking(a)) x.ran = true; // noted here, not on draw, so a folded workspace's agents count too
+    // the active-agents bar is a stack: an agent goes to its front when it starts (makeSession), starts working or asks for input
+    const st = statusOf(x);
+    if (st !== x.lastStatus && (st === 'working' || st === 'waiting')) x.activeAt = Date.now();
+    x.lastStatus = st;
     if (a) watchTurn(x, a);
     if (a && x.named === false) { x.named = true; nameForkAgent(x); }
   }

@@ -35,3 +35,12 @@ body.gui-mode .fan-title b { font: 600 var(--text-lg)/1.2 var(--font-body); lett
 body.gui-mode .fcard { border-radius: var(--radius-sm); }
 body.gui-mode .menu { --paper: var(--color-paper); --ink: var(--color-ink); --ink-2: var(--color-secondary); --rule: var(--color-border); border-radius: var(--radius-sm); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+/* the active-agents bar moves into the toolbar in GUI mode */
+.desktop-toolbar .agentbar { flex: 1; min-width: 0; height: 30px; border: 0; gap: 2px; align-items: center; -webkit-app-region: no-drag; }
+.desktop-toolbar .agentbar-toggle { padding: 4px 8px; border: 0; font: 500 var(--text-xs) var(--font-body); text-transform: none; color: var(--color-muted); }
+.desktop-toolbar .agent-chip { height: 28px; padding: 0 10px; border: 0; border-radius: var(--radius-xs); font: var(--text-sm) var(--font-body); color: var(--color-secondary); }
+.desktop-toolbar .agent-chip:hover { background: var(--color-hover); color: var(--color-ink); }
+.desktop-toolbar .agent-chip.on { box-shadow: none; background: var(--color-selected); color: var(--color-ink); }
+.desktop-toolbar .agentbar.collapsed .agent-chip { padding: 0 5px; }
+.desktop-toolbar .agent-chip .dot.working { background: var(--color-accent); border-color: var(--color-accent); }
+.desktop-toolbar:has(.agentbar:not([hidden])) .desktop-title { flex: none; }
