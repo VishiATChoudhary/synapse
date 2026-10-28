@@ -242,6 +242,10 @@ async function makeSession(s, { kind, title, question = null, parent = null, key
       e.preventDefault(); term.input(kind === 'shell' ? '\r' : '\x1b[13;2u'); return false;
     }
     if (e.type === 'keydown' && agentKey(e)) return false; // ⌃1-9 launch agents, never reach the pty
+    // ⌥ is meta, except where the layout types ASCII with it (German ⌥L is @, ⌥5 is [): send that character
+    if (!WIN && e.type === 'keydown' && e.altKey && !e.metaKey && !e.ctrlKey && /^[!-~]$/.test(e.key)) {
+      e.preventDefault(); term.input(e.key); return false;
+    }
     if (WIN && e.type === 'keydown' && e.ctrlKey && !e.altKey) { // Windows terminal habits: Ctrl+V pastes, Ctrl+Shift+C/V copy and paste
       if (!e.shiftKey && e.code === 'KeyV') return false; // the browser's paste event reaches xterm
       if (e.shiftKey && e.code === 'KeyC') { e.preventDefault(); const sel = term.getSelection(); if (sel) navigator.clipboard.writeText(sel); return false; }
