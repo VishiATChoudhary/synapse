@@ -9,10 +9,35 @@ export function slashCommand(value) {
   return m ? { command: m[1], rest: String(value).slice(m.index + m[0].length).replace(/^[ \t]+/, '') } : null;
 }
 // a user message that is a slash command shows the command as a chip, its arguments as text
-export function messageBody(text, user) {
+export function messageBody(text, user, tools = !user) {
   const slash = user && slashCommand(text);
-  return slash ? `<div class="slash-head"><span class="slash-cmd">${escapeHtml(slash.command)}</span></div>${slash.rest ? renderMarkdown(slash.rest) : ''}` : renderMarkdown(text);
+  if (slash) return `<div class="slash-head"><span class="slash-cmd">${escapeHtml(slash.command)}</span></div>${slash.rest ? renderMarkdown(slash.rest) : ''}`;
+  if (!tools) return renderMarkdown(text);
+  // a reply that also called tools logs each call on its own line; those read as quiet activity rows
+  const out = [];
+  let prose = [], fence = false;
+  const flush = () => { if (prose.length) out.push(renderMarkdown(prose.join('\n'))); prose = []; };
+  for (const line of String(text ?? '').split('\n')) {
+    if (/^\s*```/.test(line)) fence = !fence;
+    const tool = !fence && toolSummary(line);
+    if (tool) { flush(); out.push(`<div class="tool-line">${toolRow(tool)}</div>`); } else prose.push(line);
+  }
+  flush();
+  return out.join('');
 }
+
+// "[Bash: npm test]" is how lib.mjs records a tool call. Name the action in words, keep its target verbatim.
+const TOOL_LINE = /^\[([\w.:-]{1,80})(?::\s(.*))?\]$/;
+const TOOL_VERBS = [[/^(bash|exec|exec_command|shell|local_shell|run)/i, 'Ran', 'terminal'], [/^(read|view|notebookread)/i, 'Read', 'file'],
+  [/^(edit|multiedit|apply_patch|str_replace|notebookedit)/i, 'Edited', 'edit'], [/^(write|create_file)/i, 'Wrote', 'file'],
+  [/^(grep|glob|search|find|ls|list)/i, 'Searched', 'search'], [/^(web|fetch|browse)/i, 'Looked up', 'globe']];
+export function toolSummary(text) {
+  const m = TOOL_LINE.exec(String(text ?? '').trim());
+  if (!m) return null;
+  const name = m[1].replace(/^mcp__[^_]+__/, ''), hit = TOOL_VERBS.find(([re]) => re.test(name));
+  return { verb: hit ? hit[1] : name.replace(/_/g, ' '), icon: hit ? hit[2] : 'tool', what: m[2] || '' };
+}
+const toolRow = (t) => `${icon(t.icon)}<span class="tool-verb">${escapeHtml(t.verb)}</span>${t.what ? `<code class="tool-what">${escapeHtml(t.what)}</code>` : ''}`;
 // "@mara" in a message, not inside an email address
 export const MENTION = /(^|[\s(])@([A-Za-z0-9][\w-]{1,23})\b/g;
 
@@ -186,6 +211,13 @@ const ICONS = {
   check: '<path d="m5 12 4 4L19 6"/>',
   message: '<path d="M21 11a9 9 0 0 1-9 9 10 10 0 0 1-4-1l-5 2 1.5-5A9 9 0 1 1 21 11Z"/>',
   tool: '<path d="M14 6a5 5 0 0 0-6 6l-5 5a3 3 0 0 0 4 4l5-5a5 5 0 0 0 6-6l-4 2-2-2 2-4Z"/>',
+  compose: '<path d="M11 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/><path d="M18.4 3.6a2 2 0 0 1 2.9 2.9L13 14.8l-3.6.9.9-3.6 8.1-8.5Z"/>',
+  activity: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+  'folder-plus': '<path d="M3 7V5a2 2 0 0 1 2-2h4l3 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M12 10v6m-3-3h6"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  terminal: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7.5 9.5 3 2.5-3 2.5M13 15h4"/>',
+  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/><path d="M14 3v5h5"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18"/>',
 };
 const icon = (name) => `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ICONS.message}</svg>`;
 const KIND_NAMES = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', opencode: 'OpenCode', 'cursor-agent': 'Cursor', amp: 'Amp', copilot: 'Copilot CLI', superset: 'Superset', shell: 'Shell' };
@@ -471,15 +503,20 @@ function initialize() {
       let node = sessionElements.get(agent.id);
       if (!node) {
         node = document.createElement('div'); node.className = 'session-node';
-        node.innerHTML = '<button type="button" class="session-row"><span class="status-dot" aria-hidden="true"></span><span class="session-name"></span><span class="session-kind" aria-hidden="true"></span></button><div class="session-children"></div>';
+        node.innerHTML = '<button type="button" class="session-row"><span class="session-kind" aria-hidden="true"></span><span class="session-name"></span><span class="session-meta"><span class="status-dot" aria-hidden="true"></span><span class="session-time"></span></span></button><div class="session-children"></div>';
         node.firstElementChild.dataset.agent = agent.id;
         sessionElements.set(agent.id, node);
       }
       const row = node.firstElementChild;
-      row.querySelector('.status-dot').classList.toggle('busy', agent.status === 'busy');
-      row.querySelector('.status-dot').classList.toggle('done', agent.status === 'done');
+      const dot = row.querySelector('.status-dot');
+      dot.classList.toggle('busy', agent.status === 'busy');
+      dot.classList.toggle('done', agent.status === 'done');
+      dot.classList.toggle('waiting', ['waiting', 'needs_input'].includes(agent.status));
       row.querySelector('.session-name').textContent = agent.name;
-      row.querySelector('.session-kind').textContent = KIND_INITIALS[agent.kind] || '';
+      row.querySelector('.session-kind').textContent = KIND_INITIALS[agent.kind] || agent.kind?.slice(0, 2) || '';
+      row.querySelector('.session-kind').dataset.kind = agent.kind || '';
+      // a running agent shows that it works; a resting one shows how long ago it last did
+      row.querySelector('.session-time').textContent = agent.status === 'busy' || agent.exited ? '' : relativeTime(agent.lastActivity);
       row.title = `${agent.name} · ${kindName(agent)} · ${activityLabel(agent)}${agent.owned ? ' · Drag to reorder' : ''}`;
       node.dataset.depth = depth;
       sortHandle(node, row, 'session', agent.id, agent.owned);
@@ -739,16 +776,16 @@ function initialize() {
     $('canvas-view').hidden = view !== 'canvas';
     $('session-actions').hidden = !isSession;
     if (isSession) {
-      const breadcrumbs = `<span class="crumb-project">${icon('folder')}</span><span class="crumb-project">${escapeHtml(agent.project)}</span><span class="crumb-divider">${icon('chevron-right')}</span><span>${escapeHtml(agent.name)}</span>`;
+      const breadcrumbs = `<span class="crumb-title">${escapeHtml(agent.name)}</span><span class="crumb-project">${escapeHtml(agent.project)}</span>`;
       if ($('breadcrumbs').innerHTML !== breadcrumbs) $('breadcrumbs').innerHTML = breadcrumbs;
       $('session-status').innerHTML = `${status(agent)}${activityLabel(agent)}`;
-      $('provider-label').textContent = kindName(agent);
+      $('provider-label').innerHTML = `${avatar(agent)}<span>${escapeHtml(kindName(agent))}</span>`;
+      $('provider-label').title = `${agent.name} runs ${kindName(agent)} in ${agent.cwd || agent.project}`;
       if (embedded) {
         for (const id of ['open-terminal', 'fork-session', 'session-menu']) $(id).hidden = !agent.owned;
         $('fork-session').disabled = !['claude', 'codex'].includes(agent.kind) && !state.demo;
       }
       $('delivery-note').textContent = agent.owned ? 'Sent directly to this session. Open Terminal mode for interactive prompts and approvals.' : 'Delivered on the agent’s next prompt or inbox check.';
-      document.querySelector('.composer-channel').innerHTML = icon(agent.owned ? 'monitor' : 'network') + (agent.owned ? 'Live session' : 'Via Synapse');
       $('conversation-tab').setAttribute('aria-selected', String(tab === 'conversation'));
       $('messages-tab').setAttribute('aria-selected', String(tab === 'messages'));
       $('conversation-tab').tabIndex = tab === 'conversation' ? 0 : -1;
@@ -1005,16 +1042,20 @@ function initialize() {
       if (!element) { element = document.createElement(tool ? 'details' : 'article'); element.dataset.messageKey = message.key; }
       if (element.dataset.signature !== messageSignature) {
         element.dataset.signature = messageSignature;
-        if (!tool) fresh.push(element);
+        fresh.push(element);
         const time = message.time ? new Date(message.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
         if (tool) {
+          // one quiet line per tool call; opening it shows the full call when the line had to clip it
+          const t = toolSummary(message.text) || { verb: 'Used a tool', icon: 'tool', what: message.text.replace(/^\[|\]$/g, '') };
           element.className = 'tool-message';
-          element.innerHTML = `<summary>${icon('tool')}<span>${escapeHtml(message.text.replace(/^\[|\]$/g, ''))}</span>${icon('chevron-down')}</summary><pre>${escapeHtml(message.text)}</pre>`;
+          element.innerHTML = `<summary>${toolRow(t)}${icon('chevron-right')}</summary><pre>${escapeHtml(message.text.replace(/^\[|\]$/g, ''))}</pre>`;
         } else {
-          element.className = `message ${user ? 'user' : message.type === 'shared' ? 'peer' : 'assistant'}`;
-          const name = message.type === 'shared' && !message.human ? `${message.fromName} → ${message.toName}` : kindName(agent);
+          const peer = message.type === 'shared' && !message.human;
+          element.className = `message ${user ? 'user' : peer ? 'peer' : 'assistant'}`;
+          const sender = peer ? byId.get(message.from) || { kind: '' } : agent;
           const delivery = message.human ? `<span class="queued-label">${icon(message.delivered ? 'check' : 'clock')}${message.delivered ? 'Picked up by agent' : 'Queued for next prompt'}</span>` : '';
-          element.innerHTML = `${user ? '' : `<header class="message-head">${avatar(agent)}<span>${escapeHtml(name)}</span>${time ? `<time>${time}</time>` : ''}</header>`}<div class="message-body md">${messageBody(message.text, user)}</div><footer class="message-foot">${delivery}${user && time ? `<time>${time}</time>` : ''}<button class="icon-button" data-copy-message aria-label="Copy message" title="Copy message">${icon('copy')}</button></footer>`;
+          // replies read as plain prose under your prompt; only agent-to-agent notes say who wrote them
+          element.innerHTML = `${peer ? `<header class="message-head">${avatar(sender)}<span>${escapeHtml(message.fromName)}</span>${icon('arrow-right')}<span>${escapeHtml(message.toName)}</span>${time ? `<time>${time}</time>` : ''}</header>` : ''}<div class="message-body md">${messageBody(message.text, user, message.type === 'transcript')}</div><footer class="message-foot">${delivery}${!peer && time ? `<time>${time}</time>` : ''}<button class="icon-button" data-copy-message aria-label="Copy message" title="Copy message">${icon('copy')}</button></footer>`;
         }
       }
       desired.push(element);
@@ -1067,7 +1108,7 @@ function initialize() {
   }
 
   function resizeComposer() {
-    const input = $('message-input'); input.style.height = 'auto'; input.style.height = `${Math.max(52, Math.min(input.scrollHeight, 180))}px`;
+    const input = $('message-input'); input.style.height = 'auto'; input.style.height = `${Math.max(44, Math.min(input.scrollHeight, 200))}px`;
   }
 
   async function sendMessage(event) {
@@ -1347,7 +1388,8 @@ function initialize() {
     const agent = byId.get(selectedId);
     $('composer').classList.toggle('has-command', !!slash);
     const channel = $('composer').querySelector('.composer-channel');
-    if (channel) channel.innerHTML = slash ? `<span class="slash-cmd">${escapeHtml(slash.command)}</span>${agent?.owned ? `Runs as a ${escapeHtml(kindName(agent))} command` : 'Sent as text: commands run in sessions opened in Synapse'}` : `${icon('network')}Via Synapse`;
+    // without a command it says how the text reaches the agent (it used to always claim "Via Synapse")
+    if (channel) channel.innerHTML = slash ? `<span class="slash-cmd">${escapeHtml(slash.command)}</span>${agent?.owned ? `Runs as a ${escapeHtml(kindName(agent))} command` : 'Sent as text: commands run in sessions opened in Synapse'}` : agent?.owned ? `${icon('monitor')}Live session` : `${icon('network')}Via Synapse`;
   }
   // the agents of yours tagged in a message; sending connects each of them with this agent both ways
   function taggedAgents(text) {
@@ -1640,7 +1682,7 @@ function initialize() {
   addEventListener('beforeunload', persistDraft);
   if (paneKey) document.addEventListener('focusin', () => parent.postMessage({ type: 'synapse:pane-focus' }, location.origin));
   document.addEventListener('visibilitychange', () => { if (document.hidden) { persistDraft(); source?.close(); } else connectEvents(); });
-  setInterval(() => { if (!document.hidden && ready) { if (view === 'overview') renderOverview(); if (inspectorOpen) renderInspector(); } }, 30000);
+  setInterval(() => { if (!document.hidden && ready) { renderSidebar(); if (view === 'overview') renderOverview(); if (inspectorOpen) renderInspector(); } }, 30000);
   updateThemeButton(); setSidebar(paneKey ? false : sidebarOpen, false); connectEvents();
   if (embedded) parent.postMessage({ type: 'synapse:desktop-ready' }, '*');
 }
