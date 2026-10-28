@@ -72,7 +72,10 @@ try {
   assert.ok(fs.existsSync(path.join(userHome, '.agents', 'skills', 'synapse', 'SKILL.md')));
   assert.ok(JSON.parse(fs.readFileSync(path.join(codexHome, 'hooks.json'), 'utf8')).hooks.SubagentStart.length);
   const launcher = path.join(tmp, 'state', 'bin', 'synapse.cmd');
-  const listed = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${launcher}" agents`], { env: setupEnv, encoding: 'utf8', timeout: 30000 });
+  assert.ok(fs.existsSync(launcher));
+  const listed = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `call "${launcher}" agents`], {
+    env: setupEnv, encoding: 'utf8', timeout: 30000, windowsVerbatimArguments: true,
+  });
   assert.equal(listed.status, 0, listed.stderr || listed.stdout);
   assert.ok(JSON.parse(listed.stdout).some((a) => a.id === agent.id));
   log('PASS Windows installs Codex guidance, junction skills and a working CLI launcher without duplicate instructions');
