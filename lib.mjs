@@ -802,9 +802,15 @@ export function renameAgent(agent, name) {
   return { id: agent.id, name: shown };
 }
 
-// Find which agent a process belongs to by walking up its parents (used by the MCP server).
-export function agentForProcess(pid) {
+// A shared Codex app-server runs tools outside the terminal's process tree; use its exact thread first.
+export function agentForProcess(pid, sessionId = process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID) {
   const agents = localAgents();
+  const forced = process.env.SYNAPSE_AGENT;
+  if (forced) return agents.find((a) => a.id === forced || a.name === forced) || null;
+  if (sessionId) {
+    const matches = agents.filter((a) => a.kind === 'codex' && a.transcript?.endsWith(`-${sessionId}.jsonl`));
+    if (matches.length) return matches.length === 1 ? matches[0] : null;
+  }
   const rows = new Map(processTable().map((r) => [r.pid, r]));
   for (let p = pid, guard = 0; p > 1 && guard < 64; p = rows.get(p)?.ppid, guard++) {
     const a = agents.find((x) => x.pid === p);

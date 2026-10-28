@@ -12,6 +12,7 @@ module.exports = async (context) => {
     'app/node_modules/tweetnacl/nacl-fast.js', 'app/node_modules/@xterm/xterm/lib/xterm.mjs',
     'app/node_modules/@xterm/addon-fit/lib/addon-fit.mjs', 'public/workspace.mjs',
     'public/workspace.css', 'public/activity.mjs', 'public/activity.css', 'public/fonts/geist.woff2', 'tokens.css', 'discovery.mjs', 'install.mjs',
+    'hook.mjs', 'mcp.mjs', 'cli.mjs', 'skill/SKILL.md', 'skill/bootstrap.md',
   ];
   const missing = required.filter((file) => !fs.existsSync(path.join(root, file)));
   if (missing.length) throw new Error(`Incomplete desktop bundle: ${missing.join(', ')}`);

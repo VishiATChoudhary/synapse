@@ -17,11 +17,19 @@ const state = path.join(fixture, 'state'), home = path.join(fixture, 'home'), bi
 for (const d of [state, home, bin, path.join(home, '.claude'), path.join(home, '.codex')]) fs.mkdirSync(d, { recursive: true });
 fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\necho "$@" >> ${JSON.stringify(calls)}\n[ "$2" = get ] && exit 1\nexit 0\n`);
 fs.chmodSync(path.join(bin, 'claude'), 0o755);
+const personal = '# My instructions\nKeep my conventions.\n';
+fs.writeFileSync(path.join(home, '.codex', 'AGENTS.md'), personal);
+const probe = path.join(fixture, 'codex-ready');
+fs.writeFileSync(path.join(bin, 'probe-codex'), '#!/bin/sh\n' +
+  'if [ -f "$CODEX_HOME/AGENTS.md" ] && [ -f "$SYNAPSE_USER_HOME/.agents/skills/synapse/SKILL.md" ] && [ -z "$CODEX_THREAD_ID" ] && [ -z "$CODEX_SESSION_ID" ]; then\n' +
+  `  printf ready > ${JSON.stringify(probe)}\nelse\n  printf missing > ${JSON.stringify(probe)}\nfi\nexec /bin/cat\n`);
+fs.chmodSync(path.join(bin, 'probe-codex'), 0o755);
 fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], skipLogin: true, profiles: { shell: { command: 'cat', label: 'Shell' } } }));
 fs.writeFileSync(path.join(state, 'seen.json'), JSON.stringify({ intro: true, onboarding: true }));
 Object.assign(process.env, {
   HOME: home, SYNAPSE_USER_HOME: home, CODEX_HOME: path.join(home, '.codex'), SYNAPSE_HOME: state, SYNAPSE_AUTO_SETUP: '1',
   PATH: `${bin}:/usr/bin:/bin`, SHELL: '/bin/sh', SYNAPSE_CLOUD: 'http://127.0.0.1:9', SYNAPSE_DESKTOP_VIEW: 'terminal',
+  CODEX_THREAD_ID: 'parent-thread-must-not-be-inherited', CODEX_SESSION_ID: 'parent-session-must-not-be-inherited',
 });
 for (const key of Object.keys(process.env)) if (key.startsWith('SYNAPSE_SHOT') || ['SYNAPSE_DEBUG', 'SYNAPSE_DEMO', 'SYNAPSE_FAKE_REQUESTS', 'CLAUDE_CONFIG_DIR'].includes(key)) delete process.env[key];
 process.chdir(fixture);
@@ -44,20 +52,31 @@ const heard = () => js(`window.__tones.splice(0)`);
   await until(async () => { win = BrowserWindow.getAllWindows()[0]; return win; }, 'app window');
   win.webContents.on('console-message', (event) => { if (event.level === 'error') errors.push(event.message); });
   await until(() => js(`!!document.querySelector('#settings')`), 'the app');
-  await js(`window.__toasts = []; new MutationObserver(() => window.__toasts.push(document.querySelector('#toast').textContent)).observe(document.querySelector('#toast'), { childList: true, characterData: true, subtree: true }); true`);
   await js(`window.__tones = []; const make = AudioContext.prototype.createOscillator; AudioContext.prototype.createOscillator = function () { const o = make.call(this); const set = o.frequency.setValueAtTime.bind(o.frequency); let first = true; o.frequency.setValueAtTime = (v, t) => { if (first) { window.__tones.push(Math.round(v)); first = false; } return set(v, t); }; return o; }; true`);
+
+  // Clicking immediately must wait for setup, including restored/forked agents through the same spawn path.
+  await js(`synapse.pty.spawn({cwd: ${JSON.stringify(fixture)}, kind: 'codex', command: ${JSON.stringify(path.join(bin, 'probe-codex'))}})`);
+  await until(() => fs.existsSync(probe), 'the first Codex starts');
+  assert.equal(fs.readFileSync(probe, 'utf8'), 'ready', 'guidance is present before Codex starts, without the parent thread identity');
 
   // first launch: the setup ran by itself into the fixture's home
   const skill = path.join(home, '.claude', 'skills', 'synapse');
   await until(() => fs.existsSync(skill), 'the synapse skill installed', 40000);
   assert.equal(fs.realpathSync(skill), fs.realpathSync(path.join(root, 'skill')));
   assert.ok(fs.existsSync(path.join(home, '.codex', 'skills', 'synapse')), 'and for Codex');
+  assert.equal(fs.realpathSync(path.join(home, '.agents', 'skills', 'synapse')), fs.realpathSync(path.join(root, 'skill')), 'current Codex discovery path');
+  const guidance = fs.readFileSync(path.join(home, '.codex', 'AGENTS.md'), 'utf8');
+  assert.ok(guidance.startsWith(personal), 'personal instructions survive automatic setup');
+  assert.ok(guidance.includes('<!-- synapse:start -->'), 'global Synapse instructions are installed automatically');
+  assert.equal(fs.readFileSync(path.join(home, '.codex', 'AGENTS.md.bak-synapse'), 'utf8'), personal);
+  assert.ok(JSON.parse(fs.readFileSync(path.join(home, '.codex', 'hooks.json'), 'utf8')).hooks.SubagentStart.length);
   assert.match(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'), /hook\.mjs/, 'the Claude hook');
   assert.match(fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8'), /\[mcp_servers\.synapse\]/, 'the Codex MCP server');
   for (const absent of ['.cursor', '.gemini', '.copilot', '.config']) assert.ok(!fs.existsSync(path.join(home, absent)), `nothing written for a tool that is not installed (${absent})`);
   await until(() => fs.existsSync(calls) && /mcp add -s user synapse/.test(fs.readFileSync(calls, 'utf8')), 'claude mcp add');
   await until(() => JSON.parse(fs.readFileSync(path.join(state, 'seen.json'), 'utf8')).setup, 'setup remembered for this version');
-  await until(() => js(`window.__toasts.some((t) => /set up in your agents/.test(t))`), 'the app says it set up');
+  await js('synapse.integrations.install()');
+  assert.equal(fs.readFileSync(path.join(home, '.codex', 'AGENTS.md'), 'utf8'), guidance, 'reinstalling does not duplicate guidance');
 
   // Settings: done sound
   await js(`document.querySelector('#settings').click()`);

@@ -286,11 +286,12 @@ function removeWorktree(repo, dir, force = false) {
 const ptys = new Map(); // id -> { p, cwd, kind, env }
 let nextPty = 1;
 let win = null;
+let integrationSetup = Promise.resolve();
 
 // Variables that tie a process to the session that launched it. If the app was started from inside an agent
 // (Claude Code, Superset, ...), passing these on makes every agent here think it is that session's child:
 // Claude then stops saving its transcript and never shows up in Synapse.
-const INHERITED = /^(CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_PLUGIN_DATA|AI_AGENT|CODEX_COMPANION_.*|SUPERSET_.*|SYNAPSE_AGENT|SYNAPSE_FORK_.*)$/;
+const INHERITED = /^(CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_PLUGIN_DATA|AI_AGENT|CODEX_COMPANION_.*|CODEX_THREAD_ID|CODEX_SESSION_ID|SUPERSET_.*|SYNAPSE_AGENT|SYNAPSE_FORK_.*)$/;
 // An app started from the Dock has launchd's bare PATH, and the login shell the pty runs never reads
 // .zshrc, which is where PATH usually grows (claude's installer adds ~/.local/bin there). Ask an interactive
 // login shell once for the PATH a terminal would have had.
@@ -314,7 +315,8 @@ function cleanEnv() {
   return env;
 }
 
-function spawnPty({ cwd, kind, command, cols = 120, rows = 36, extraEnv = {} }) {
+async function spawnPty({ cwd, kind, command, cols = 120, rows = 36, extraEnv = {} }) {
+  await integrationSetup;
   const id = String(nextPty++);
   const env = {
     ...cleanEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'synapse', LANG: process.env.LANG || 'en_US.UTF-8',
@@ -495,7 +497,7 @@ function resumeCommand(kind, resume, profiles) {
   }
 }
 
-function spawnFork({ parentPty, question, requestId, cols, rows }) {
+async function spawnFork({ parentPty, question, requestId, cols, rows }) {
   const t = ptys.get(parentPty);
   if (!t) throw new Error('parent session is gone');
   const agent = agentsByPty()[parentPty];
@@ -503,7 +505,7 @@ function spawnFork({ parentPty, question, requestId, cols, rows }) {
   if (DEMO && !agent) command = ''; // demo: fork a shell into another shell, so the tree can be tried without agents
   else if (!agent) throw new Error('that session is not a known agent (shells cannot fork)');
   else command = forkCommand(agent.kind, agent, config().autoSendFork ? question : '', config().profiles);
-  const r = spawnPty({ cwd: t.cwd, kind: t.kind, command, cols, rows, extraEnv: { SYNAPSE_FORK_OF: agent?.synapseId || '', SYNAPSE_FORK_Q: question } }); // the renderer's size, not the 120x36 default
+  const r = await spawnPty({ cwd: t.cwd, kind: t.kind, command, cols, rows, extraEnv: { SYNAPSE_FORK_OF: agent?.synapseId || '', SYNAPSE_FORK_Q: question } }); // the renderer's size, not the 120x36 default
   if (agent?.synapseId) try { recordFork(r.pid, agent.synapseId, question); } catch {} // the canvas draws the fork tree from this
   if (requestId) {
     const reqs = readJSON(FILES.forks, []);
@@ -671,6 +673,7 @@ function playIntro() {
 }
 
 app.whenReady().then(() => {
+  integrationSetup = autoSetup(); // install guidance before a new or restored agent starts
   if (WIN) Menu.setApplicationMenu(null); // its accelerators (Ctrl+W closes the window, Ctrl+R reloads) belong to the terminals
   offerMove();
   if (wantsIntro()) {
@@ -681,7 +684,6 @@ app.whenReady().then(() => {
   pollRequests(); setInterval(pollRequests, REQUEST_POLL);
   serveFriends(); setInterval(serveFriends, TALK_CHECK);
   startPhone();
-  setTimeout(autoSetup, 4000);
   if (UPDATES) { setTimeout(() => updater.check(), UPDATE_DELAY); setInterval(() => updater.check(), UPDATE_EVERY); }
   let refreshing = false;
   setInterval(async () => {
@@ -851,8 +853,8 @@ const handle = (ch, fn) => ipcMain.handle(ch, async (event, a) => {
 });
 handle('state', async () => { await discovery.refresh(); return state(); });
 handle('flags', () => ({ demo: DEMO, packaged: app.isPackaged, view: process.env.SYNAPSE_DESKTOP_VIEW || '', shot: process.env.SYNAPSE_SHOT_VIEW || '', steps: JSON.parse(process.env.SYNAPSE_SHOT_STEPS || '[]'), cwd: process.cwd(), home: os.homedir() }));
-handle('pty:spawn', (a) => {
-  const r = spawnPty(a);
+handle('pty:spawn', async (a) => {
+  const r = await spawnPty(a);
   if (a.phoneReq) { // a terminal the phone asked for: its first prompt goes in once the agent is ready
     phone.spawned(a.phoneReq, r.id);
     prefill(r.id, phonePrompts.get(a.phoneReq), true);
@@ -922,7 +924,9 @@ async function autoSetup() {
   if (!forced && (!app.isPackaged || process.env.SYNAPSE_HOME || (process.platform === 'darwin' && !app.isInApplicationsFolder()))) return;
   const version = app.getVersion();
   // also when an agent CLI turns up after the last setup (Codex installed a week after Synapse)
-  const home = os.homedir(), clis = ['.claude', '.codex', '.gemini', '.cursor', '.copilot', '.config/amp', '.config/opencode'].filter((d) => fs.existsSync(path.join(home, d))).join(' ');
+  const home = process.env.SYNAPSE_USER_HOME || os.homedir();
+  const clis = ['.claude', '.gemini', '.cursor', '.copilot', '.config/amp', '.config/opencode'].map((d) => path.join(home, d))
+    .concat(process.env.CODEX_HOME || path.join(home, '.codex')).filter((d) => fs.existsSync(d)).join(' ');
   if (!forced && seen().setup === version && (seen().setupClis ?? clis) === clis) return;
   try {
     const report = await setupIntegrations(false);

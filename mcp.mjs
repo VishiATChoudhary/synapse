@@ -79,7 +79,7 @@ async function people() {
 let me = null;
 const self = () => {
   if (!me) me = agentForProcess(process.ppid);
-  if (!me) throw new Error('Synapse could not identify this agent from the process tree.');
+  if (!me) throw new Error('Synapse could not identify this agent. Use the synapse CLI from your own shell; run "synapse agents" to list sessions without an identity.');
   return me;
 };
 

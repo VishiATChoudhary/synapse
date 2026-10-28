@@ -2,7 +2,7 @@
 // Prompt hook for Claude Code and Codex (both speak the same hook protocol).
 //  UserPromptSubmit: injects new activity from every agent linked into this session, plus messages
 //                    sent to it, and prints a visible "synapse ..." line in the terminal.
-//  SessionStart:     prints which agents this session is linked with.
+//  SessionStart / SubagentStart: teaches usage, even before the first link exists.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import {
@@ -11,6 +11,7 @@ import {
 import { isConnected, sync } from './remote.mjs';
 
 const BUDGET = Number(process.env.SYNAPSE_BUDGET || 8000);
+const INTRO = fs.readFileSync(new URL('./skill/bootstrap.md', import.meta.url), 'utf8').trim();
 
 async function main() {
   // an answering fork for a friend's agent: no context in, nothing printed
@@ -22,10 +23,9 @@ async function main() {
   const known = (id) => edgesAll.some((e) => e.from === id || e.to === id);
   let me = input.session_id;
   if (!me || !known(me)) {
-    const self = agentForProcess(process.ppid);
+    const self = agentForProcess(process.ppid, input.session_id || undefined);
     if (self) me = self.id;
   }
-  if (!me) return;
 
   // `/sfork <question>`: file a fork request and block the prompt so it never enters this session.
   // The Synapse app (or `synapse fork` when no app runs) picks the request up and spawns the child.
@@ -47,16 +47,22 @@ async function main() {
     return;
   }
 
-  if (event === 'SessionStart') {
+  if (event === 'SessionStart' || event === 'SubagentStart') {
     const ins = edgesAll.filter((e) => e.to === me).map((e) => e.fromName);
     const outs = edgesAll.filter((e) => e.from === me).map((e) => e.toName || '?');
-    if (!ins.length && !outs.length) return;
     const parts = [];
     if (ins.length) parts.push(`⇠ reads ${ins.join(', ')}`);
     if (outs.length) parts.push(`⇢ shares with ${outs.join(', ')}`);
-    process.stdout.write(JSON.stringify({ systemMessage: `synapse  ${parts.join('  ·  ')}` }));
+    process.stdout.write(JSON.stringify({
+      ...(parts.length ? { systemMessage: `synapse  ${parts.join('  ·  ')}` } : {}),
+      hookSpecificOutput: {
+        hookEventName: event,
+        additionalContext: INTRO + (me && me !== input.session_id ? `\n\nYour Synapse agent id is ${me}.` : ''),
+      },
+    }));
     return;
   }
+  if (!me) return;
   const blocks = [];
   const seen = []; // for the line shown to the user
 

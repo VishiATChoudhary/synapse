@@ -41,6 +41,10 @@ jobs:
           if (!(Test-Path "$env:LOCALAPPDATA\Programs\Synapse\resources\cloudflared.exe")) { throw 'cloudflared.exe missing' }
           $env:SYNAPSE_HOME = "$env:RUNNER_TEMP\synapse-home"
           New-Item -ItemType Directory -Force $env:SYNAPSE_HOME | Out-Null
+          $env:SYNAPSE_USER_HOME = "$env:RUNNER_TEMP\synapse-user"
+          $env:CODEX_HOME = "$env:SYNAPSE_USER_HOME\.codex"
+          New-Item -ItemType Directory -Force $env:CODEX_HOME | Out-Null
+          $env:SYNAPSE_AUTO_SETUP = '1'
           '{"skipLogin": true}' | Set-Content "$env:SYNAPSE_HOME\app.json" # straight to the terminals, past sign-in and the tour
           $env:SYNAPSE_SHOT = "$env:RUNNER_TEMP\synapse-shot.png"
           $env:SYNAPSE_SHOT_DELAY = '8000'
@@ -50,6 +54,8 @@ jobs:
           if (!$p.WaitForExit(60000)) { Stop-Process -Id $p.Id -Force; Get-Content "$env:RUNNER_TEMP\app.log", "$env:RUNNER_TEMP\app.err"; throw 'the app did not quit after its screenshot' }
           Get-Content "$env:RUNNER_TEMP\app.log", "$env:RUNNER_TEMP\app.err"
           if (!(Test-Path $env:SYNAPSE_SHOT)) { throw 'no screenshot' }
+          if (!(Test-Path "$env:SYNAPSE_USER_HOME\.agents\skills\synapse\SKILL.md")) { throw 'Codex skill was not installed on first launch' }
+          if (!(Select-String -Path "$env:CODEX_HOME\AGENTS.md" -Pattern '<!-- synapse:start -->' -Quiet)) { throw 'Codex guidance was not installed on first launch' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

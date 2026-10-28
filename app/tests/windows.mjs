@@ -8,6 +8,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 assert.equal(process.platform, 'win32', 'this test is for Windows');
 const require = createRequire(new URL('../package.json', import.meta.url));
@@ -53,6 +55,27 @@ try {
 
   assert.equal(lib.agentForProcess(agent.pid)?.id, agent.id, 'the MCP server finds its agent by walking up');
   log('PASS agentForProcess');
+
+  const userHome = path.join(tmp, 'user'), codexHome = path.join(userHome, '.codex');
+  fs.mkdirSync(codexHome, { recursive: true });
+  const personal = '# My instructions\nKeep my conventions.\n';
+  fs.writeFileSync(path.join(codexHome, 'AGENTS.md'), personal);
+  const setupEnv = { ...process.env, SYNAPSE_USER_HOME: userHome, CODEX_HOME: codexHome };
+  const installer = fileURLToPath(new URL('../../install.mjs', import.meta.url));
+  for (let pass = 0; pass < 2; pass++) {
+    const setup = spawnSync(process.execPath, [installer], { env: setupEnv, encoding: 'utf8', timeout: 30000 });
+    assert.equal(setup.status, 0, setup.stderr || setup.stdout);
+  }
+  const guidance = fs.readFileSync(path.join(codexHome, 'AGENTS.md'), 'utf8');
+  assert.ok(guidance.startsWith(personal));
+  assert.equal(guidance.split('<!-- synapse:start -->').length, 2);
+  assert.ok(fs.existsSync(path.join(userHome, '.agents', 'skills', 'synapse', 'SKILL.md')));
+  assert.ok(JSON.parse(fs.readFileSync(path.join(codexHome, 'hooks.json'), 'utf8')).hooks.SubagentStart.length);
+  const launcher = path.join(tmp, 'state', 'bin', 'synapse.cmd');
+  const listed = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${launcher}" agents`], { env: setupEnv, encoding: 'utf8', timeout: 30000 });
+  assert.equal(listed.status, 0, listed.stderr || listed.stdout);
+  assert.ok(JSON.parse(listed.stdout).some((a) => a.id === agent.id));
+  log('PASS Windows installs Codex guidance, junction skills and a working CLI launcher without duplicate instructions');
 
   const proj = lib.projectOf(process.cwd());
   assert.ok(!proj.key.includes('/') || proj.key.startsWith('project:'), `project key uses Windows paths: ${proj.key}`);

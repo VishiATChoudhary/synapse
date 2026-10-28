@@ -232,8 +232,17 @@ synapse rename-project synapse "Synapse canvas"   # rename a project frame
 synapse ui                          # start the workspace
 ```
 
-The installer puts the launcher at `~/.synapse/bin/synapse` and adds a **`/synapse` skill** to Claude
-Code and Codex, so you can just say *"connect to the codex agent and ask what it found"*.
+The downloaded app sets this up automatically on its first launch and after each update, before
+starting new or restored agents. Codex gets the Synapse skill in `~/.agents/skills`, a compatibility
+link under `$CODEX_HOME/skills` (default `~/.codex/skills`), and a small managed section in its
+global `AGENTS.md`. Existing instructions are preserved. Startup hooks also teach new Codex
+sessions and subagents how to use Synapse before their first link exists.
+
+Use `$synapse` in Codex or `/synapse` in Claude, or just say *"connect to the codex agent and ask
+what it found"*. The launcher is `~/.synapse/bin/synapse` (`synapse.cmd` on Windows). If a shared
+Codex app-server's MCP connection cannot identify the session, use the CLI from that agent's
+own shell; it also recognizes `CODEX_THREAD_ID`. `synapse agents` lists sessions without requiring
+an identity. Agents already running outside Synapse may need a restart to load the new setup.
 
 ## Canvas controls
 

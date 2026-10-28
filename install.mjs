@@ -89,11 +89,11 @@ function addHooks(d, events) {
   }
 }
 if (installed('claude hooks', path.join(HOME, '.claude'))) editJSON('claude hooks', path.join(HOME, '.claude', 'settings.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart']));
-if (installed('codex hooks', CODEX)) editJSON('codex hooks', path.join(CODEX, 'hooks.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart']));
+if (installed('codex hooks', CODEX)) editJSON('codex hooks', path.join(CODEX, 'hooks.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart', 'SubagentStart']));
 
 // Codex: TOML, append a table if missing
 if (installed('codex mcp', CODEX)) {
-  const file = path.join(process.env.CODEX_HOME || path.join(HOME, '.codex'), 'config.toml');
+  const file = path.join(CODEX, 'config.toml');
   const toml = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   if (/^\[mcp_servers\.synapse\]/m.test(toml)) report.push('ok    codex mcp: already configured');
   else {
@@ -118,8 +118,10 @@ if (installed('opencode mcp', path.join(HOME, '.config', 'opencode'))) editJSON(
 
 // `synapse` launcher, so the skill and hook messages never depend on where the repo lives
 {
-  const bin = path.join(process.env.SYNAPSE_HOME || path.join(HOME, '.synapse'), 'bin', 'synapse');
-  const script = `#!/bin/sh\nexec ${quote(NODE)} ${quote(path.join(ROOT, 'cli.mjs'))} "$@"\n`;
+  const bin = path.join(process.env.SYNAPSE_HOME || path.join(HOME, '.synapse'), 'bin', process.platform === 'win32' ? 'synapse.cmd' : 'synapse');
+  const script = process.platform === 'win32'
+    ? `@echo off\r\ncall "${NODE}" "${path.join(ROOT, 'cli.mjs')}" %*\r\n`
+    : `#!/bin/sh\nexec ${quote(NODE)} ${quote(path.join(ROOT, 'cli.mjs'))} "$@"\n`;
   const current = fs.existsSync(bin) ? fs.readFileSync(bin, 'utf8') : '';
   if (current === script) report.push(`ok    launcher: ${bin}`);
   else {
@@ -129,15 +131,35 @@ if (installed('opencode mcp', path.join(HOME, '.config', 'opencode'))) editJSON(
 }
 
 // Skill: symlink so the repo stays the source of truth
-for (const dir of [path.join(HOME, '.claude', 'skills'), path.join(HOME, '.codex', 'skills')]) {
-  if (!fs.existsSync(path.dirname(dir))) continue;
+const skillDirs = [];
+if (fs.existsSync(path.join(HOME, '.claude'))) skillDirs.push(path.join(HOME, '.claude', 'skills'));
+if (fs.existsSync(CODEX)) skillDirs.push(path.join(HOME, '.agents', 'skills'), path.join(CODEX, 'skills'));
+for (const dir of skillDirs) {
   const link = path.join(dir, 'synapse'), target = path.join(ROOT, 'skill');
   let current = null;
   try { current = fs.readlinkSync(link); } catch {}
   if (current === target) { report.push(`ok    skill: ${link}`); continue; }
   if (fs.existsSync(link) && current === null) { report.push(`skip  skill: ${link} exists and is not a symlink`); continue; }
-  if (!DRY) { fs.mkdirSync(dir, { recursive: true }); if (current) fs.unlinkSync(link); fs.symlinkSync(target, link); }
+  if (!DRY) { fs.mkdirSync(dir, { recursive: true }); if (current) fs.unlinkSync(link); fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir'); }
   report.push(`added skill: ${link}`);
+}
+
+// Skills load on demand; keep a small pointer in the effective global instructions as well.
+if (installed('codex guidance', CODEX)) {
+  const override = path.join(CODEX, 'AGENTS.override.md');
+  const file = fs.existsSync(override) && fs.readFileSync(override, 'utf8').trim()
+    ? override : path.join(CODEX, 'AGENTS.md');
+  const before = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const intro = fs.readFileSync(new URL('./skill/bootstrap.md', import.meta.url), 'utf8').trim();
+  const block = `<!-- synapse:start -->\n${intro}\n<!-- synapse:end -->`;
+  const pattern = /<!-- synapse:start -->[\s\S]*?<!-- synapse:end -->/;
+  const after = pattern.test(before) ? before.replace(pattern, block)
+    : `${before}${before && !before.endsWith('\n') ? '\n' : ''}${before.trim() ? '\n' : ''}${block}\n`;
+  if (after === before) report.push('ok    codex guidance: already configured');
+  else {
+    if (!DRY) { backup(file); fs.writeFileSync(file, after); }
+    report.push(`added codex guidance: ${file}`);
+  }
 }
 
 console.log(report.join('\n'));

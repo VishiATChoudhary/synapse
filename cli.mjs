@@ -44,8 +44,7 @@ const args = rest.filter((a) => !a.startsWith('--'));
 const opt = (name, d) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : d; };
 
 function whoami() {
-  const forced = process.env.SYNAPSE_AGENT;
-  const me = forced ? listAgents().find((a) => a.id === forced || a.name === forced) : agentForProcess(process.ppid);
+  const me = agentForProcess(process.ppid);
   if (!me) throw new Error('Could not tell which agent is running this command. Set SYNAPSE_AGENT=<name or id>.');
   return me;
 }
