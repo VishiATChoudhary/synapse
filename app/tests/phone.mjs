@@ -70,6 +70,13 @@ assert.deepEqual(st.kinds, ['claude', 'codex']);
 await c.send({ t: 'watch', id: api.id });
 await wait(c, 'messages', 'the watched conversation arrives');
 assert.ok(take('messages').messages.length > 0);
+assert.ok(st.agents.some((a) => a.about), 'each agent says what it is about');
+
+// the chats the phone keeps come along too, without being opened
+const kept = st.agents.find((a) => a.id !== api.id);
+inbox.length = 0;
+await c.send({ t: 'ping', keep: [kept.id] });
+await until('a kept chat arrives', async () => { inbox.push(...await c.poll()); return inbox.some((m) => m.t === 'messages' && m.id === kept.id); });
 
 await c.send({ t: 'send', id: api.id, text: 'ship it' });
 await until('the prompt is typed into its terminal', () => typed.some((x) => x.text === 'ship it'));
@@ -100,6 +107,15 @@ await until('stop sends Esc', () => typed.some((x) => x.data === '\x1b'));
 // links in a chat open on the phone; anything the agent's messages do not mention is refused before any tunnel
 const reply = (req) => until(`answer to ${req}`, async () => { inbox.push(...await c.poll()); return inbox.find((m) => m.req === req); });
 const limits = listAgents().find((a) => a.name === 'api-rate-limit');
+
+// renamed from the phone; a name another agent has is refused
+await c.send({ t: 'rename', req: 'n1', id: kept.id, name: 'Login rewrite' });
+assert.equal((await reply('n1')).name, 'Login rewrite');
+assert.equal(listAgents().find((a) => a.id === kept.id).name, 'Login rewrite');
+await c.send({ t: 'rename', req: 'n2', id: api.id, name: 'login REWRITE' });
+assert.match((await reply('n2')).error, /already called/);
+await c.send({ t: 'rename', req: 'n3', id: kept.id, name: '' });
+assert.equal((await reply('n3')).name, kept.name, 'an empty name goes back to the automatic one');
 await c.send({ t: 'share', req: 's1', id: limits.id, target: '/etc/passwd' });
 assert.match((await reply('s1')).error, /not in this chat/);
 await c.send({ t: 'share', req: 's2', id: limits.id, target: 'config/limits.yaml' });

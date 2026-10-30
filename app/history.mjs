@@ -111,6 +111,19 @@ function describe(kind, file) {
   return { id, cwd, title: clip(summary || title), started };
 }
 
+// what a running agent's chat is about, for the phone: its summary or title, else its first prompt. Read at most
+// once a minute per chat; only Claude and Codex chats are read this way
+const abouts = new Map();
+export function aboutOf(a) {
+  if (!a.transcript || !['claude', 'codex'].includes(a.kind)) return null;
+  const hit = abouts.get(a.transcript);
+  if (hit && Date.now() - hit.at < 60_000) return hit.about;
+  let about = null;
+  try { about = describe(a.kind, a.transcript)?.title || null; } catch {}
+  abouts.set(a.transcript, { about, at: Date.now() });
+  return about;
+}
+
 // the imported chats, newest first; a chat whose folder is gone is still listed, marked missing. The first scan
 // reads thousands of files: it hands the event loop back every few dozen so the app stays responsive
 let scanning = null;

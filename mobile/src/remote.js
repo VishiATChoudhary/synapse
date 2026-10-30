@@ -2,6 +2,7 @@
 // while the app is in front, plus the actions the screens call. Same shape as the demo source.
 import { AppState } from 'react-native';
 import { connect } from './link';
+import * as cache from './cache';
 import * as media from './media';
 
 const FAST = 1500, PING = 30_000;
@@ -23,7 +24,8 @@ export function createRemote(emit, acc, computer) {
   const fail = (e) => { state = { ...state, error: e.message }; emit(state); setTimeout(() => { state = { ...state, error: null }; emit(state); }, 5000); };
   const say = (msg) => conn.send(msg).catch(fail);
   // hello says whether this phone shows images and videos (the settings switch)
-  const hello = () => ({ t: 'hello', ...(media.supported && media.mediaOn() ? { media: 1 } : {}) });
+  // and which chats it keeps (cache.js), so the computer keeps those fresh too
+  const hello = () => ({ t: 'hello', keep: cache.keep(), ...(media.supported && media.mediaOn() ? { media: 1 } : {}) });
   const ask = (msg) => conn.send(msg).catch(() => {});
   media.attach(ask);
 
@@ -32,10 +34,11 @@ export function createRemote(emit, acc, computer) {
     if (m.t === 'waiting') state = { ...state, access: 'waiting' };
     else if (m.t !== 'error') state = { ...state, access: 'ok' };
     if (m.t === 'state') snap = { agents: m.agents || [], projects: m.projects || [], kinds: m.kinds || [], shares: m.shares || [] };
-    else if (m.t === 'messages') messages = { ...messages, [m.id]: m.messages || [] };
+    else if (m.t === 'messages') { messages = { ...messages, [m.id]: m.messages || [] }; cache.remember(m.id, m.messages || []); }
     else if (m.t === 'media' || m.t === 'piece') media.receive(m);
     else if (m.t === 'spawned') { waiting.get(m.req)?.(m.id); waiting.delete(m.req); }
     else if (m.t === 'shared') { opening.get(m.req)?.({ share: m.share }); opening.delete(m.req); }
+    else if (m.t === 'renamed') { opening.get(m.req)?.({ ok: true, name: m.name }); opening.delete(m.req); }
     else if (m.t === 'error' && m.req && opening.has(m.req)) { opening.get(m.req)({ error: m.error }); opening.delete(m.req); } // shown where it was asked
     else if (m.t === 'error') { if (m.req && waiting.has(m.req)) { waiting.get(m.req)(null); waiting.delete(m.req); } fail(new Error(m.error)); }
   }
@@ -45,7 +48,7 @@ export function createRemote(emit, acc, computer) {
     try {
       // until the computer has allowed this phone, keep saying hello so it answers as soon as it is allowed
       const ok = state.access === 'ok';
-      if (Date.now() - lastPing > (ok ? PING : 4000)) { lastPing = Date.now(); await conn.send(ok ? { t: 'ping' } : hello()); }
+      if (Date.now() - lastPing > (ok ? PING : 4000)) { lastPing = Date.now(); await conn.send(ok ? { t: 'ping', keep: cache.keep() } : hello()); }
       for (const m of await conn.poll()) receive(m);
       publish();
     } catch (e) {
@@ -66,13 +69,25 @@ export function createRemote(emit, acc, computer) {
   const wake = () => { clearTimeout(timer); lastPing = Date.now(); say(hello()).then(tick); if (watch) say({ t: 'watch', id: watch }); };
   const offSwitch = media.onSwitch(() => wake()); // switched in settings: tell the computer
   const sub = AppState.addEventListener('change', (s) => { if (s === 'active') wake(); else clearTimeout(timer); });
+  // the kept chats show at once, before the computer answers
+  cache.load().then((kept) => { messages = { ...kept, ...messages }; publish(); });
   wake();
   emit(state);
 
   return {
     name: 'account',
     close() { stopped = true; clearTimeout(timer); offSwitch(); sub.remove(); media.detach(ask); conn.send({ t: 'bye' }).catch(() => {}); },
-    watch(id) { watch = id; say({ t: 'watch', id }); },
+    watch(id) {
+      watch = id;
+      if (id) cache.opened(id);
+      say({ t: 'watch', id, keep: cache.keep() });
+    },
+    // an empty name goes back to the automatic one; resolves with { ok, name } or { error }
+    async rename(id, name) {
+      const r = await request({ t: 'rename', id, name: String(name || '').trim().slice(0, 48) }, 15_000);
+      if (r.ok) { snap = { ...snap, agents: snap.agents.map((a) => (a.id === id ? { ...a, name: r.name } : a)) }; publish(); }
+      return r;
+    },
     send(id, text) {
       messages = { ...messages, [id]: [...(messages[id] || []), { role: 'user', text, ts: new Date().toISOString(), tool: false }] };
       publish();

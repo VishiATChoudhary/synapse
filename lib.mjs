@@ -23,6 +23,7 @@ export const FILES = {
   messages: path.join(DATA, 'messages.json'),
   plans: path.join(DATA, 'plans.json'),             // shared plans between agents (plan.mjs)
   names: path.join(DATA, 'names.json'),
+  ids: path.join(DATA, 'ids.json'),                 // transcript -> the id of the agent writing it (carryOver)
   projects: path.join(DATA, 'projects.json'),
   forks: path.join(DATA, 'forks.json'),
   lineage: path.join(DATA, 'lineage.json'),
@@ -380,7 +381,9 @@ function claudeAgents() {
     const s = readJSON(path.join(dir, n), null);
     if (!s?.sessionId || !s.pid || !alive(s.pid)) continue;
     out.push({
-      id: s.sessionId, pid: s.pid, kind: 'claude', name: s.name || path.basename(s.cwd), cwd: s.cwd,
+      // a name Claude Code made up itself (synapse-4d) gives way to the one every agent gets: claude-<folder>
+      id: s.sessionId, pid: s.pid, kind: 'claude', cwd: s.cwd,
+      ...(s.name && s.nameSource !== 'derived' ? { name: s.name } : { name: `claude-${path.basename(s.cwd)}`.toLowerCase(), generated: true }),
       status: s.status || 'idle', startedAt: s.startedAt, updatedAt: s.updatedAt,
       transcript: claudeTranscript(s.sessionId, s.cwd), format: 'claude',
     });
@@ -704,7 +707,7 @@ function processAgents() {
     // no transcript to go by: busy while it burns CPU or keeps writing
     const busy = turn === null ? cpu > 4 || Date.now() - touched < 4000 : turn && (cpu > 4 || Date.now() - touched < TURN_STALE);
     return {
-      id, pid: r.pid, kind: r.kind, name: `${r.kind}-${path.basename(cwd)}`.toLowerCase(), cwd,
+      id, pid: r.pid, kind: r.kind, name: `${r.kind}-${path.basename(cwd)}`.toLowerCase(), generated: true, cwd,
       status: busy ? 'busy' : 'idle', startedAt: r.start, updatedAt: Math.max(r.start, touched || 0),
       transcript, format,
     };
@@ -760,6 +763,16 @@ export function localAgents() {
   const ext = externalForks();
   const found = (DEMO ? DEMO.demoAgents() : [...claudeAgents(), ...processAgents()])
     .filter((a) => !ext.sessions.has(a.id) && !ext.pids.has(a.pid));
+  if (!DEMO) carryOver(found);
+  // generated names are <kind>-<folder>; a second agent of a kind in one folder is <kind>-<folder>-2, and so on,
+  // in the order they started
+  const taken = new Map();
+  for (const a of found.filter((x) => x.generated).sort((x, y) => (x.startedAt || 0) - (y.startedAt || 0))) {
+    const n = (taken.get(a.name) || 0) + 1;
+    taken.set(a.name, n);
+    if (n > 1) a.name = `${a.name}-${n}`;
+  }
+  for (const a of found) delete a.generated;
   // names given in the canvas or with `synapse rename` win over the generated ones
   const names = readJSON(FILES.names, {});
   // forks: which agent each one was forked from and the question it was given (the app records it by pid)
@@ -771,6 +784,46 @@ export function localAgents() {
     const f = lineage[host] || lineage[a.pid];
     return f ? { ...n, forkOf: f.parent, forkQ: f.question } : n;
   });
+}
+
+// Codex, Gemini and the rest are known by their pid, so a restart makes them new to Synapse. The conversation
+// file they write stays the same: an agent that comes back writing the transcript of one that is gone takes over
+// its name, links, unread messages and plans.
+export function carryOver(found) {
+  const ids = readJSON(FILES.ids, {}), moved = new Map();
+  let changed = false;
+  for (const a of found) {
+    if (a.kind === 'claude' || !a.transcript || ids[a.transcript] === a.id) continue; // a Claude session keeps its id
+    const old = ids[a.transcript];
+    if (old && !found.some((x) => x.id === old)) moved.set(old, a.id);
+    delete ids[a.transcript];
+    ids[a.transcript] = a.id; // newest last, so the oldest go first below
+    changed = true;
+  }
+  if (!changed) return;
+  writeJSON(FILES.ids, Object.fromEntries(Object.entries(ids).slice(-500)));
+  if (moved.size) moveAgents(moved);
+}
+
+export function moveAgents(moved) {
+  const to = (id) => moved.get(id) || id;
+  const names = readJSON(FILES.names, {});
+  for (const [o, n] of moved) if (names[o]) { names[n] ??= names[o]; delete names[o]; }
+  writeJSON(FILES.names, names);
+  const edges = readJSON(FILES.edges, []), pairs = new Set();
+  writeJSON(FILES.edges, edges.map((e) => ({ ...e, from: to(e.from), to: to(e.to) })).filter((e) => {
+    const k = `${e.from}>${e.to}`;
+    if (e.from === e.to || pairs.has(k)) return false;
+    pairs.add(k);
+    return true;
+  }));
+  writeJSON(FILES.messages, readJSON(FILES.messages, []).map((m) => (m.delivered ? m : { ...m, from: to(m.from), to: to(m.to) })));
+  const plans = readJSON(FILES.plans, []);
+  for (const p of plans) {
+    for (const m of [p.startedBy, ...p.members]) m.id = to(m.id);
+    for (const t of p.tasks) if (t.owner) t.owner.id = to(t.owner.id);
+  }
+  writeJSON(FILES.plans, plans);
 }
 
 // Remember that the process `pid` was forked from agent `parent` to look into `question`. Entries for
@@ -823,9 +876,13 @@ export function agentForProcess(pid, sessionId = process.env.CODEX_THREAD_ID || 
 // Resolve "name", "id" or a unique prefix of either. A friend's agent also answers to "name@friend" (their name or their handle).
 export function findAgent(agents, query) {
   const q = String(query || '').toLowerCase().trim();
-  return agents.find((a) => a.id === query || a.name.toLowerCase() === q)
+  // a name given in the app or the generated one (codex-staging); last, a part of either when only one agent has it
+  const names = (a) => [a.name, a.autoName].filter(Boolean).map((n) => n.toLowerCase());
+  const loose = q ? agents.filter((a) => !a.remote && names(a).some((n) => n.includes(q))) : [];
+  return agents.find((a) => a.id === query || names(a).includes(q))
     || agents.find((a) => a.remote && (`${a.name}@${a.remote.owner}`.toLowerCase() === q || (a.remote.handle && `${a.name}@${a.remote.handle}`.toLowerCase() === q)))
-    || agents.find((a) => a.name.toLowerCase().startsWith(q) || a.id.startsWith(q)) || null;
+    || agents.find((a) => a.name.toLowerCase().startsWith(q) || a.id.startsWith(q))
+    || (loose.length === 1 ? loose[0] : null);
 }
 
 // ---------------------------------------------------------------- projects & colours

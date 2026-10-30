@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMediaItem, useMediaOn, wantImage, wantVideo } from './media';
-import { useTheme } from './theme';
+import { R, round, useTheme } from './theme';
 import { Meta } from './ui';
 
 const H = 132;
@@ -23,9 +23,9 @@ function Thumb({ item: r, onOpen }) {
   const t = useTheme();
   const s = useSource(r);
   const [ratio, setRatio] = useState(4 / 3);
-  if (s.state === 'failed') return <View style={{ height: H, width: H * ratio, borderWidth: 1, borderColor: t.rule, alignItems: 'center', justifyContent: 'center' }}><Meta>Image unavailable</Meta></View>;
+  if (s.state === 'failed') return <View style={{ height: H, width: H * ratio, backgroundColor: t.wash, ...round(R.row), alignItems: 'center', justifyContent: 'center' }}><Meta>Image unavailable</Meta></View>;
   return (
-    <Pressable onPress={() => s.source && onOpen(s.source)} style={{ height: H, width: H * ratio, backgroundColor: t.rule }}>
+    <Pressable onPress={() => s.source && onOpen(s.source)} style={{ height: H, width: H * ratio, backgroundColor: t.rule, ...round(R.row), overflow: 'hidden' }}>
       {s.source && <Image source={s.source} style={{ width: '100%', height: '100%' }} contentFit="cover" transition={120}
         onLoad={(e) => e.source?.width && setRatio(Math.min(2.2, Math.max(0.5, e.source.width / e.source.height)))} />}
     </Pressable>
@@ -49,16 +49,16 @@ function Video({ item: r }) {
     : it?.state === 'loading' ? `On its way, ${it.n ? Math.round((100 * (it.got || 0)) / it.n) : 0}%`
     : it?.state === 'failed' ? 'Could not get this video' : null;
   return (
-    <View style={{ width: '100%', borderWidth: 1, borderColor: t.rule }}>
+    <View style={{ width: '100%', backgroundColor: t.card, ...round(R.row), overflow: 'hidden' }}>
       {playing && ready ? <Player source={r.asset || { uri: it.uri }} /> : (
         <Pressable disabled={!ready} onPress={() => setPlaying(true)} style={{ width: '100%', aspectRatio: 16 / 9, backgroundColor: t.ink, alignItems: 'center', justifyContent: 'center' }}>
           {poster.source && <Image source={poster.source} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: ready ? 1 : 0.5 }} contentFit="cover" />}
-          {ready && <View style={{ width: 54, height: 54, backgroundColor: t.sig, alignItems: 'center', justifyContent: 'center' }}>
+          {ready && <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: t.sig, alignItems: 'center', justifyContent: 'center' }}>
             <View style={{ marginLeft: 4, width: 0, height: 0, borderTopWidth: 11, borderBottomWidth: 11, borderLeftWidth: 18, borderTopColor: 'transparent', borderBottomColor: 'transparent', borderLeftColor: t.onInk || '#fff' }} />
           </View>}
         </Pressable>
       )}
-      <View style={{ flexDirection: 'row', gap: 10, padding: 8 }}>
+      <View style={{ flexDirection: 'row', gap: 10, paddingVertical: 10, paddingHorizontal: 12 }}>
         <Meta style={{ flex: 1 }} color={t.ink2} numberOfLines={1}>{r.name}</Meta>
         {note ? <Meta color={r.state === 'failed' || it?.state === 'failed' ? t.sig : t.ink3}>{note}</Meta>
           : <Meta>{r.cut ? `First ${time(r.cut)} of ${time(r.duration)}` : time(r.duration)}</Meta>}

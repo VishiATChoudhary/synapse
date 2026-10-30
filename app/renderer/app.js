@@ -2202,6 +2202,16 @@ function apply(st) {
     x.lastStatus = st;
     if (a) watchTurn(x, a);
     if (a && x.named === false) { x.named = true; nameForkAgent(x); }
+    // A tab and its agent keep one name. Renamed elsewhere (the canvas, `synapse rename`), the tab follows. And a
+    // tab's name outlives its agent's id: Codex, Gemini and the rest are known by pid, so after a restart the agent is
+    // new to Synapse and has lost the name the user gave it; it gets the tab's name again. A name another agent has is
+    // not tried again for the same agent.
+    if (a?.given && !x.renaming && a.name !== x.title) x.title = a.name;
+    const want = a && `${a.synapseId}\n${x.title}`;
+    if (a && !a.given && !x.exited && !x.renaming && x.named !== false && x.title !== x.kind && a.name !== x.title && x.nameFailed !== want) {
+      x.renaming = true;
+      renameTab(x, x.title).catch(() => { x.nameFailed = want; }).finally(() => { x.renaming = false; });
+    }
   }
   wakeAgents();
   refreshPullRequests();

@@ -349,7 +349,7 @@ function agentsByPty() {
   const out = {};
   for (const [id, t] of ptys) {
     const a = agents.find((x) => hostOf(x) === t.pid);
-    if (a) out[id] = { synapseId: a.id, name: a.name, kind: a.kind, status: a.status, transcript: a.transcript };
+    if (a) out[id] = { synapseId: a.id, name: a.name, given: !!a.autoName, kind: a.kind, status: a.status, transcript: a.transcript };
   }
   return out;
 }

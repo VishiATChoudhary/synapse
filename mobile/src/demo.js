@@ -48,6 +48,16 @@ const AGENTS = [
   )],
 ];
 
+// what each sample session is about, as the computer reports it (its summary or first prompt)
+const ABOUT = {
+  'api-auth': 'Move session auth to short-lived JWTs with refresh rotation',
+  'rate-limit': 'Per-tenant rate limits for the public API',
+  'auth-review': 'Review the auth branch before it merges',
+  checkout: 'Rebuild the checkout page on the new design system',
+  e2e: 'Playwright tests for checkout',
+  'ranking-eval': 'Ranking eval on the new embeddings',
+};
+
 const REPLIES = [
   'On it. Reading the relevant files first.',
   'Done. Tests pass locally, nothing pushed yet.',
@@ -62,7 +72,7 @@ export function createDemo(emit) {
       ...[...new Set(AGENTS.filter((a) => PROJECTS[a[2]] === p && a[3]).map((a) => a[3]))].map((w) => ({ path: `${p.key}/.worktrees/${w}`, name: w, home: false }))] })),
     kinds: ['claude', 'codex', 'gemini', 'opencode', 'cursor-agent'],
     agents: AGENTS.map(([name, kind, pi, worktree, messages, needs], i) => ({
-      id: `demo-${name}`, kind, name, worktree, project: PROJECTS[pi], status: i === 1 ? 'busy' : 'idle', inApp: true,
+      id: `demo-${name}`, kind, name, auto: name, about: ABOUT[name] || null, worktree, project: PROJECTS[pi], status: i === 1 ? 'busy' : 'idle', inApp: true,
       needs: needs || null, messages, updatedAt: now - i * 300_000,
     })),
   };
@@ -101,6 +111,13 @@ export function createDemo(emit) {
       return Promise.resolve({ share: state.shares.find((s) => s.id === sid) });
     },
     unshare(sid) { state.shares = (state.shares || []).filter((s) => s.id !== sid); emit({ ...state }); },
+    rename(id, name) {
+      const a = state.agents.find((x) => x.id === id);
+      name = String(name || '').trim().slice(0, 48);
+      if (name && state.agents.some((x) => x.id !== id && x.name.toLowerCase() === name.toLowerCase())) return Promise.resolve({ error: `another agent is already called "${name}"` });
+      patch(id, () => ({ name: name || a.auto }));
+      return Promise.resolve({ ok: true, name: name || a.auto });
+    },
     stop(id) {
       patch(id, (a) => ({ ...push('assistant', 'Interrupted by user')(a), status: 'idle' }));
     },

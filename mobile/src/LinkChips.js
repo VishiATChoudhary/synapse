@@ -3,11 +3,11 @@
 import { router } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { useState } from 'react';
-import { Platform, Pressable, Text, View } from 'react-native';
+import { Platform, Text, View } from 'react-native';
 import { isSite, labelOf, targetsIn } from './links';
 import { source } from './store';
-import { FONT, useTheme } from './theme';
-import { Meta } from './ui';
+import { FONT, R, round, useTheme } from './theme';
+import { Meta, Press, haptic } from './ui';
 
 export async function openShare(url) {
   if (Platform.OS === 'web') { window.open(url, '_blank'); return; }
@@ -27,13 +27,13 @@ function Chip({ agentId, target }) {
   };
   return (
     <View style={{ gap: 4, maxWidth: '100%' }}>
-      <Pressable onPress={open} onLongPress={() => router.push('/live')} style={({ pressed }) => ({
-        flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', borderWidth: 1, borderColor: busy ? t.sig : t.rule,
-        paddingVertical: 6, paddingHorizontal: 10, opacity: pressed ? 0.6 : 1,
-      })}>
+      <Press onPress={() => { haptic.tap(); open(); }} onLongPress={() => router.push('/live')} sink={0.95} style={{
+        flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', backgroundColor: busy ? t.sigWash : t.wash,
+        ...round(R.pill), paddingVertical: 7, paddingHorizontal: 12,
+      }}>
         <Text style={{ fontFamily: FONT.mono, fontSize: 12, color: t.sig }}>{busy ? '…' : isSite(target) ? '◎' : '↗'}</Text>
         <Text style={{ fontFamily: FONT.mono, fontSize: 12, color: t.ink, flexShrink: 1 }} numberOfLines={1}>{busy ? `Starting a secure link to ${labelOf(target)}…` : labelOf(target)}</Text>
-      </Pressable>
+      </Press>
       {busy && <Meta>Takes about 10 seconds the first time.</Meta>}
       {!!error && <Meta color={t.sig}>{error}</Meta>}
     </View>

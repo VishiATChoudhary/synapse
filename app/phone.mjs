@@ -15,7 +15,8 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import nacl from 'tweetnacl';
-import { DATA, readJSON, writeJSON, listAgents, readAgentMessages, projectOf, colorOf } from '../lib.mjs';
+import { DATA, readJSON, writeJSON, listAgents, readAgentMessages, projectOf, colorOf, renameAgent } from '../lib.mjs';
+import { aboutOf } from './history.mjs';
 import * as media from './phone-media.mjs';
 import * as shares from './phone-share.mjs';
 
@@ -24,6 +25,7 @@ const ACTIVE = 2 * 60_000;           // a phone that checked in this recently ge
 const FAST = 1500, SLOW = 10_000;    // poll while a phone is around, else now and then
 const MAX_AGE = 5 * 60_000;          // older messages are replays, or a phone with a very wrong clock
 const MSGS = 40, MSG_CHARS = 4000, TEXT_CHARS = 20_000;
+const KEEP = 8, KEEP_EVERY = 15_000; // chats the phone keeps (its most opened): sent along, at most this often each
 
 const b64 = (u) => Buffer.from(u).toString('base64');
 const unb64 = (s) => new Uint8Array(Buffer.from(String(s || ''), 'base64'));
@@ -153,10 +155,11 @@ async function receive(id, it) {
 }
 
 async function handle(id, phone, m) {
-  const l = live.get(phone.id) || { watch: null, media: false, sent: {} };
+  const l = live.get(phone.id) || { watch: null, media: false, sent: {}, keep: [], kept: {} };
   live.set(phone.id, l);
+  if (Array.isArray(m.keep)) l.keep = m.keep.filter((x) => typeof x === 'string').slice(0, KEEP);
   // a phone that says media: 1 shows images and videos; older builds (and the switch off) get text only
-  if (m.t === 'hello') { l.sent = {}; l.media = m.media === 1; return send(id, phone, { t: 'hello', computer: hostName(), media: 1 }); }
+  if (m.t === 'hello') { l.sent = {}; l.kept = {}; l.media = m.media === 1; return send(id, phone, { t: 'hello', computer: hostName(), media: 1 }); }
   if (m.t === 'media') {
     const img = media.image(String(m.id || ''));
     if (!img) return send(id, phone, { t: 'media', id: m.id, gone: true });
@@ -184,6 +187,13 @@ async function handle(id, phone, m) {
   if (m.t === 'unshare') { shares.stop(String(m.share || '')); return; }
   if (m.t === 'watch') { l.watch = typeof m.id === 'string' ? m.id : null; l.sent.messages = null; return; }
   if (m.t === 'bye') { live.delete(phone.id); return; }
+  // any agent here, running in the app or not; the app's tab takes the name too
+  if (m.t === 'rename') {
+    const a = listAgents().find((x) => x.id === m.id && !x.remote);
+    if (!a) throw new Error('that agent is no longer running');
+    const r = renameAgent(a, clean(m.name, 48));
+    return send(id, phone, { t: 'renamed', req: m.req, id: a.id, name: r.name });
+  }
   if (m.t === 'send' || m.t === 'stop') {
     const a = listAgents().find((x) => x.id === m.id && !x.remote);
     if (!a) throw new Error('that agent is no longer running');
@@ -305,8 +315,10 @@ function snapshot() {
   const agents = listAgents().filter((a) => !a.remote).map((a) => {
     const pr = projectOf(a.cwd), msgs = messagesOf(a);
     const last = [...msgs].reverse().find((x) => !x.tool) || msgs.at(-1);
+    const about = clean(aboutOf(a) || msgs.find((x) => x.role === 'user' && !x.tool)?.text || '', 140);
     return {
       id: a.id, kind: a.kind, name: a.name, status: a.status, forkOf: a.forkOf || null,
+      about: about && about !== a.name ? about : null,
       project: { key: pr.key, label: pr.label, color: colorOf(pr.key) },
       worktree: pr.worktree?.name || null,
       inApp: !!host.ptyOf(a.pid),
@@ -343,6 +355,15 @@ async function push(id) {
       const messages = withRefs(raw);
       const body = JSON.stringify(messages);
       if (l.sent.messages !== body) { await send(id, phone, { t: 'messages', id: l.watch, messages }); l.sent.messages = body; }
+    }
+    // the chats the phone keeps, so they open at once: text only, and no more often than KEEP_EVERY each
+    for (const kid of l.keep) {
+      if (kid === l.watch || now - (l.kept[kid]?.at || 0) < KEEP_EVERY) continue;
+      const a = listAgents().find((x) => x.id === kid && !x.remote);
+      if (!a) continue;
+      const messages = messagesOf(a), body = JSON.stringify(messages);
+      if (l.kept[kid]?.body !== body) await send(id, phone, { t: 'messages', id: kid, messages });
+      l.kept[kid] = { at: now, body };
     }
   }
 }

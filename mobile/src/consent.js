@@ -2,9 +2,9 @@
 // and get an explicit yes before the first one leaves the phone. Asked once, revocable in settings.
 import * as SecureStore from 'expo-secure-store';
 import { useSyncExternalStore } from 'react';
-import { Modal, Platform, Text, View } from 'react-native';
+import { Platform, Text } from 'react-native';
 import { FONT, useTheme } from './theme';
-import { Button, Label } from './ui';
+import { Button, Label, Sheet } from './ui';
 
 const KEY = 'ai-consent-v1';
 const store = Platform.OS === 'web'
@@ -44,16 +44,12 @@ export function ConsentSheet() {
   const t = useTheme();
   const { asking } = useConsent();
   return (
-    <Modal visible={!!asking} transparent animationType="slide" onRequestClose={() => answer(false)}>
-      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.35)' }}>
-        <View style={{ backgroundColor: t.paper, padding: 24, paddingBottom: 40, gap: 16, borderTopWidth: 1, borderColor: t.ink }}>
-          <Label color={t.ink}>before your first prompt</Label>
-          <Text style={{ fontFamily: FONT.sans, fontSize: 15, lineHeight: 22, color: t.ink }}>{DISCLOSURE}</Text>
-          <Text style={{ fontFamily: FONT.sans, fontSize: 13, lineHeight: 19, color: t.ink2 }}>You can withdraw this any time in settings.</Text>
-          <Button filled onPress={() => answer(true)}>agree and send</Button>
-          <Button onPress={() => answer(false)}>not now</Button>
-        </View>
-      </View>
-    </Modal>
+    <Sheet visible={!!asking} onClose={() => answer(false)}>
+      <Label color={t.ink}>before your first prompt</Label>
+      <Text style={{ fontFamily: FONT.sans, fontSize: 15, lineHeight: 22, color: t.ink }}>{DISCLOSURE}</Text>
+      <Text style={{ fontFamily: FONT.sans, fontSize: 13, lineHeight: 19, color: t.ink2 }}>You can withdraw this any time in settings.</Text>
+      <Button filled onPress={() => answer(true)}>agree and send</Button>
+      <Button onPress={() => answer(false)}>not now</Button>
+    </Sheet>
   );
 }

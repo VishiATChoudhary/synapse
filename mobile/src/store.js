@@ -23,7 +23,7 @@ const subscribe = (l) => { listeners.add(l); return () => listeners.delete(l); }
 const set = (patch) => { state = { ...state, ...patch }; listeners.forEach((l) => l()); };
 let current = null, acc = null, refresh = null;
 
-function use(make, mode) {
+function startSource(make, mode) {
   current?.close?.();
   current = make((next) => set({ ...next, mode }));
 }
@@ -46,7 +46,7 @@ export function choose(computer) {
   set({ ...empty, mode: 'account', computerId: computer?.id || null });
   if (!computer) return;
   CHOSEN.set(computer.id).catch(() => {});
-  use((emit) => createRemote(emit, acc, computer), 'account');
+  startSource((emit) => createRemote(emit, acc, computer), 'account');
 }
 
 function startAccount(a) {
@@ -79,7 +79,7 @@ export const signInWithApple = async (credential, phoneName) => signedIn(await s
 // GitHub, Google or X: open(url) shows the cloud's sign-in page in a browser sheet
 export const signInWithProvider = async (provider, phoneName, open) => signedIn(await signInVia(DEFAULT_CLOUD, provider, phoneName, open));
 export const signOutPhone = signOutNow;
-export function tryDemo() { use((emit) => createDemo(emit), 'demo'); }
+export function tryDemo() { startSource((emit) => createDemo(emit), 'demo'); }
 export function leaveDemo() { current?.close?.(); current = null; set({ ...empty, mode: 'signed-out' }); }
 
 // App Review 5.1.1(v): an account made in the app can be deleted in the app
@@ -94,6 +94,7 @@ export const source = {
   send: (id, text) => current?.send(id, text),
   answer: (id, option) => current?.answer(id, option),
   stop: (id) => current?.stop(id),
+  rename: async (id, name) => (current?.rename ? current.rename(id, name) : { error: 'Not connected to a computer.' }),
   watch: (id) => current?.watch?.(id),
   spawn: async (opts) => (current ? current.spawn(opts) : null),
   share: async (id, target) => (current?.share ? current.share(id, target) : { error: 'Not connected to a computer.' }),

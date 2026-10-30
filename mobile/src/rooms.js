@@ -26,8 +26,8 @@ export function Squares({ agents, size = 9 }) {
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 5 }}>
       {agents.map((a) => (
-        <View key={a.id} style={a.needs ? { width: size, height: size, borderWidth: 2, borderColor: t.sig }
-          : { width: size, height: size, backgroundColor: a.status === 'busy' ? t.sig : t.ink3 }} />
+        <View key={a.id} style={a.needs ? { width: size, height: size, borderRadius: size / 2, borderWidth: 2, borderColor: t.sig }
+          : { width: size, height: size, borderRadius: size / 2, backgroundColor: a.status === 'busy' ? t.sig : t.ink3 }} />
       ))}
     </View>
   );

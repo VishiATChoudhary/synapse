@@ -10,8 +10,8 @@ import { ActivityIndicator, KeyboardAvoidingView, Linking, Platform, Pressable, 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DEFAULT_CLOUD, providers } from '../link';
 import { signInWith, signInWithApple, signInWithProvider, tryDemo } from '../store';
-import { FONT, useTheme } from '../theme';
-import { Button, Display, Meta } from '../ui';
+import { FONT, R, round, useTheme } from '../theme';
+import { Button, Display, Meta, haptic } from '../ui';
 
 export default function Login() {
   const t = useTheme();
@@ -23,7 +23,7 @@ export default function Login() {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const field = { fontFamily: FONT.sans, fontSize: 16, color: t.ink, borderBottomWidth: 1, borderColor: t.rule, paddingVertical: 12 };
+  const field = { fontFamily: FONT.sans, fontSize: 16, color: t.ink, backgroundColor: t.card, ...round(R.row), paddingHorizontal: 16, paddingVertical: 15, outlineWidth: 0 };
   const small = { fontFamily: FONT.sans, fontSize: 13, lineHeight: 19, color: t.ink2 };
   const ready = email.trim() && password && (!create || name.trim());
   const phoneName = Device.deviceName || Device.modelName || 'iPhone';
@@ -63,17 +63,18 @@ export default function Login() {
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: t.paper }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={{ padding: 24, paddingTop: insets.top + 48, paddingBottom: insets.bottom + 24, gap: 18 }} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={{ padding: 24, paddingTop: insets.top + 48, paddingBottom: insets.bottom + 24, gap: 14 }}
+        keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-          <View style={{ width: 14, height: 14, backgroundColor: t.sig }} />
+          <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: t.sig }} />
           <Display>Synapse</Display>
         </View>
-        <Text style={[small, { fontSize: 15, lineHeight: 22 }]}>Your coding agents, from your phone. Sign in with the account you use in Synapse on your computer.</Text>
+        <Text style={[small, { fontSize: 15, lineHeight: 22, marginBottom: 8 }]}>Your coding agents, from your phone. Sign in with the account you use in Synapse on your computer.</Text>
         {apple && (
           <AppleAuthentication.AppleAuthenticationButton
             buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
             buttonStyle={dark ? AppleAuthentication.AppleAuthenticationButtonStyle.WHITE : AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
-            cornerRadius={0} style={{ height: 46 }} onPress={withApple}
+            cornerRadius={24} style={{ height: 48 }} onPress={withApple}
           />
         )}
         {offered.map((p) => <Button key={p} disabled={busy} onPress={() => withProvider(p)}>{`continue with ${LABEL[p]}`}</Button>)}
@@ -82,9 +83,9 @@ export default function Login() {
             <View style={{ flex: 1, height: 1, backgroundColor: t.rule }} /><Meta>or with email</Meta><View style={{ flex: 1, height: 1, backgroundColor: t.rule }} />
           </View>
         )}
-        <View style={{ flexDirection: 'row', borderWidth: 1, borderColor: t.rule }}>
+        <View style={{ flexDirection: 'row', backgroundColor: t.wash, ...round(R.pill), padding: 3 }}>
           {[['sign in', false], ['create account', true]].map(([label, c]) => (
-            <Pressable key={label} onPress={() => { setCreate(c); setError(''); }} style={{ flex: 1, paddingVertical: 12, alignItems: 'center', backgroundColor: create === c ? t.ink : 'transparent' }}>
+            <Pressable key={label} onPress={() => { haptic.pick(); setCreate(c); setError(''); }} style={{ flex: 1, paddingVertical: 10, alignItems: 'center', ...round(R.pill), backgroundColor: create === c ? t.ink : 'transparent' }}>
               <Text style={{ fontFamily: FONT.sansMedium, fontSize: 14, color: create === c ? t.onInk : t.ink2 }}>{label.charAt(0).toUpperCase() + label.slice(1)}</Text>
             </Pressable>
           ))}
