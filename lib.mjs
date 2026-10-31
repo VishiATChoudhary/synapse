@@ -786,6 +786,22 @@ export function localAgents() {
   });
 }
 
+// Protected folders (right-click > Protect in the app, kept under "protected" in app.json): agents there only read
+// and pull. To change code they first make a new branch in a worktree of its own, and send the user there.
+export function protectedRoot(dir) {
+  if (!dir) return null;
+  const d = path.resolve(String(dir));
+  return (readJSON(FILES.app, {}).protected || []).find((p) => typeof p === 'string' && (d === p || d.startsWith(p + path.sep))) || null;
+}
+export const protectRule = (root) => {
+  const home = path.join(DATA, 'worktrees', path.basename(root));
+  return `This folder, ${root}, is protected: here you only read and pull (git pull, git fetch, reading files, running read-only commands). ` +
+    'Never edit, create or delete files in it, and never commit, check out, switch, reset, stash, merge or rebase in it. ' +
+    `To change code, first make a new branch in a worktree of its own, e.g. \`git -C ${root} worktree add -b <branch> ${home}/<branch>\` ` +
+    '(from the branch checked out here unless the user says otherwise), then tell the user "Switch to <that folder> and we continue there." ' +
+    'and stop until they do. Synapse puts new worktrees of this repo in its sidebar by itself.';
+};
+
 // Codex, Gemini and the rest are known by their pid, so a restart makes them new to Synapse. The conversation
 // file they write stays the same: an agent that comes back writing the transcript of one that is gone takes over
 // its name, links, unread messages and plans.

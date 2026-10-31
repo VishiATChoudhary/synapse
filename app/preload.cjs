@@ -44,6 +44,8 @@ contextBridge.exposeInMainWorld('synapse', {
   fork: { spawn: (a) => call('fork:spawn', a), link: (child, parent) => call('fork:link', { child, parent }), onRequest: (fn) => on('fork:request', fn) },
   project: {
     add: (p) => call('project:add', { path: p }),
+    protect: (p, on) => call('workspace:protect', { path: p, on }),
+    onWorktreeOpened: (fn) => on('worktree:opened', fn),
     create: (name) => call('project:create', { name }),
     clone: (url, name) => call('project:clone', { url, name }),
     pick: () => call('project:pick'),

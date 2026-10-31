@@ -19,7 +19,8 @@ function discoverProjects() {
     try { branch = git(ws, ['rev-parse', '--abbrev-ref', 'HEAD']); } catch {}
     let real = ws;
     try { real = fs.realpathSync(ws); } catch {}
-    g.worktrees.push({ path: ws, branch, name: c.worktreeNames?.[ws] || path.basename(ws), home: ws === g.path || real === g.path }); // the repo's own folder, not a worktree
+    g.worktrees.push({ path: ws, branch, name: c.worktreeNames?.[ws] || path.basename(ws), home: ws === g.path || real === g.path, // the repo's own folder, not a worktree
+      protected: (c.protected || []).includes(ws) });
   }
   // the order they were dragged into in the sidebar, then the rest by name
   const order = c.projectOrder || [];

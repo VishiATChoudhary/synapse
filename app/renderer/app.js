@@ -2,6 +2,9 @@
 // sidebar, the deck of cards, the terminals and the fan-out tree. PTYs live in the main process.
 import { Terminal } from '../node_modules/@xterm/xterm/lib/xterm.mjs';
 import { FitAddon } from '../node_modules/@xterm/addon-fit/lib/addon-fit.mjs';
+import { SearchAddon } from '../node_modules/@xterm/addon-search/lib/addon-search.mjs';
+import { allThemes, CURSORS, currentLook, flipLook, FONTS, paint, setCustomThemes, setLook, termOptions, themeOf, xtermTheme } from './looks.js';
+import { ACTIONS, COMMANDS, comboOf, match as matchShortcut, pretty, setShortcuts, shortcuts, usable } from './shortcuts.js';
 import { createActivityView } from '../../public/activity.mjs';
 import { playSound, DONE_SOUNDS } from './sounds.js';
 
@@ -90,17 +93,9 @@ const agentWorking = (a) => a.status === 'busy' || a.status === 'working' || a.s
 
 // ---------------------------------------------------------------- terminals
 
-const termTheme = () => {
-  const night = document.documentElement.dataset.theme === 'night';
-  const css = getComputedStyle(document.documentElement);
-  return {
-    background: css.getPropertyValue('--term-bg').trim(), foreground: css.getPropertyValue('--ink').trim(),
-    cursor: css.getPropertyValue('--sig').trim(), cursorAccent: css.getPropertyValue('--term-bg').trim(),
-    selectionBackground: night ? 'rgba(255,90,31,.35)' : 'rgba(255,68,0,.22)',
-    black: night ? '#2a2a2a' : '#16130F', red: '#D64545', green: '#2F8F5B', yellow: '#B8860B', blue: '#2F5BEA', magenta: '#B0306A', cyan: '#1D9BB0', white: night ? '#EDEDEA' : '#6B6B6B',
-    brightBlack: '#8A867E', brightRed: '#FF5A5A', brightGreen: '#3DB874', brightYellow: '#E3A600', brightBlue: '#5B84FF', brightMagenta: '#E5458F', brightCyan: '#39B6CC', brightWhite: night ? '#FFFFFF' : '#16130F',
-  };
-};
+// the terminal's colours come from the chosen theme (looks.js)
+const termTheme = () => xtermTheme();
+paint();
 
 // Paths in a terminal ("app/main.mjs:12", "~/notes.md", "Update(src/x.ts)") underline once Synapse confirms they
 // exist in the session's folder; ⌘-click (Ctrl-click on Windows) opens one beside the terminal (public/file.html)
@@ -241,9 +236,10 @@ async function makeSession(s, { kind, title, question = null, parent = null, key
   const wrap = el('div', 'term');
   $('#stage').appendChild(wrap);
   const term = new Terminal({
-    fontFamily: "'Fragment Mono', Menlo, monospace", fontSize: 13, lineHeight: 1.25, cursorBlink: true, cursorStyle: 'bar',
-    allowProposedApi: true, scrollback: 5000, theme: termTheme(), macOptionIsMeta: true, linkHandler: termLinks(() => s.worktree, () => term),
+    ...termOptions(), allowProposedApi: true, scrollback: 5000, macOptionIsMeta: true, linkHandler: termLinks(() => s.worktree, () => term),
   });
+  const search = new SearchAddon();
+  term.loadAddon(search);
   term.registerLinkProvider(pathLinks(term, () => s.worktree));
   dropPaths(wrap, term);
   const fit = new FitAddon();
@@ -255,6 +251,7 @@ async function makeSession(s, { kind, title, question = null, parent = null, key
   // app shortcuts pass through; the macOS editing keys xterm drops or mis-sends become their readline
   // bytes (⌘⌫ clears the line, ⌘← / ⌘→ jump to its ends); everything else goes to the pty as is
   term.attachCustomKeyEventHandler((e) => {
+    if (e.type === 'keydown' && matchShortcut(e)) return false; // the user's own shortcuts (shortcuts.js) never reach the pty
     // Shells keep Enter; agents receive the enhanced-keyboard newline sequence, also when one runs inside a shell tab
     // (claude typed at the prompt): the shell tab asks which program is in front
     if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey && !e.isComposing) {
@@ -286,7 +283,8 @@ async function makeSession(s, { kind, title, question = null, parent = null, key
   try { ({ id: pty, pid } = await spawn(term.cols, term.rows)); }
   catch (error) { term.dispose(); wrap.remove(); throw error; }
   synapse.pty.resize(pty, term.cols, term.rows); // whatever the spawner defaulted to, the pty and the view agree from the first frame
-  const x = { id: nextId++, key: /^[\w-]{1,80}$/.test(key || '') ? key : crypto.randomUUID(), pty, pid, updatedAt: Date.now(), activeAt: Date.now(), kind, title, question, parent, exited: false, term, fit, el: wrap };
+  const x = { id: nextId++, key: /^[\w-]{1,80}$/.test(key || '') ? key : crypto.randomUUID(), pty, pid, updatedAt: Date.now(), activeAt: Date.now(), kind, title, question, parent, exited: false, term, fit, search, el: wrap };
+  search.onDidChangeResults((r) => { if (finder?.x === x) finder.count(r); });
   wrap.addEventListener('pointerdown', () => { if (M.focused !== s.id) selectSession(s, x.id); });
   wrap.addEventListener('focusin', () => { if (M.focused !== s.id) selectSession(s, x.id); });
   term.onData(sforkFilter(() => x));
@@ -345,7 +343,7 @@ function sforkFilter(get) {
   };
 }
 
-async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resume = null, cwd = worktreePath, title = kind } = {}) {
+async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resume = null, cwd = worktreePath, title = kind, prompt = null } = {}) {
   closeCanvas();
   const prof = M.profiles[kind] || { command: kind };
   const s = { id: nextId++, worktree: worktreePath, sessions: [], path: [] };
@@ -356,7 +354,7 @@ async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resu
   try {
     const made = await makeSession(s, {
       kind, title,
-      spawn: (cols, rows) => (resume ? synapse.pty.restore({ cwd, kind, resume, cols, rows }) : synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows, phoneReq })),
+      spawn: (cols, rows) => (resume ? synapse.pty.restore({ cwd, kind, resume, cols, rows }) : synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows, phoneReq, ...(prompt ? { prompt } : {}) })),
     });
     if (resume) made.resume = resume;
     if (split && slot(split.target)) {
@@ -918,6 +916,7 @@ function renderTree() {
         const label = home ? (w.branch || w.name) : w.branch && w.branch !== w.name ? `${w.name} · ${w.branch}` : w.name;
         const wn = el('span', 'wt-name', label); wn.title = `${w.path}\n${w.branch}`;
         wh.append(home ? el('span', 'wt-glyph', '⌂') : gitIcon('worktree'), wn);
+        if (w.protected) { const lock = el('span', 'wt-lock', 'read only'); lock.title = 'protected: agents here only read and pull, and change code on a new branch in a worktree of its own'; wh.appendChild(lock); }
         const pr = prStatuses.get(w.path); if (pr) wh.appendChild(prBadge(pr));
         if (!home) wh.appendChild(deleteWorktreeButton(p, w));
         const first = M.slots.find((s) => s.worktree === w.path);
@@ -1730,6 +1729,9 @@ $('.side').addEventListener('contextmenu', (e) => {
     items.push('-', { label: 'Close session', danger: true, run: () => closeSlotAsk(s) });
   } else if (w) {
     items.push({ label: 'New agent', sub: agentMenu(w.path) }, { label: 'New worktree', run: () => promptWorktree(p) }, '-');
+    items.push(w.protected
+      ? { label: 'Unprotect', run: () => protectFolder(w, false) }
+      : { label: 'Protect (read only)', run: () => protectFolder(w, true) });
     if (!(w.home ?? w.path === p.path)) items.push({ label: 'Remove worktree', danger: true, run: () => removeWorktreeAsk(p, w) });
     items.push({ label: 'Remove from sidebar', run: () => removeFromSidebar([w.path], w.name) });
   } else if (p) {
@@ -1742,11 +1744,22 @@ $('.side').addEventListener('contextmenu', (e) => {
   contextMenu(items, e.clientX, e.clientY);
 });
 
+// Protect a folder: its agents only read and pull, and make a new branch in a worktree of its own to change code
+// (hook.mjs tells Claude and Codex, and stops Claude's edits there). New worktrees of the repo open in the sidebar.
+async function protectFolder(w, on) {
+  try {
+    await synapse.project.protect(w.path, on);
+    await refresh();
+    toast(on ? `${w.name} is read only for agents · they make a worktree to change code` : `${w.name} is no longer protected`);
+  } catch (e) { toast(e.message, true); }
+}
+synapse.project.onWorktreeOpened(({ path: dir, branch }) => { refresh(); toast(`opened worktree ${branch || dir.split('/').pop()} in the sidebar`); });
+
 // ---------------------------------------------------------------- settings
 const SHORTCUTS = [
   ['layout', [['⌘B', 'toggle sidebar'], ['⌘D', 'split side by side'], ['⇧⌘D', 'split top and bottom']]],
   ['app', [['right-click', 'menu: agents, worktrees, remove, kill'], ['⌘T', 'shell'], ['⌃1 ⌃2 …', 'claude, codex, …'], ['⌘N', 'agent picker'], ['⇧⌘N', 'worktree'], ['⇧⌘F', 'fork'], ['⌘E', 'fork tree'], ['⌘W', 'close session'], ['⇧⌘⌫', 'pop fork'], ['⌘[ ⌘]', 'switch session'], ['⌘1-9', 'nth session'], ['⌃Tab ⌘G', 'node view'], ['⌘,', 'settings']]],
-  ['terminal', [['⌘⌫', 'clear line'], ['⌘← ⌘→', 'line start / end'], ['⌥⌫', 'delete word']]],
+  ['terminal', [['⌘F', 'find'], ['⌘⌫', 'clear line'], ['⌘← ⌘→', 'line start / end'], ['⌥⌫', 'delete word']]],
   ['node view', [['⌘F /', 'search'], ['drag ring', 'link'], ['drag', 'move agent or project'], ['dbl-click', 'rename'], ['⌘-click', 'open its session'], ['scroll', 'zoom'], ['F', 'fit'], ['A', 'arrange'], ['⌫', 'unlink'], ['esc', 'back to terminals']]],
 ];
 // the gear in the node view asks for the same modal
@@ -1821,10 +1834,6 @@ async function openSettings() {
       finally { setupButton.disabled = false; }
     };
     body.append(setup, setupReport);
-    const themeRow = el('div', 'opt set'), themeBtn = el('button', 'btn');
-    const showTheme = () => (themeBtn.textContent = document.documentElement.dataset.theme === 'night' ? '◐ night' : '◐ signal');
-    themeRow.append(el('span', 'k', 'theme'), el('span', 'c', 'signal is light, night is dark'), themeBtn); showTheme();
-    themeBtn.onclick = () => { toggleTheme(); showTheme(); };
     const linkRow = el('label', 'opt set'), cb = el('input');
     cb.type = 'checkbox'; cb.checked = !!s.autoSymlink;
     linkRow.append(cb, el('span', 'k', 'link workspaces'), el('span', 'c', 'symlink workspaces added from elsewhere into ~/.synapse/workspaces, so the library can bring them back'));
@@ -1902,7 +1911,7 @@ async function openSettings() {
     const pastRow = el('div', 'opt set past-set'), pastBtn = el('button', 'btn', 'browse');
     pastRow.append(el('span', 'k', 'past chats'), el('span', 'c', 'import your Claude Code and Codex chats from before Synapse, and pick them up here  ·  ⇧⌘H'), pastBtn);
     pastBtn.onclick = () => { close(); openPastChats(); };
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), viewRow, pastRow, importRows({ remove: true }), themeRow, linkRow, forkRow, doneRow, soundRow, errRow, loginRow, updRow, tourRow);
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), viewRow, pastRow, importRows({ remove: true }), linkRow, forkRow, doneRow, soundRow, errRow, loginRow, updRow, tourRow);
     const commands = el('div', 'agent-commands'), commandInputs = new Map();
     for (const [kind, profile] of Object.entries(s.profiles || {})) {
       const row = el('label', 'opt set'), input = el('input');
@@ -1917,6 +1926,9 @@ async function openSettings() {
       finally { saveCommands.disabled = false; }
     };
     commands.append(saveCommands); body.append(el('div', 'sub', 'Agent commands'), commands);
+    const looks = el('div', 'looks'), keys = el('div', 'my-keys');
+    body.append(el('div', 'sub', 'appearance'), looks, el('div', 'sub', 'your shortcuts'), keys);
+    drawLooks(looks); drawShortcuts(keys);
     const phones = el('div', 'phones');
     body.append(el('div', 'sub', 'phone'), phones);
     drawPhones(phones);
@@ -1958,6 +1970,114 @@ async function openSettings() {
   $('#modal-body').focus();
 }
 
+// Settings > appearance: the theme (built in, or yours from "themes" in app.json), font, size, line height, cursor
+function drawLooks(box) {
+  box.replaceChildren();
+  const look = currentLook(), current = themeOf().id;
+  const save = (patch) => { setLook(patch); applyLook(true); drawLooks(box); };
+  const grid = el('div', 'theme-grid');
+  for (const [id, t] of Object.entries(allThemes())) {
+    const b = el('button', 'theme-swatch' + (id === current ? ' on' : ''));
+    b.type = 'button'; b.title = `${t.label}${t.custom ? ' · from app.json' : ''}`;
+    b.style.background = t.paper; b.style.color = t.ink; b.style.borderColor = id === current ? t.sig : 'transparent';
+    const chips = el('span', 'theme-chips');
+    for (const c of [t.sig, ...t.ansi.slice(1, 7)]) { const d = el('i'); d.style.background = c; chips.append(d); }
+    b.append(el('span', 'theme-name', t.label), chips);
+    b.onclick = () => save({ theme: id });
+    grid.append(b);
+  }
+  box.append(grid, el('div', 'hint', 'add your own under "themes" in ~/.synapse/app.json: label, dark, paper, ink, sig and 16 ansi colours'));
+  const font = el('input'), list = el('datalist');
+  list.id = 'font-list'; for (const f of FONTS) { const o = el('option'); o.value = f; list.append(o); }
+  font.setAttribute('list', 'font-list'); font.value = look.font || 'Fragment Mono'; font.spellcheck = false; font.setAttribute('aria-label', 'terminal font');
+  font.onchange = () => save({ font: font.value.trim() || 'Fragment Mono' });
+  const size = el('input'), height = el('input');
+  Object.assign(size, { type: 'number', min: 9, max: 28, step: 1, value: look.fontSize || 13 }); size.setAttribute('aria-label', 'font size');
+  Object.assign(height, { type: 'number', min: 1, max: 2, step: 0.05, value: look.lineHeight || 1.25 }); height.setAttribute('aria-label', 'line height');
+  size.onchange = () => save({ fontSize: Number(size.value) });
+  height.onchange = () => save({ lineHeight: Number(height.value) });
+  const fontRow = el('div', 'opt set'), fontCtl = el('span', 'look-ctl');
+  fontCtl.append(font, list, size, height);
+  fontRow.append(el('span', 'k', 'font'), el('span', 'c', 'the terminal font, then its size and line height; any font installed on this computer works'), fontCtl);
+  const cursorRow = el('div', 'opt set'), cursorCtl = el('span', 'look-ctl'), seg = el('div', 'seg');
+  for (const c of CURSORS) { const b = el('button', c === (look.cursor || 'bar') ? 'on' : '', c); b.type = 'button'; b.onclick = () => save({ cursor: c }); seg.append(b); }
+  const blink = el('label', 'look-blink'), bcb = el('input');
+  bcb.type = 'checkbox'; bcb.checked = look.blink !== false; bcb.onchange = () => save({ blink: bcb.checked });
+  blink.append(bcb, 'blink');
+  cursorCtl.append(seg, blink);
+  cursorRow.append(el('span', 'k', 'cursor'), el('span', 'c', 'its shape, and whether it blinks'), cursorCtl);
+  box.append(fontRow, cursorRow);
+}
+
+// Settings > your shortcuts: a key combination and what it does; saved to app.json as you go
+function drawShortcuts(box) {
+  let items = shortcuts().map((x) => ({ ...x }));
+  const persist = async () => {
+    try { const r = await synapse.settings.set({ shortcuts: items.filter((x) => x.keys) }); setShortcuts(r.shortcuts); }
+    catch (e) { toast(e.message, true); }
+  };
+  const select = (pairs, value, onchange, label) => {
+    const sel = el('select'); sel.setAttribute('aria-label', label);
+    for (const [v, text] of pairs) { const o = el('option', '', text); o.value = v; sel.append(o); }
+    sel.value = value ?? pairs[0]?.[0] ?? ''; sel.onchange = () => onchange(sel.value);
+    return sel;
+  };
+  const text = (value, placeholder, onchange) => {
+    const inp = el('input'); inp.value = value || ''; inp.placeholder = placeholder; inp.spellcheck = false;
+    inp.onchange = () => onchange(inp.value); return inp;
+  };
+  const draw = () => {
+    box.replaceChildren();
+    items.forEach((it, i) => {
+      const row = el('div', 'my-key'), rec = el('button', 'btn key-rec' + (it.keys ? '' : ' empty'), it.keys ? pretty(it.keys, WIN) : 'set keys');
+      rec.type = 'button'; rec.title = 'click, then press the keys';
+      rec.onclick = () => record(rec, (combo) => { it.keys = combo; persist(); draw(); }, i);
+      const set = (patch) => { Object.assign(it, patch); persist(); draw(); };
+      const what = select(ACTIONS, it.action, (action) => set({ action }), 'what it does');
+      const detail = el('span', 'key-detail');
+      if (it.action === 'agent') {
+        const kinds = agentProfiles().map((k) => [k, M.profiles[k]?.label || k]);
+        const places = [['', 'focused workspace'], ...M.projects.flatMap((p) => p.worktrees.map((w) => [w.path, `${p.label}${w.name && w.name !== p.label ? ` / ${w.name}` : ''}`]))];
+        if (it.cwd && !places.some(([v]) => v === it.cwd)) places.push([it.cwd, it.cwd]);
+        detail.append(select(kinds, it.kind || kinds[0]?.[0], (kind) => set({ kind }), 'agent'), select(places, it.cwd || '', (cwd) => set({ cwd }), 'where'),
+          text(it.text, 'first prompt (optional)', (v) => set({ text: v })));
+      } else if (it.action === 'run' || it.action === 'type') {
+        detail.append(text(it.text, it.action === 'run' ? 'command to run, e.g. git status' : 'text to type', (v) => set({ text: v })));
+      } else if (it.action === 'command') {
+        detail.append(select(COMMANDS, it.command, (command) => set({ command }), 'command'));
+      } else if (it.action === 'theme') {
+        detail.append(select(Object.entries(allThemes()).map(([k, t]) => [k, t.label]), it.theme, (theme) => set({ theme }), 'theme'));
+      }
+      const del = el('button', 'btn key-del', '×'); del.type = 'button'; del.title = 'remove';
+      del.onclick = () => { items.splice(i, 1); persist(); draw(); };
+      row.append(rec, what, detail, del);
+      box.append(row);
+    });
+    const add = el('button', 'btn', '+ add shortcut'); add.type = 'button';
+    add.onclick = () => { items.push({ keys: '', action: 'agent', kind: agentProfiles()[0] || 'claude' }); draw(); box.querySelectorAll('.key-rec').item(items.length - 1)?.click(); };
+    box.append(add, el('div', 'hint', 'needs ⌘, ⌃ or ⌥ (or an F key) · yours win over the built-in ones · kept under "shortcuts" in ~/.synapse/app.json'));
+  };
+  // the next key combination pressed names the shortcut; esc leaves it as it was
+  const record = (btn, done, index) => {
+    btn.textContent = 'press keys…'; btn.classList.add('recording');
+    const onKey = (e) => {
+      e.preventDefault(); e.stopImmediatePropagation();
+      if (e.key === 'Escape') return stop(), draw();
+      const combo = comboOf(e);
+      if (!combo) return; // a modifier on its own: wait for the key
+      if (!usable(combo)) { btn.textContent = 'add ⌘, ⌃ or ⌥'; return; }
+      const taken = items.findIndex((x, j) => j !== index && x.keys === combo);
+      if (taken >= 0) { btn.textContent = `${pretty(combo, WIN)} is taken`; return; }
+      stop(); done(combo);
+      const builtIn = (WIN ? combo.startsWith('ctrl+shift+') : /^(shift\+)?cmd\+[^+]+$/.test(combo)) && APP_KEYS.has(combo.replace(/^ctrl\+shift\+|cmd\+/, '').replace(/^shift\+cmd\+/, 'shift+'));
+      if (builtIn) toast(`${pretty(combo, WIN)} now runs yours instead of the built-in one`);
+    };
+    const stop = () => { removeEventListener('keydown', onKey, true); btn.classList.remove('recording'); };
+    addEventListener('keydown', onKey, true);
+  };
+  draw();
+}
+
 // One suggestion, the first time a link goes to talk: only the user's Turn on changes the login item.
 synapse.onLoginSuggest(() => {
   if ($('#login-suggest')) return;
@@ -1973,7 +2093,13 @@ synapse.onLoginSuggest(() => {
 let toastTimer = null;
 // the cue settings, loaded at boot and kept in step by the settings sheet
 const CUES = { done: 'bubbleTap', error: true, notify: true };
-synapse.settings.get().then((s) => { CUES.done = s.doneSound || 'bubbleTap'; CUES.error = s.errorSound !== false; CUES.notify = s.notifyDone !== false; }).catch(() => {});
+synapse.settings.get().then((s) => {
+  CUES.done = s.doneSound || 'bubbleTap'; CUES.error = s.errorSound !== false; CUES.notify = s.notifyDone !== false;
+  // app.json is the truth for the look and the shortcuts; localStorage only made the first paint right
+  setCustomThemes(s.themes); setShortcuts(s.shortcuts);
+  if (s.look && Object.keys(s.look).length) setLook(s.look);
+  applyLook();
+}).catch(() => {});
 const errorCue = () => { if (CUES.error) playSound('purr'); };
 function toast(text, sig = false, onClick = null) {
   if (sig) errorCue();
@@ -2004,7 +2130,7 @@ const foreground = (term) => { const id = ownerOf(term)?.pty; return id ? synaps
 // the digit by its key, or by its place where the layout types something else on it (Italian, French: & é " ...)
 const digitOf = (e) => (/^[1-9]$/.test(e.key) ? e.key : /^Digit[1-9]$/.test(e.code) ? e.code.slice(-1) : null);
 const agentKey = (e) => (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && digitOf(e) ? agentProfiles()[digitOf(e) - 1] : null);
-const APP_KEYS = new Set(['shift+h', 'b', 'd', 'shift+d', 't', 'n', 'shift+n', 'shift+f', 'e', 'w', '[', ']', 'shift+backspace', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',']);
+const APP_KEYS = new Set(['shift+h', 'b', 'd', 'shift+d', 't', 'n', 'shift+n', 'f', 'shift+f', 'e', 'w', '[', ']', 'shift+backspace', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',']);
 // ⌘ + editing key -> what a macOS terminal sends for it (iTerm's natural editing, Ghostty's defaults)
 const META_EDIT = { Backspace: '\x15', ArrowLeft: '\x01', ArrowRight: '\x05' };
 window.addEventListener('keydown', (e) => {
@@ -2014,6 +2140,8 @@ window.addEventListener('keydown', (e) => {
 }, true);
 window.addEventListener('keydown', (e) => {
   if (!$('#modal').hidden || !$('#login').hidden) return;
+  const mine = !workspaceOpen && matchShortcut(e);
+  if (mine) { e.preventDefault(); runShortcut(mine); return; }
   if (fanOpen && e.key === 'Escape') return closeFan();
   if (fanOpen && e.key === 'Backspace') { const s = focusedSlot(); const t = top(s); if (t?.parent != null) requestCloseSession(s, t.id); return; }
   const agent = agentKey(e);
@@ -2032,6 +2160,7 @@ window.addEventListener('keydown', (e) => {
     case 'n': { const wt = s?.worktree || M.projects[0]?.worktrees[0]?.path; if (wt) pickProfile(wt); break; }
     case 'shift+n': { const p = s ? worktreeOf(s.worktree)?.project : M.projects[0]; if (p) promptWorktree(p); break; }
     case 'shift+f': promptFork(); break;
+    case 'f': openFind(); break;
     case 'e': fanOpen ? closeFan() : openFan(); break;
     case 'shift+backspace': pop(); break;
     case 'w': { const t = top(s); if (t) requestCloseSession(s, t.id); break; }
@@ -2148,13 +2277,128 @@ addEventListener('message', (ev) => {
 synapse.onCanvasToggle(toggleCanvas);
 synapse.onCanvasBack(() => workspaceOpen ? workspacePost({ type: 'synapse:desktop-navigate', view: 'back' }) : closeCanvas());
 
-function toggleTheme() {
-  const next = document.documentElement.dataset.theme === 'night' ? 'signal' : 'night';
-  document.documentElement.dataset.theme = next;
-  localStorage.setItem('synapse-mode', next);
-  for (const sl of M.slots) for (const x of sl.sessions) x.term.options.theme = termTheme();
+function toggleTheme() { flipLook(); applyLook(true); }
+// a new look for every terminal and the app around them; a font change waits for the font, then refits
+async function applyLook(save = false) {
+  paint();
+  const o = termOptions();
+  await document.fonts.load(`${o.fontSize}px ${o.fontFamily.split(',')[0]}`).catch(() => {});
+  for (const sl of M.slots) for (const x of sl.sessions) { Object.assign(x.term.options, o); if (x.el.classList.contains('visible')) x.fit.fit(); }
+  if (finder) finder.decorate();
   sendTheme();
+  if (save) synapse.settings.set({ look: currentLook() }).catch((e) => toast(e.message, true));
 }
+// ⌘F: find in the terminal in front. Matches light up as you type; ↩ and ⇧↩ step through them, esc closes.
+let finder = null;
+function openFind() {
+  const x = top(focusedSlot());
+  if (!x || workspaceOpen) return;
+  finder ||= makeFinder();
+  if (finder.x && finder.x !== x) finder.x.search.clearDecorations();
+  finder.x = x;
+  x.el.appendChild(finder.el);
+  finder.el.hidden = false;
+  const sel = x.term.getSelection();
+  if (sel && !sel.includes('\n') && sel.length < 200) finder.input.value = sel;
+  finder.input.focus(); finder.input.select();
+  finder.find(true, true);
+}
+function makeFinder() {
+  const box = el('div', 'find'), input = el('input'), count = el('span', 'find-count');
+  const btn = (label, title) => { const b = el('button', 'find-btn', label); b.type = 'button'; b.title = title; b.setAttribute('aria-label', title); return b; };
+  const caseBtn = btn('Aa', 'match case'), reBtn = btn('.*', 'regular expression'), prev = btn('↑', 'previous match  ⇧↩'), next = btn('↓', 'next match  ↩'), shut = btn('×', 'close  esc');
+  input.placeholder = 'find'; input.spellcheck = false;
+  box.append(input, count, caseBtn, reBtn, prev, next, shut);
+  const f = {
+    el: box, input, x: null, matchCase: false, regex: false,
+    decorations: null,
+    decorate() {
+      const sig = themeOf().sig;
+      f.decorations = { matchBackground: `${sig}40`, matchBorder: `${sig}80`, matchOverviewRuler: sig, activeMatchBackground: sig, activeMatchBorder: sig, activeMatchColorOverviewRuler: sig };
+      if (!box.hidden && input.value) f.find(true, true);
+    },
+    find(forward = true, incremental = false) {
+      const x = f.x;
+      if (!x) return;
+      if (!input.value) { x.search.clearDecorations(); count.textContent = ''; box.classList.remove('none'); return; }
+      if (!f.decorations) f.decorate();
+      const opts = { caseSensitive: f.matchCase, regex: f.regex, incremental, decorations: f.decorations };
+      let found = false;
+      try { found = forward ? x.search.findNext(input.value, opts) : x.search.findPrevious(input.value, opts); } catch { found = false; }
+      box.classList.toggle('none', !found);
+      if (!found) count.textContent = 'no matches';
+    },
+    count({ resultIndex, resultCount }) {
+      count.textContent = !resultCount ? 'no matches' : resultIndex < 0 ? `${resultCount}+` : `${resultIndex + 1}/${resultCount}`;
+      box.classList.toggle('none', !resultCount);
+    },
+    close() {
+      box.hidden = true;
+      f.x?.search.clearDecorations();
+      if ($('#modal').hidden && !canvasOpen) f.x?.term.focus();
+    },
+  };
+  input.oninput = () => f.find(true, true);
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); f.find(!e.shiftKey); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); f.close(); }
+  };
+  const toggle = (b, k) => { b.onclick = () => { f[k] = !f[k]; b.classList.toggle('on', f[k]); f.find(true, true); input.focus(); }; };
+  toggle(caseBtn, 'matchCase'); toggle(reBtn, 'regex');
+  prev.onclick = () => { f.find(false); input.focus(); };
+  next.onclick = () => { f.find(true); input.focus(); };
+  shut.onclick = () => f.close();
+  box.addEventListener('pointerdown', (e) => e.stopPropagation()); // not a click on the terminal: it would take focus
+  return f;
+}
+
+// a shortcut of the user's own (shortcuts.js): open an agent tab, type or run text, an app command or a theme
+async function runShortcut(sc) {
+  const s = focusedSlot(), x = top(s);
+  const here = s?.worktree || M.projects[0]?.worktrees[0]?.path;
+  if (sc.action === 'agent') {
+    const kind = sc.kind || agentProfiles()[0];
+    if (!M.profiles[kind]) return toast(`no agent "${kind}" · see Settings > Agent commands`, true);
+    let wt = sc.cwd || here;
+    if (!wt) return toast('add a workspace first', true);
+    if (sc.cwd && !worktreeOf(sc.cwd)) {
+      try { wt = await synapse.project.add(sc.cwd); await refresh(); } catch (e) { return toast(e.message, true); }
+    }
+    return newSlot(wt, kind, null, null, { prompt: sc.text || null });
+  }
+  if (sc.action === 'run' || sc.action === 'type') {
+    if (!x || x.exited) return toast('no open tab to type into', true);
+    if (!sc.text) return;
+    if (sc.action === 'run') synapse.pty.submit(x.pty, sc.text).catch((e) => toast(e.message, true));
+    else synapse.pty.write(x.pty, `\x1b[200~${sc.text}\x1b[201~`);
+    return x.term.focus();
+  }
+  if (sc.action === 'theme') { if (!allThemes()[sc.theme]) return toast(`no theme "${sc.theme}"`, true); setLook({ theme: sc.theme }); return applyLook(true); }
+  if (sc.action === 'command') return runCommand(sc.command);
+}
+function runCommand(id) {
+  const s = focusedSlot(), here = s?.worktree || M.projects[0]?.worktrees[0]?.path;
+  switch (id) {
+    case 'shell': return here ? newSlot(here, 'shell') : toast('add a workspace first', true);
+    case 'agent-picker': return here ? pickProfile(here) : toast('add a workspace first', true);
+    case 'split-right': return splitShell('right');
+    case 'split-down': return splitShell('down');
+    case 'close': { const t = top(s); return t && requestCloseSession(s, t.id); }
+    case 'next': return switchSession(']');
+    case 'prev': return switchSession('[');
+    case 'sidebar': return toggleSidebar();
+    case 'fork': return promptFork();
+    case 'fork-tree': return fanOpen ? closeFan() : openFan();
+    case 'canvas': return toggleCanvas();
+    case 'search': return openFind();
+    case 'theme-toggle': return toggleTheme();
+    case 'past-chats': return openPastChats();
+    case 'worktree': { const p = s ? worktreeOf(s.worktree)?.project : M.projects[0]; return p && promptWorktree(p); }
+    case 'settings': return openSettings();
+    default: return toast(`unknown command "${id}"`, true);
+  }
+}
+
 // the node view runs on another origin and cannot read our choice: tell it when it loads and whenever it changes
 const sendTheme = () => { for (const f of [$('#canvas-frame'), ...[...files.values()].map((v) => v.frame)]) f.contentWindow?.postMessage({ type: 'synapse:theme', theme: document.documentElement.dataset.theme }, '*'); };
 $('#canvas-frame').addEventListener('load', sendTheme);
@@ -3342,7 +3586,7 @@ async function desktopAction(action, args) {
     case 'board:leave': return synapse.board.leave();
     case 'fork-tree': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } return openFan(); }
     case 'split': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } await splitShell(args.direction === 'down' ? 'down' : 'right'); return workspaceState(); }
-    case 'theme': { if (['night', 'signal'].includes(args.theme)) { document.documentElement.dataset.theme = args.theme; localStorage.setItem('synapse-mode', args.theme); for (const s of M.slots) for (const x of s.sessions) x.term.options.theme = termTheme(); sendTheme(); } return; }
+    case 'theme': { if (['night', 'signal'].includes(args.theme)) { setLook({ theme: args.theme }); applyLook(true); } return; }
     default: throw new Error('Unknown workspace action.');
   }
 }
@@ -3435,7 +3679,7 @@ if (WIN) {
     if (v.length) { const inp = $('#modal-body input'); inp.value = v.join(':'); inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); }
   }, 800);
   if (flags.shot === 'worktree') setTimeout(() => promptWorktree(M.projects[0]), 800);
-  if (flags.shot.endsWith('+light')) { document.documentElement.dataset.theme = 'signal'; flags.shot = flags.shot.slice(0, -6); for (const sl of M.slots) for (const x of sl.sessions) x.term.options.theme = termTheme(); }
+  if (flags.shot.endsWith('+light')) { setLook({ theme: 'signal' }); paint(); flags.shot = flags.shot.slice(0, -6); for (const sl of M.slots) for (const x of sl.sessions) x.term.options.theme = termTheme(); }
     const typeIn = async (text) => { for (const ch of text.replace(/\\n/g, '\r').replace(/\\e/g, '\x1b')) { top(focusedSlot())?.term.input(ch); await new Promise((r) => setTimeout(r, 25)); } };
   // SYNAPSE_SHOT_STEPS='[[ms, "text"], ...]' types into the front session at those times (\n is Enter, \e is Esc)
   for (const [at, text] of flags.steps) setTimeout(() => typeIn(text), at);

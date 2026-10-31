@@ -76,7 +76,7 @@ function installed(label, dir) {
   }
 }
 // Prompt + session-start hook, same script for Claude Code and Codex (same hook protocol)
-function addHooks(d, events) {
+function addHooks(d, events, matchers = {}) {
   d.hooks ||= {};
   for (const ev of events) {
     const groups = (d.hooks[ev] ||= []);
@@ -84,11 +84,11 @@ function addHooks(d, events) {
     for (const g of groups) g.hooks = (g.hooks || []).filter((h) => !(/synapse/i.test(h.command) && /[/\\]hook\.mjs/.test(h.command)) || h.command === HOOK);
     d.hooks[ev] = groups.filter((g) => g.hooks.length);
     if (!d.hooks[ev].some((g) => g.hooks.some((h) => h.command === HOOK))) {
-      d.hooks[ev].push({ hooks: [{ type: 'command', command: HOOK, timeout: 5 }] });
+      d.hooks[ev].push({ ...(matchers[ev] ? { matcher: matchers[ev] } : {}), hooks: [{ type: 'command', command: HOOK, timeout: 5 }] });
     }
   }
 }
-if (installed('claude hooks', path.join(HOME, '.claude'))) editJSON('claude hooks', path.join(HOME, '.claude', 'settings.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart']));
+if (installed('claude hooks', path.join(HOME, '.claude'))) editJSON('claude hooks', path.join(HOME, '.claude', 'settings.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart', 'PreToolUse'], { PreToolUse: 'Edit|Write|MultiEdit|NotebookEdit|Bash' })); // PreToolUse: protected folders
 if (installed('codex hooks', CODEX)) editJSON('codex hooks', path.join(CODEX, 'hooks.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart', 'SubagentStart']));
 
 // Codex: TOML, append a table if missing. Codex asks before every MCP tool call unless told otherwise, and

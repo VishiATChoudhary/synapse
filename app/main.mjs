@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
-import { git, listChoices, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
+import { git, listChoices, listWorktrees, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
 import { DATA, FILES, WIN, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, readAgentMessages, takeInbox } from '../lib.mjs';
 import { createEdge, allowTalkRequest, dismissTalkRequest, setMode, removeEdge } from '../ops.mjs';
 import { openRequests, talkPerHour, talkModel, clampPerHour } from '../talk.mjs';
@@ -684,6 +684,7 @@ app.whenReady().then(() => {
   } else createWindow();
   pollRequests(); setInterval(pollRequests, REQUEST_POLL);
   serveFriends(); setInterval(serveFriends, TALK_CHECK);
+  setInterval(openNewWorktrees, 10_000);
   startPhone();
   if (UPDATES) { setTimeout(() => updater.check(), UPDATE_DELAY); setInterval(() => updater.check(), UPDATE_EVERY); }
   let refreshing = false;
@@ -861,6 +862,7 @@ handle('pty:spawn', async (a) => {
     prefill(r.id, phonePrompts.get(a.phoneReq), true);
     phonePrompts.delete(a.phoneReq);
   }
+  if (typeof a.prompt === 'string' && a.prompt.trim()) prefill(r.id, a.prompt.slice(0, 12000), true); // a shortcut's first prompt
   return r;
 });
 handle('phone:devices', () => phone.devices());
@@ -943,6 +945,34 @@ async function autoSetup() {
 handle('integrations:preview', () => setupIntegrations(true));
 handle('integrations:install', () => setupIntegrations(false));
 handle('project:add', ({ path: p }) => addWorkspace(p));
+// Right-click > Protect: agents in the folder only read and pull (hook.mjs, lib.mjs protectRule). The worktrees its repo
+// has now are noted, so the ones made later (by agents following the rule) open in the sidebar by themselves.
+handle('workspace:protect', ({ path: dir, on }) => {
+  const c = config();
+  if (!c.workspaces.includes(dir)) throw new Error('That folder is not in the sidebar.');
+  c.protected = (c.protected || []).filter((p) => p !== dir);
+  c.protectKnown ||= {};
+  if (on) {
+    c.protected.push(dir);
+    try { c.protectKnown[dir] = listWorktrees(dir).map((w) => w.path); } catch { c.protectKnown[dir] = []; }
+  } else delete c.protectKnown[dir];
+  writeJSON(FILES.app, c);
+  return { protected: c.protected };
+});
+function openNewWorktrees() {
+  const c = config();
+  for (const dir of c.protected || []) {
+    let list = [];
+    try { list = listWorktrees(dir).filter((w) => !w.bare && !w.missing); } catch { continue; }
+    const known = new Set(c.protectKnown?.[dir] || []);
+    for (const w of list.filter((x) => !known.has(x.path) && !c.workspaces.includes(x.path))) {
+      try { addWorkspace(w.path); win?.webContents.send('worktree:opened', { path: w.path, branch: w.branch, from: dir }); } catch {}
+    }
+    const now = config();
+    now.protectKnown = { ...now.protectKnown, [dir]: list.map((w) => w.path) };
+    writeJSON(FILES.app, now);
+  }
+}
 handle('project:create', ({ name }) => createWorkspace(name));
 handle('project:clone', ({ url, name }) => cloneWorkspace(url, name));
 handle('project:pick', () => pickFolder());
@@ -959,7 +989,7 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel() });
+const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [] });
 handle('settings:get', () => settingsOut(config()));
 // an agent finished a turn while Synapse was in the background (the renderer decides when): say so, with the
 // start of its last reply; a click brings that session to the front
@@ -1008,6 +1038,25 @@ handle('board:leave', async () => {
   return { signedIn: true, ...(await (await acct()).boardLeave()) };
 });
 handle('talk:usage', () => talkHistory('api/talks/usage'));
+// how the terminals look (app/renderer/looks.js) and the user's own shortcuts (app/renderer/shortcuts.js): kept
+// small and plain, since app.json is also edited by hand
+const str = (v, n) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f]/g, '').slice(0, n) : '');
+function cleanLook(l = {}) {
+  const out = {};
+  for (const k of ['theme', 'light', 'dark']) if (typeof l[k] === 'string' && /^[\w-]{1,40}$/.test(l[k])) out[k] = l[k];
+  if (typeof l.font === 'string') out.font = str(l.font, 60);
+  if (Number.isFinite(Number(l.fontSize))) out.fontSize = Math.min(28, Math.max(9, Number(l.fontSize)));
+  if (Number.isFinite(Number(l.lineHeight))) out.lineHeight = Math.min(2, Math.max(1, Number(l.lineHeight)));
+  if (['bar', 'block', 'underline'].includes(l.cursor)) out.cursor = l.cursor;
+  if ('blink' in l) out.blink = !!l.blink;
+  return out;
+}
+const SHORTCUT_ACTIONS = ['agent', 'run', 'type', 'command', 'theme'];
+function cleanShortcuts(list) {
+  if (!Array.isArray(list)) throw new Error('Shortcuts must be a list.');
+  return list.slice(0, 100).filter((x) => x && SHORTCUT_ACTIONS.includes(x.action) && /^[a-z0-9+\[\];',./`\\=-]{1,40}$/.test(String(x.keys || '')))
+    .map((x) => ({ keys: x.keys, action: x.action, ...Object.fromEntries(['kind', 'command', 'theme', 'cwd', 'text'].filter((k) => typeof x[k] === 'string' && x[k]).map((k) => [k, str(x[k], k === 'text' ? 4000 : 400)])) }));
+}
 handle('settings:set', (patch) => {
   const c = config();
   if (patch.profiles) {
@@ -1023,6 +1072,8 @@ handle('settings:set', (patch) => {
   if ('errorSound' in patch) c.errorSound = !!patch.errorSound;
   if ('openAtLogin' in patch) setLoginOpen(patch.openAtLogin);
   if ('talkPerHour' in patch) c.talkPerHour = clampPerHour(patch.talkPerHour);
+  if ('look' in patch) c.look = cleanLook(patch.look);
+  if ('shortcuts' in patch) c.shortcuts = cleanShortcuts(patch.shortcuts);
   if ('talkModel' in patch) c.talkModel = ['opus', 'sonnet', 'haiku'].includes(patch.talkModel) ? patch.talkModel : 'agent';
   writeJSON(FILES.app, c);
   if ('autoSymlink' in patch && c.autoSymlink) scanLibrary(true);
