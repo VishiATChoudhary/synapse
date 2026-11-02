@@ -595,10 +595,6 @@ function renderLaunch() {
       b.onclick = () => { const wt = focusedSlot()?.worktree || M.projects[0]?.worktrees[0]?.path; if (wt) newSlot(wt, k); else toast('add a workspace first', true); };
       return b;
     }));
-    const past = el('button', 'launch-item past', 'Past chats');
-    past.title = 'pick up a Claude Code or Codex chat from before Synapse  ·  ⇧⌘H';
-    past.onclick = () => openPastChats();
-    bar.append(past);
   }
 }
 
@@ -1911,7 +1907,21 @@ async function openSettings() {
     const pastRow = el('div', 'opt set past-set'), pastBtn = el('button', 'btn', 'browse');
     pastRow.append(el('span', 'k', 'past chats'), el('span', 'c', 'import your Claude Code and Codex chats from before Synapse, and pick them up here  ·  ⇧⌘H'), pastBtn);
     pastBtn.onclick = () => { close(); openPastChats(); };
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), viewRow, pastRow, importRows({ remove: true }), linkRow, forkRow, doneRow, soundRow, errRow, loginRow, updRow, tourRow);
+    // what used to crowd the top right: activity, friends, fork, splits and past chats
+    const toolsRow = el('div', 'opt set'), tools = el('span', 'look-ctl tool-btns');
+    for (const [label, title, run] of [
+      ['▦ activity', 'your year in code and prompts', () => showActivity(true)],
+      ['◎ friends', 'your trusted people, and what you share with each', () => openFriends()],
+      ['⑂ fork', 'fork the open agent  ·  ⇧⌘F', () => promptFork()],
+      ['◫ split', 'split side by side  ·  ⌘D', () => splitShell('right')],
+      ['⊟ split', 'split top and bottom  ·  ⇧⌘D', () => splitShell('down')],
+    ]) {
+      const b = el('button', 'btn', label); b.type = 'button'; b.title = title;
+      b.onclick = () => { close(); setTimeout(run, 0); };
+      tools.append(b);
+    }
+    toolsRow.append(el('span', 'k', 'open'), el('span', 'c', 'activity, friends, fork and splits · past chats is below, ⇧⌘H'), tools);
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), toolsRow, viewRow, pastRow, importRows({ remove: true }), linkRow, forkRow, doneRow, soundRow, errRow, loginRow, updRow, tourRow);
     const commands = el('div', 'agent-commands'), commandInputs = new Map();
     for (const [kind, profile] of Object.entries(s.profiles || {})) {
       const row = el('label', 'opt set'), input = el('input');
@@ -2239,6 +2249,7 @@ function showActivity(open) {
   $('#activity').hidden = !open;
   $('#btn-activity').classList.toggle('on', open);
   $('#btn-activity').setAttribute('aria-pressed', String(open));
+  $('#btn-activity').hidden = !open; // opened from Settings; shown while open so a click closes it
   if (open) { if (canvasOpen) closeCanvas(); $('#activity').focus(); drawActivity(); }
   else if ($('#modal').hidden && !fanOpen) top(focusedSlot())?.term.focus();
 }
@@ -2649,6 +2660,8 @@ function renderShareBar() {
   b.classList.toggle('off', !a || ACC.feed.canOffer === false);
   b.title = ACC.feed.canOffer === false ? ACC.feed.offersLater : a ? `share ${a.name} with a friend` : 'open an agent to share it with a friend';
   c.hidden = !n; c.textContent = n ? String(n) : '';
+  // the top right keeps synapse and share; friends lives in Settings and only shows here while someone waits on you
+  $('#btn-friends').hidden = !n && $('#friends-pop').hidden;
 }
 
 // "Mara shares api-auth with you": it goes into the agent of mine picked here. In the friends list and the circle.
@@ -2684,7 +2697,7 @@ async function openFriends() {
   const pop = $('#friends-pop');
   pop.hidden = false;
   renderFriends();
-  const r = $('#btn-friends').getBoundingClientRect(), w = pop.offsetWidth || 380;
+  const r = ($('#btn-friends').hidden ? $('#btn-share') : $('#btn-friends')).getBoundingClientRect(), w = pop.offsetWidth || 380;
   pop.style.top = `${Math.round(r.bottom + 6)}px`;
   pop.style.left = `${Math.round(Math.max(8, Math.min(innerWidth - w - 8, r.right - w)))}px`;
   await Promise.all([loadPeople(true), synapse.requests.agents().then((a) => { ACC.agents = a; }).catch(() => {})]);

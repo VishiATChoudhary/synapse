@@ -672,3 +672,7 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 
 /* a protected folder: agents only read and pull there */
 .wt-lock { flex: none; margin-left: 6px; padding: 1px 5px; font: 9.5px var(--mono); text-transform: uppercase; letter-spacing: .04em; color: var(--sig); border: 1px solid color-mix(in srgb, var(--sig) 50%, transparent); }
+
+/* Settings > open: the tools that used to sit in the top right */
+.modal .tool-btns { flex-wrap: wrap; justify-content: flex-end; }
+.modal .tool-btns .btn { padding: 7px 10px; border: 1px solid var(--rule); white-space: nowrap; }
