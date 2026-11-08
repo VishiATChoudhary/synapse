@@ -619,10 +619,7 @@ function createWindow({ show = !startedHidden() } = {}) {
     show,
     width: 1440, height: 900, minWidth: 900, minHeight: 560,
     ...(WIN ? { titleBarStyle: 'hidden', titleBarOverlay: { color: '#00000000', symbolColor: nativeTheme.shouldUseDarkColors ? '#E8E6E1' : '#1A1A1A', height: 48 } }
-      // Full screen (⌃⌘F, View > Toggle Full Screen) stays in this window: a full screen Space would put macOS's own
-      // title strip over the top of the app. Not fullscreenable, so the green button fills the screen the same way
-      // a double click on the title bar does, instead of opening a Space.
-      : { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 }, simpleFullscreen: true, fullscreenable: false }),
+      : { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 } }),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0B0B0B' : '#F1EFE9',
     webPreferences: { preload: path.join(ROOT, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
   });
@@ -639,19 +636,12 @@ function createWindow({ show = !startedHidden() } = {}) {
     if (i.type === 'keyDown' && (g || tab)) { e.preventDefault(); win.webContents.send('canvas:toggle'); }
   });
   if (!WIN) {
-    // in full screen the page reaches the top edge, so keep it out from under a MacBook's notch
-    let notch = '';
-    const fit = () => {
-      if (!win) return;
-      // in full screen macOS keeps the work area below the notch; if it reports none (menu bar set to hide), the
-      // notched screens are the built-in ones narrower than 16:10
-      const d = screen.getDisplayMatching(win.getBounds()), top = d.workArea.y - d.bounds.y;
-      const n = !win.isSimpleFullScreen() ? 0 : top > 0 ? top : d.internal && d.bounds.width / d.bounds.height < 1.58 ? 32 : 0;
-      const key = `${n}${win.isSimpleFullScreen()}`;
-      if (key !== notch) { notch = key; win.webContents.send('window:notch', { notch: n, full: win.isSimpleFullScreen() }); }
-    };
-    win.on('resize', fit);
-    win.webContents.on('did-finish-load', () => { notch = ''; fit(); });
+    // full screen is macOS's own (green button, ⌃⌘F): it keeps the page below a MacBook's notch by itself; the page
+    // only needs to know the traffic lights are gone
+    const fit = () => win?.webContents.send('window:notch', { notch: 0, full: win.isFullScreen() });
+    win.on('enter-full-screen', fit);
+    win.on('leave-full-screen', fit);
+    win.webContents.on('did-finish-load', fit);
   }
   win.on('closed', () => { win = null; });
   win.on('app-command', (_e, command) => {
@@ -710,9 +700,8 @@ function playIntro() {
 function noReload() {
   const menu = Menu.getApplicationMenu();
   if (!menu) return;
-  // full screen goes straight to the window (it stays in the window, see createWindow), not through AppKit's
-  // responder chain, which can lose the way back out of it
-  const full = { label: 'Toggle Full Screen', accelerator: 'Ctrl+Cmd+F', click: () => { const w = win || BrowserWindow.getFocusedWindow(); w?.setSimpleFullScreen(!w.isSimpleFullScreen()); } };
+  // full screen goes straight to the window, not through AppKit's responder chain, which can lose the way back out
+  const full = { label: 'Toggle Full Screen', accelerator: 'Ctrl+Cmd+F', click: () => { const w = win || BrowserWindow.getFocusedWindow(); w?.setFullScreen(!w.isFullScreen()); } };
   const strip = (items) => items.filter((i) => !['reload', 'forcereload'].includes(String(i.role || '').toLowerCase()))
     .map((i) => (String(i.role || '').toLowerCase() === 'togglefullscreen' ? full : { label: i.label, role: i.role, type: i.type, accelerator: i.accelerator, click: i.click, enabled: i.enabled, visible: i.visible,
       ...(i.submenu ? { submenu: strip(i.submenu.items) } : {}) }));
