@@ -27,7 +27,7 @@ function startSource(make, mode) {
   current?.close?.();
   current = make((next) => set({ ...next, mode }));
 }
-const empty = { agents: [], projects: [], kinds: null, shares: [], computer: null, online: false, access: null, error: null };
+const empty = { agents: [], listed: false, projects: [], kinds: null, shares: [], computer: null, online: false, access: null, error: null };
 
 // the account's computers; the chosen one (or the most recently seen) is the source
 async function loadComputers() {
@@ -94,6 +94,8 @@ export const source = {
   send: (id, text) => current?.send(id, text),
   answer: (id, option) => current?.answer(id, option),
   stop: (id) => current?.stop(id),
+  keys: (id, keys) => current?.keys?.(id, keys),
+  type: (id, text) => current?.type?.(id, text),
   rename: async (id, name) => (current?.rename ? current.rename(id, name) : { error: 'Not connected to a computer.' }),
   watch: (id) => current?.watch?.(id),
   spawn: async (opts) => (current ? current.spawn(opts) : null),

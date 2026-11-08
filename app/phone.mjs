@@ -14,6 +14,7 @@
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import nacl from 'tweetnacl';
 import { DATA, readJSON, writeJSON, listAgents, readAgentMessages, projectOf, colorOf, renameAgent } from '../lib.mjs';
 import { aboutOf } from './history.mjs';
@@ -25,7 +26,17 @@ const ACTIVE = 2 * 60_000;           // a phone that checked in this recently ge
 const FAST = 1500, SLOW = 10_000;    // poll while a phone is around, else now and then
 const MAX_AGE = 5 * 60_000;          // older messages are replays, or a phone with a very wrong clock
 const MSGS = 40, MSG_CHARS = 4000, TEXT_CHARS = 20_000;
+const SCREEN_LINES = 200;             // a shell's screen as the phone sees it: its last lines
+// keys the phone can press in a terminal, by name; nothing else goes through as raw input
+const KEYS = { enter: '\r', tab: '\t', esc: '\x1b', backspace: '\x7f', up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D',
+  'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-z': '\x1a', 'ctrl-l': '\x0c', 'ctrl-r': '\x12', 'ctrl-a': '\x01', 'ctrl-e': '\x05', 'ctrl-u': '\x15' };
+const SHELL = 'sh-';                   // a shell tab's id on the phone: sh-<terminal>
 const KEEP = 8, KEEP_EVERY = 15_000; // chats the phone keeps (its most opened): sent along, at most this often each
+// what is sent is not always received (a poll answer lost to a dropped connection, a full mailbox), so the list and
+// the open chat carry a tag; the phone says which tags it has and gets again whatever it is missing. A tag sent
+// moments ago may simply not have arrived yet: those are left to settle.
+const SETTLE = 6000;
+const tag = (s) => crypto.createHash('sha1').update(s).digest('base64url').slice(0, 12);
 
 const b64 = (u) => Buffer.from(u).toString('base64');
 const unb64 = (s) => new Uint8Array(Buffer.from(String(s || ''), 'base64'));
@@ -99,6 +110,7 @@ async function phonesOf(id, force = false) {
 
 let host = null;           // what the app lends us: projects, terminals, spawning
 let timer = null;
+let hurry = 0;              // until when to look again quickly: something was just typed into a terminal
 const live = new Map();    // phone id -> { watch, media, sent: { state, messages } } (memory only)
 const seen = new Map();    // message id -> time, against replays
 const spawns = new Map();  // request id -> { phone, at, pty }
@@ -130,7 +142,7 @@ async function tick() {
   } catch (e) {
     if (e.status === 401 && id) { const s = load(); s.token = null; save(s); } // the cloud forgot this mailbox: register again
   }
-  schedule(recent ? FAST : SLOW);
+  schedule(Date.now() < hurry ? 300 : recent ? FAST : SLOW);
 }
 
 async function receive(id, it) {
@@ -186,6 +198,14 @@ async function handle(id, phone, m) {
   if (m.t === 'extend') return send(id, phone, { t: 'shared', req: m.req, share: shares.extend(String(m.share || '')) });
   if (m.t === 'unshare') { shares.stop(String(m.share || '')); return; }
   if (m.t === 'watch') { l.watch = typeof m.id === 'string' ? m.id : null; l.sent.messages = null; return; }
+  // what the phone has: anything that did not arrive goes again, and a lost watch is taken from here
+  if (m.t === 'have') {
+    const now = Date.now(), watch = typeof m.id === 'string' ? m.id : null;
+    if (watch !== l.watch) { l.watch = watch; l.sent.messages = null; }
+    if (m.state !== l.sent.stateV && now - (l.sent.stateAt || 0) > SETTLE) l.sent.state = null;
+    if (watch && m.chat !== l.sent.v && now - (l.sent.at || 0) > SETTLE) l.sent.messages = null;
+    return;
+  }
   if (m.t === 'bye') { live.delete(phone.id); return; }
   // any agent here, running in the app or not; the app's tab takes the name too
   if (m.t === 'rename') {
@@ -193,6 +213,23 @@ async function handle(id, phone, m) {
     if (!a) throw new Error('that agent is no longer running');
     const r = renameAgent(a, clean(m.name, 48));
     return send(id, phone, { t: 'renamed', req: m.req, id: a.id, name: r.name });
+  }
+  // a shell tab: what is typed goes in as typed, Enter included
+  if (typeof m.id === 'string' && m.id.startsWith(SHELL) && ['send', 'stop', 'keys'].includes(m.t)) {
+    const pty = m.id.slice(SHELL.length);
+    hurry = Date.now() + 4000;
+    if (!(host.shells?.() || []).some((x) => x.pty === pty)) throw new Error('that shell is closed');
+    if (m.t === 'stop') return host.write(pty, KEYS['ctrl-c']);
+    if (m.t === 'keys') return pressKeys(pty, m.keys);
+    const text = String(m.text || '').slice(0, TEXT_CHARS);
+    if (text) host.write(pty, `${text.replace(/\r?\n/g, '\r')}\r`);
+    return;
+  }
+  if (m.t === 'keys') {
+    const a = listAgents().find((x) => x.id === m.id && !x.remote);
+    const pty = a && host.ptyOf(a.pid);
+    if (!pty) throw new Error('that agent is not in a Synapse terminal');
+    return pressKeys(pty, m.keys);
   }
   if (m.t === 'send' || m.t === 'stop') {
     const a = listAgents().find((x) => x.id === m.id && !x.remote);
@@ -212,6 +249,25 @@ async function handle(id, phone, m) {
     spawns.set(req, { phone: phone.id, at: Date.now(), pty: null });
     host.spawn({ req, cwd, kind, prompt: String(m.prompt || '').slice(0, TEXT_CHARS) });
   }
+}
+
+// a shell's screen as text: the end of its scrollback and the screen now, oldest line first; the cursor's line
+// and above are kept, empty rows below it are not
+export function screenText(term, max = SCREEN_LINES) {
+  if (!term) return null;
+  const b = term.buffer.active, from = Math.max(0, b.length - max), cursor = b.baseY + b.cursorY - from;
+  const lines = [];
+  for (let i = from; i < b.length; i++) lines.push(b.getLine(i)?.translateToString(true) ?? '');
+  while (lines.length > cursor + 1 && !lines.at(-1).trim()) lines.pop();
+  return { lines, cols: term.cols, cursor: { x: b.cursorX, y: cursor } };
+}
+const screenOf = (pty, max) => screenText(host.screenOf?.(pty), max);
+
+function pressKeys(pty, keys) {
+  hurry = Date.now() + 4000;
+  const list = (Array.isArray(keys) ? keys : [keys]).slice(0, 32);
+  if (!list.every((k) => Object.hasOwn(KEYS, k))) throw new Error('unknown key');
+  host.write(pty, list.map((k) => KEYS[k]).join(''));
 }
 
 // the renderer opened the terminal a phone asked for: once the agent in it shows up, tell the phone its id
@@ -326,6 +382,15 @@ function snapshot() {
       preview: last ? { role: last.role, text: last.text.slice(0, 200) } : null,
     };
   });
+  for (const sh of (host.shells?.() || [])) {
+    const pr = projectOf(sh.cwd), last = [...(screenOf(sh.pty, 60)?.lines || [])].reverse().find((x) => x.trim());
+    agents.push({
+      id: SHELL + sh.pty, kind: 'shell', shell: true, name: clean(sh.title, 48) || 'shell', status: sh.running ? 'busy' : 'idle', forkOf: null,
+      about: sh.running ? clean(sh.running, 140) : null,
+      project: { key: pr.key, label: pr.label, color: colorOf(pr.key) }, worktree: pr.worktree?.name || null,
+      inApp: true, updatedAt: sh.at, preview: last ? { role: 'assistant', text: last.trim().slice(0, 200) } : null,
+    });
+  }
   return { projects, agents, kinds: host.kinds(), shares: shares.list() };
 }
 
@@ -346,15 +411,31 @@ async function push(id) {
   for (const pid of active) {
     const phone = list.find((p) => p.id === pid), l = live.get(pid);
     if (!phone) continue;
-    if (l.sent.state !== state) { await send(id, phone, { t: 'state', ...snap }); l.sent.state = state; }
-    if (l.watch) {
+    if (l.sent.state !== state) {
+      const v = tag(state);
+      await send(id, phone, { t: 'state', ...snap, v });
+      Object.assign(l.sent, { state, stateV: v, stateAt: Date.now() });
+    }
+    if (l.watch?.startsWith(SHELL)) {
+      const screen = screenOf(l.watch.slice(SHELL.length), SCREEN_LINES);
+      const body = JSON.stringify(screen);
+      if (l.sent.messages !== body) {
+        const v = tag(body);
+        await send(id, phone, { t: 'screen', id: l.watch, ...(screen || { gone: true }), v });
+        Object.assign(l.sent, { messages: body, v, at: Date.now() });
+      }
+    } else if (l.watch) {
       const a = listAgents().find((x) => x.id === l.watch);
       const raw = a ? messagesOf(a, l.media) : [];
       // videos in what the phone is looking at get their phone copy made now, so they are ready when reached
       if (l.media) for (const m of raw) for (const mid of m.media || []) if (mid.startsWith('v')) media.prepare(mid);
       const messages = withRefs(raw);
       const body = JSON.stringify(messages);
-      if (l.sent.messages !== body) { await send(id, phone, { t: 'messages', id: l.watch, messages }); l.sent.messages = body; }
+      if (l.sent.messages !== body) {
+        const v = tag(body);
+        await send(id, phone, { t: 'messages', id: l.watch, messages, v });
+        Object.assign(l.sent, { messages: body, v, at: Date.now() });
+      }
     }
     // the chats the phone keeps, so they open at once: text only, and no more often than KEEP_EVERY each
     for (const kid of l.keep) {

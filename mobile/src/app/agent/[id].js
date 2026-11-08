@@ -6,7 +6,8 @@ import { withConsent } from '../../consent';
 import { LinkChips } from '../../LinkChips';
 import { MediaStrip } from '../../MediaStrip';
 import { RenameSheet } from '../../Rename';
-import { source, useAgent } from '../../store';
+import { Shell } from '../../Shell';
+import { source, useAgent, useSynapse } from '../../store';
 import { FONT, R, round, useTheme } from '../../theme';
 import { Button, Dots, FadeIn, Mark, Markdown, Meta, Press, haptic } from '../../ui';
 
@@ -72,11 +73,11 @@ function Needs({ a }) {
 function Title({ a, onPress }) {
   const t = useTheme();
   return (
-    <Press onPress={onPress} sink={0.95} hitSlop={8} accessibilityRole="button" accessibilityLabel={`${a.name}, rename`}
+    <Press onPress={onPress} disabled={!onPress} sink={0.95} hitSlop={8} accessibilityRole={onPress ? 'button' : 'header'} accessibilityLabel={onPress ? `${a.name}, rename` : a.name}
       style={{ flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: 260 }}>
       <Mark color={a.project.color} status={a.status} needs={a.needs} />
       <View style={{ flexShrink: 1 }}>
-        <Text style={{ fontFamily: FONT.sansMedium, fontSize: 16, color: t.ink }} numberOfLines={1}>{a.name} <Text style={{ color: t.ink3, fontSize: 13 }}>✎</Text></Text>
+        <Text style={{ fontFamily: FONT.sansMedium, fontSize: 16, color: t.ink }} numberOfLines={1}>{a.name}{!!onPress && <Text style={{ color: t.ink3, fontSize: 13 }}> ✎</Text>}</Text>
         <Meta numberOfLines={1}>{[a.kind, a.project.label, a.worktree].filter(Boolean).join(' · ')}</Meta>
       </View>
     </Press>
@@ -88,10 +89,12 @@ export default function Agent() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams();
   const a = useAgent(id);
+  const { listed } = useSynapse();
   const [text, setText] = useState('');
   const [renaming, setRenaming] = useState(null);
   const [keyboard, setKeyboard] = useState(false);
   const scroll = useRef(null);
+  const atEnd = useRef(true); // following the end: content that grows or shrinks (images, a shorter reply) keeps the end in view
   const [seen, setSeen] = useState(null); // messages there when the screen opened appear at once, newer ones fade in
   const count = a?.messages.length;
   if (seen == null && a) setSeen(group(a.messages).length);
@@ -103,7 +106,17 @@ export default function Agent() {
     const hide = Keyboard.addListener(IOS ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboard(false));
     return () => { show.remove(); hide.remove(); };
   }, []);
-  if (!a) return <View style={{ flex: 1, backgroundColor: t.paper }} />;
+  if (!a) return (
+    <View style={{ flex: 1, backgroundColor: t.paper, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
+      <Meta>{listed ? 'This chat is no longer on your computer.' : 'Connecting to your computer…'}</Meta>
+    </View>
+  );
+  if (a.shell) return (
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: t.paper }} behavior={IOS ? 'padding' : undefined} keyboardVerticalOffset={insets.top + 44}>
+      <Stack.Screen options={{ headerTitle: () => <Title a={a} /> }} />
+      <Shell a={a} />
+    </KeyboardAvoidingView>
+  );
   const busy = a.status === 'busy';
   const ready = !!text.trim();
   const send = async () => {
@@ -119,7 +132,9 @@ export default function Agent() {
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: t.paper }} behavior={IOS ? 'padding' : undefined} keyboardVerticalOffset={insets.top + 44}>
       <Stack.Screen options={{ headerTitle: () => <Title a={a} onPress={() => { haptic.pick(); setRenaming(a); }} /> }} />
       <ScrollView
-        ref={scroll} contentContainerStyle={{ padding: 20, paddingBottom: 12, gap: 18 }}
+        ref={scroll} contentContainerStyle={{ padding: 20, paddingBottom: 12, gap: 18 }} scrollEventThrottle={100}
+        onScroll={({ nativeEvent: e }) => { atEnd.current = e.contentOffset.y + e.layoutMeasurement.height >= e.contentSize.height - 80; }}
+        onContentSizeChange={() => { if (atEnd.current) scroll.current?.scrollToEnd({ animated: false }); }}
         keyboardDismissMode={IOS ? 'interactive' : 'on-drag'} keyboardShouldPersistTaps="handled"
       >
         {!!about && (

@@ -136,7 +136,7 @@ const END_REASONS = ['owner', 'asker', 'idle', 'refused', 'revoked', 'unavailabl
 // future). The ask clears waitUntil under the same lock before it gives up, so each one is delivered exactly once.
 const unattended = (turn, now) => turn.waitUntil == null || now > turn.waitUntil;
 const fromRemote = (c) => ({ id: remoteId(c.peer, c.target), name: `${c.targetName}@${c.peerName}` });
-const toAsker = (c) => ({ id: c.asker, name: c.askerName });
+const toAsker = (c) => (c.via ? { id: c.via, name: c.viaName } : { id: c.asker, name: c.askerName }); // a liaison hears its own answers
 
 const answerText = (c, t) => `${c.targetName}@${c.peerName} answered (conversation ${c.id}):\n\n${t.a}`;
 const endText = (c) => `Your conversation with ${c.targetName}@${c.peerName} ended (${c.endReason}) before it answered (conversation ${c.id}).`;
@@ -296,22 +296,22 @@ function receiveRequestStatus(peer, item) {
 
 // Start or continue a conversation with a friend's agent and add the question as its next turn.
 // `agent` is a remote entry from listAgents(). An ended conversation id is spent, so the default is always a fresh one.
-export function openAsk({ me, agent, conversation, question, now = Date.now(), waitMs = 0, offline = false }) {
+export function openAsk({ me, via = null, agent, conversation, question, now = Date.now(), waitMs = 0, offline = false }) {
   const r = agent.remote;
   return update((s) => {
     let c;
     if (conversation) {
       c = convOf(s, conversation);
-      if (!c || c.role !== 'asker' || c.asker !== me.id) throw new Error(`No conversation "${conversation}". Leave it out to start a new one.`);
+      if (!c || c.role !== 'asker' || c.asker !== me.id || (c.via || null) !== (via?.id || null)) throw new Error(`No conversation "${conversation}". Leave it out to start a new one.`);
       if (c.status !== 'open') throw new Error(`Conversation ${conversation} has ended. Leave it out to start a new one.`);
       if (c.peer !== r.machine || c.target !== r.agentId) throw new Error(`Conversation ${conversation} is with ${c.targetName}@${c.peerName}, not ${agent.name}@${r.owner}.`);
     } else {
-      c = s.conversations.find((x) => x.role === 'asker' && x.status === 'open' && x.asker === me.id && x.peer === r.machine && x.target === r.agentId);
+      c = s.conversations.find((x) => x.role === 'asker' && x.status === 'open' && x.asker === me.id && (x.via || null) === (via?.id || null) && x.peer === r.machine && x.target === r.agentId);
     }
     if (!c) {
       c = {
         id: crypto.randomUUID(), role: 'asker', peer: r.machine, peerName: r.owner, target: r.agentId, targetName: agent.name,
-        asker: me.id, askerName: me.name, status: 'open', turns: [], createdAt: now, lastAt: now,
+        asker: me.id, askerName: me.name, ...(via ? { via: via.id, viaName: via.name } : {}), status: 'open', turns: [], createdAt: now, lastAt: now,
       };
       s.conversations.push(c);
     }
@@ -340,7 +340,7 @@ export function takeAnswer(convId, seq, { final = false } = {}) {
 export function endAsked(convId, me, now = Date.now()) {
   return update((s) => {
     const c = convOf(s, convId);
-    if (!c || c.role !== 'asker' || c.asker !== me.id) throw new Error(`No conversation "${convId}".`);
+    if (!c || c.role !== 'asker' || (c.asker !== me.id && c.via !== me.id)) throw new Error(`No conversation "${convId}".`);
     if (c.status !== 'open') return null;
     end(c, 'asker', null, now);
     c.endTaken = true; // her own end is never news to her inbox

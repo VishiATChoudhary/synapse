@@ -10,6 +10,7 @@ import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
 import { git, listChoices, listWorktrees, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
+import * as saved from '../saved.mjs';
 import { DATA, FILES, WIN, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, readAgentMessages, takeInbox } from '../lib.mjs';
 import { createEdge, allowTalkRequest, dismissTalkRequest, setMode, removeEdge } from '../ops.mjs';
 import { openRequests, talkPerHour, talkModel, clampPerHour } from '../talk.mjs';
@@ -19,6 +20,7 @@ import * as phone from './phone.mjs';
 import { collect as collectActivity, lastWeek } from './activity.mjs';
 import { createDiscovery } from '../discovery.mjs';
 import * as chats from './history.mjs';
+import headless from '@xterm/headless';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 if (process.env.SYNAPSE_USER_DATA) app.setPath('userData', path.resolve(process.env.SYNAPSE_USER_DATA));
@@ -292,7 +294,7 @@ let integrationSetup = Promise.resolve();
 // Variables that tie a process to the session that launched it. If the app was started from inside an agent
 // (Claude Code, Superset, ...), passing these on makes every agent here think it is that session's child:
 // Claude then stops saving its transcript and never shows up in Synapse.
-const INHERITED = /^(CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_PLUGIN_DATA|AI_AGENT|CODEX_COMPANION_.*|CODEX_THREAD_ID|CODEX_SESSION_ID|SUPERSET_.*|SYNAPSE_AGENT|SYNAPSE_FORK_.*)$/;
+const INHERITED = /^(CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_PLUGIN_DATA|AI_AGENT|CODEX_COMPANION_.*|CODEX_THREAD_ID|CODEX_SESSION_ID|SUPERSET_.*|SYNAPSE_AGENT|SYNAPSE_FORK_.*|SYNAPSE_LIAISON_.*)$/;
 // An app started from the Dock has launchd's bare PATH, and the login shell the pty runs never reads
 // .zshrc, which is where PATH usually grows (claude's installer adds ~/.local/bin there). Ask an interactive
 // login shell once for the PATH a terminal would have had.
@@ -329,10 +331,16 @@ async function spawnPty({ cwd, kind, command, cols = 120, rows = 36, extraEnv = 
     ? (command ? pty.spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', command], { name: 'xterm-256color', cols, rows, cwd, env, useConpty: true })
       : pty.spawn(SHELL, ['-NoLogo'], { name: 'xterm-256color', cols, rows, cwd, env, useConpty: true }))
     : pty.spawn(SHELL, command ? ['-lc', `exec ${command}`] : ['-l'], { name: 'xterm-256color', cols, rows, cwd, env });
-  ptys.set(id, { p, cwd, kind, pid: p.pid });
+  const t = { p, cwd, kind, pid: p.pid, at: Date.now() };
+  // a shell keeps a copy of its screen here too, so the phone can show it (agents show their chat instead)
+  if (kind === 'shell' && !command) {
+    t.screen = new headless.Terminal({ cols, rows, scrollback: 1000, allowProposedApi: true });
+    t.screen.onTitleChange((title) => { t.title = title; });
+  }
+  ptys.set(id, t);
   savePtys();
-  p.onData((data) => win?.webContents.send('pty:data', { id, data }));
-  p.onExit(({ exitCode }) => { ptys.delete(id); savePtys(); if (!quitting) win?.webContents.send('pty:exit', { id, code: exitCode }); });
+  p.onData((data) => { t.at = Date.now(); t.screen?.write(data); win?.webContents.send('pty:data', { id, data }); });
+  p.onExit(({ exitCode }) => { ptys.delete(id); t.screen?.dispose(); savePtys(); if (!quitting) win?.webContents.send('pty:exit', { id, code: exitCode }); });
   return { id, pid: p.pid };
 }
 
@@ -543,27 +551,33 @@ function submit(id, text) {
 
 // The phone's first prompt for an agent it asked for, until the renderer has opened that agent's terminal.
 const phonePrompts = new Map();
-function startPhone() {
-  phone.start({
-    projects,
-    kinds: () => Object.keys(config().profiles).filter((k) => k !== 'shell'),
-    ptyOf: (pid) => { const a = WIN && listAgents().find((x) => x.pid === pid); const host = a ? hostOf(a) : pid; return [...ptys].find(([, t]) => t.pid === host)?.[0] || null; },
-    write: (id, data) => ptys.get(id)?.p.write(data),
-    submit,
-    spawn: ({ req, cwd, kind, prompt }) => {
-      if (prompt) phonePrompts.set(req, prompt);
-      win?.webContents.send('phone:spawn', { req, cwd, kind });
-    },
-    changed: (e) => {
-      win?.webContents.send('phone:changed', e);
-      if (e.asking && Notification.isSupported()) {
-        const n = new Notification({ title: 'A phone wants to use this Mac', body: `${e.asking} signed in to your Synapse account. Allow it in Synapse settings.` });
-        n.on('click', () => { win?.show(); win?.webContents.send('phone:show'); });
-        n.show();
-      }
-    },
-  });
-}
+export const phoneHost = {
+  projects,
+  kinds: () => Object.keys(config().profiles).filter((k) => k !== 'shell'),
+  ptyOf: (pid) => { const a = WIN && listAgents().find((x) => x.pid === pid); const host = a ? hostOf(a) : pid; return [...ptys].find(([, t]) => t.pid === host)?.[0] || null; },
+  write: (id, data) => ptys.get(id)?.p.write(data),
+  submit,
+  // the app's shell tabs, with what runs in front in each (nothing: the prompt is waiting)
+  shells: () => [...ptys].filter(([, t]) => t.screen).map(([id, t]) => {
+    const front = foreground(id), shell = path.basename(SHELL);
+    const running = front && path.basename(front.split(/\s+/)[0]).replace(/^-/, '') !== shell ? front : null;
+    return { pty: id, cwd: t.cwd, title: t.title || '', at: t.at, running };
+  }),
+  screenOf: (id) => ptys.get(id)?.screen || null, // a shell's headless copy of its screen
+  spawn: ({ req, cwd, kind, prompt }) => {
+    if (prompt) phonePrompts.set(req, prompt);
+    win?.webContents.send('phone:spawn', { req, cwd, kind });
+  },
+  changed: (e) => {
+    win?.webContents.send('phone:changed', e);
+    if (e.asking && Notification.isSupported()) {
+      const n = new Notification({ title: 'A phone wants to use this Mac', body: `${e.asking} signed in to your Synapse account. Allow it in Synapse settings.` });
+      n.on('click', () => { win?.show(); win?.webContents.send('phone:show'); });
+      n.show();
+    }
+  },
+};
+function startPhone() { phone.start(phoneHost); }
 
 // ---------------------------------------------------------------- synapse canvas
 
@@ -605,7 +619,10 @@ function createWindow({ show = !startedHidden() } = {}) {
     show,
     width: 1440, height: 900, minWidth: 900, minHeight: 560,
     ...(WIN ? { titleBarStyle: 'hidden', titleBarOverlay: { color: '#00000000', symbolColor: nativeTheme.shouldUseDarkColors ? '#E8E6E1' : '#1A1A1A', height: 48 } }
-      : { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 } }),
+      // Full screen (⌃⌘F, View > Toggle Full Screen) stays in this window: a full screen Space would put macOS's own
+      // title strip over the top of the app. Not fullscreenable, so the green button fills the screen the same way
+      // a double click on the title bar does, instead of opening a Space.
+      : { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 }, simpleFullscreen: true, fullscreenable: false }),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0B0B0B' : '#F1EFE9',
     webPreferences: { preload: path.join(ROOT, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
   });
@@ -621,6 +638,21 @@ function createWindow({ show = !startedHidden() } = {}) {
     const tab = i.control && !i.meta && !i.alt && i.key === 'Tab';
     if (i.type === 'keyDown' && (g || tab)) { e.preventDefault(); win.webContents.send('canvas:toggle'); }
   });
+  if (!WIN) {
+    // in full screen the page reaches the top edge, so keep it out from under a MacBook's notch
+    let notch = '';
+    const fit = () => {
+      if (!win) return;
+      // in full screen macOS keeps the work area below the notch; if it reports none (menu bar set to hide), the
+      // notched screens are the built-in ones narrower than 16:10
+      const d = screen.getDisplayMatching(win.getBounds()), top = d.workArea.y - d.bounds.y;
+      const n = !win.isSimpleFullScreen() ? 0 : top > 0 ? top : d.internal && d.bounds.width / d.bounds.height < 1.58 ? 32 : 0;
+      const key = `${n}${win.isSimpleFullScreen()}`;
+      if (key !== notch) { notch = key; win.webContents.send('window:notch', { notch: n, full: win.isSimpleFullScreen() }); }
+    };
+    win.on('resize', fit);
+    win.webContents.on('did-finish-load', () => { notch = ''; fit(); });
+  }
   win.on('closed', () => { win = null; });
   win.on('app-command', (_e, command) => {
     if (command === 'browser-backward') win?.webContents.send('canvas:back');
@@ -673,9 +705,24 @@ function playIntro() {
   });
 }
 
+// The default menu, without Reload and Force Reload: ⌘R / ⇧⌘R reloaded the window, which threw away every terminal's
+// screen and the app's hold on its sessions. Everything else (edit, window, ⌘Q, dev tools) stays as it was.
+function noReload() {
+  const menu = Menu.getApplicationMenu();
+  if (!menu) return;
+  // full screen goes straight to the window (it stays in the window, see createWindow), not through AppKit's
+  // responder chain, which can lose the way back out of it
+  const full = { label: 'Toggle Full Screen', accelerator: 'Ctrl+Cmd+F', click: () => { const w = win || BrowserWindow.getFocusedWindow(); w?.setSimpleFullScreen(!w.isSimpleFullScreen()); } };
+  const strip = (items) => items.filter((i) => !['reload', 'forcereload'].includes(String(i.role || '').toLowerCase()))
+    .map((i) => (String(i.role || '').toLowerCase() === 'togglefullscreen' ? full : { label: i.label, role: i.role, type: i.type, accelerator: i.accelerator, click: i.click, enabled: i.enabled, visible: i.visible,
+      ...(i.submenu ? { submenu: strip(i.submenu.items) } : {}) }));
+  Menu.setApplicationMenu(Menu.buildFromTemplate(strip(menu.items)));
+}
+
 app.whenReady().then(() => {
   integrationSetup = autoSetup(); // install guidance before a new or restored agent starts
   if (WIN) Menu.setApplicationMenu(null); // its accelerators (Ctrl+W closes the window, Ctrl+R reloads) belong to the terminals
+  else noReload();
   offerMove();
   if (wantsIntro()) {
     createWindow({ show: false });
@@ -856,7 +903,9 @@ const handle = (ch, fn) => ipcMain.handle(ch, async (event, a) => {
 handle('state', async () => { await discovery.refresh(); return state(); });
 handle('flags', () => ({ demo: DEMO, packaged: app.isPackaged, view: process.env.SYNAPSE_DESKTOP_VIEW || '', shot: process.env.SYNAPSE_SHOT_VIEW || '', steps: JSON.parse(process.env.SYNAPSE_SHOT_STEPS || '[]'), cwd: process.cwd(), home: os.homedir() }));
 handle('pty:spawn', async (a) => {
-  const r = await spawnPty(a);
+  // a liaison (⌘N, ask a friend): talks with friends' agents for the agent it names, see liaisonFor in ops.mjs
+  const liaison = a.liaisonFor && typeof a.liaisonFor.id === 'string' ? { SYNAPSE_LIAISON_FOR: a.liaisonFor.id.slice(0, 200), SYNAPSE_LIAISON_NAME: String(a.liaisonFor.name || '').slice(0, 80) } : {};
+  const r = await spawnPty({ ...a, extraEnv: liaison });
   if (a.phoneReq) { // a terminal the phone asked for: its first prompt goes in once the agent is ready
     phone.spawned(a.phoneReq, r.id);
     prefill(r.id, phonePrompts.get(a.phoneReq), true);
@@ -882,7 +931,8 @@ handle('messages:take', ({ id }) => takeInbox(id).map((m) => ({ from: m.fromName
 
 // the program in front in a terminal (zsh, claude, `node .../codex.js`): its command line, from the tty's foreground
 // process group. Windows has no such thing to ask: there it is the name node-pty knows
-handle('pty:foreground', ({ id }) => {
+handle('pty:foreground', ({ id }) => foreground(id));
+function foreground(id) {
   const t = ptys.get(id);
   if (!t) return '';
   if (WIN) return t.p.process || '';
@@ -890,8 +940,8 @@ handle('pty:foreground', ({ id }) => {
     const pgid = execFileSync('ps', ['-o', 'tpgid=', '-p', String(t.pid)], { encoding: 'utf8', timeout: 2000 }).trim();
     return execFileSync('ps', ['-o', 'args=', '-p', pgid], { encoding: 'utf8', timeout: 2000 }).trim();
   } catch { return t.p.process || ''; }
-});
-handle('pty:resize', ({ id, cols, rows }) => { try { ptys.get(id)?.p.resize(cols, rows); } catch {} });
+}
+handle('pty:resize', ({ id, cols, rows }) => { try { ptys.get(id)?.p.resize(cols, rows); ptys.get(id)?.screen?.resize(cols, rows); } catch {} });
 handle('pty:kill', ({ id }) => { ptys.get(id)?.p.kill(); });
 handle('fork:spawn', (a) => spawnFork(a));
 handle('pty:restore', ({ cwd, kind, resume, cols, rows }) => {
@@ -1170,6 +1220,45 @@ handle('trust:ignore', async ({ id }) => {
 handle('people:remove', async ({ id }) => (await acct()).untrust(id));
 handle('requests:list', () => feed);
 handle('requests:agents', () => localAgentList());
+// ⌘S: the agent in this terminal, cleared, with its transcript archived losslessly in place of the original
+// (saved.mjs). Save shows what will happen; Clear sends the agent's clear command, leaves a digest in its prompt,
+// then archives the old transcript, which no longer changes.
+const saving = new Map(); // pty -> { agent, id } between the sheet and Clear
+const CLEAR = { claude: '/clear', codex: '/new' }; // how each agent starts over in the same terminal
+handle('session:save', ({ pty: id }) => {
+  const host = ptys.get(id)?.pid, a = host && discovery.agents.find((x) => hostOf(x) === host);
+  if (!a) throw new Error('No agent runs in this terminal yet.');
+  const p = saved.prepare(a);
+  saving.set(id, { agent: a, id: p.id });
+  return { ...p, name: a.name, kind: a.kind, clears: CLEAR[a.kind] || null };
+});
+handle('session:clear', async ({ pty: id, note }) => {
+  const t = ptys.get(id), s = saving.get(id);
+  if (!t || !s || !CLEAR[s.agent.kind]) throw new Error('Press ⌘S again: this agent cannot be cleared from here.');
+  saving.delete(id);
+  const text = typeof note === 'string' ? note.trim().slice(0, 4000) : '';
+  // the digest goes in once the agent has redrawn after clearing (quiet for a moment), after a few seconds at the latest
+  const settled = new Promise((done) => {
+    let quiet = null;
+    const go = () => { clearTimeout(quiet); clearTimeout(cap); sub.dispose(); if (text && ptys.get(id) === t) t.p.write(`\x1b[200~${text}\x1b[201~`); done(); };
+    const sub = t.p.onData(() => { clearTimeout(quiet); quiet = setTimeout(go, 900); });
+    const cap = setTimeout(go, 6000);
+    quiet = setTimeout(go, 2000);
+  });
+  submit(id, CLEAR[s.agent.kind]);
+  await settled;
+  return saved.archive(s.agent, s.id);
+});
+handle('saved:list', () => saved.list());
+// friends' agents shared with this machine, and which of my agents each one is shared with (read, or read and ask)
+handle('friends:agents', () => {
+  const edges = readJSON(FILES.edges, []);
+  return listAgents().filter((a) => a.remote).map((a) => ({
+    id: a.id, name: a.name, kind: a.kind, status: a.status, owner: a.remote.owner, handle: a.remote.handle || null, project: a.remote.project || '',
+    ask: `${a.name}@${a.remote.handle || a.remote.owner}`,
+    receivers: edges.filter((e) => e.mirrored && e.from === a.id).map((e) => ({ id: e.to, mode: e.mode === 'talk' ? 'talk' : 'sync' })),
+  }));
+});
 // accept and deny answer the cloud, then poll at once so the circle changes without waiting for the next tick
 async function decide(id, fn, extra = {}) {
   if (FAKE) {

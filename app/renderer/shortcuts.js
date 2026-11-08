@@ -14,7 +14,7 @@ export const ACTIONS = [
 export const COMMANDS = [
   ['shell', 'new shell tab'], ['agent-picker', 'agent picker'], ['split-right', 'split side by side'], ['split-down', 'split top and bottom'],
   ['close', 'close tab'], ['next', 'next tab'], ['prev', 'previous tab'], ['sidebar', 'toggle sidebar'], ['fork', 'fork'],
-  ['fork-tree', 'fork tree'], ['canvas', 'node view'], ['search', 'find in terminal'], ['theme-toggle', 'light / dark'],
+  ['fork-tree', 'fork tree'], ['canvas', 'node view'], ['search', 'find in terminal'], ['save-session', 'archive chat and clear'], ['theme-toggle', 'light / dark'],
   ['past-chats', 'past chats'], ['worktree', 'new worktree'], ['settings', 'settings'],
 ];
 

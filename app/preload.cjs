@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('synapse', {
   // where a dropped file or folder lives on disk (the page itself only sees a File)
   pathForFile: (file) => webUtils.getPathForFile(file),
   onState: (fn) => on('state', fn),
+  onNotch: (fn) => on('window:notch', fn),
   notify: { done: (a) => call('notify:done', a), onOpen: (fn) => on('notify:open', fn) },
   history: {
     sources: () => call('history:sources'),
@@ -82,6 +83,8 @@ contextBridge.exposeInMainWorld('synapse', {
   onboarding: { get: () => call('onboarding:get'), done: () => call('onboarding:done') },
   integrations: { preview: () => call('integrations:preview'), install: () => call('integrations:install'), onSetup: (fn) => on('setup:done', fn) },
   shares: { mode: (id, mode) => call('share:mode', { id, mode }), remove: (id) => call('share:remove', { id }) },
+  friends: { agents: () => call('friends:agents') },
+  saved: { save: (pty) => call('session:save', { pty }), clear: (pty, note) => call('session:clear', { pty, note }), list: () => call('saved:list') },
   people: { list: () => call('people:list'), add: (who) => call('people:add', { who }), remove: (id) => call('people:remove', { id }),
     trustBack: (id, handle) => call('trust:back', { id, handle }), ignore: (id) => call('trust:ignore', { id }) },
   requests: {

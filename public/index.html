@@ -318,8 +318,7 @@
 <div class="hints" id="hints">
   <div class="head">Shortcuts</div>
   <span>search<kbd>⌘F</kbd></span>
-  <span>link<kbd>drag ring</kbd></span>
-  <span>move agent or project<kbd>drag</kbd></span>
+  <span>link<kbd>drag an agent</kbd></span>
   <span>rename agent or project<kbd>dbl-click</kbd></span>
   <span>zoom<kbd>scroll</kbd></span>
   <span>fit<kbd>F</kbd></span>
@@ -356,6 +355,7 @@ let mouse = { x: 0, y: 0, wx: 0, wy: 0 };
 const flows = new Map();  // edge id -> burst intensity 0..1
 const packets = [];       // messages in flight {from, to, born}
 let query = '', matches = null, resultIdx = 0;
+let focusId = null, focus = null; // the agent under the pointer (else the selected one) and those linked to it: the rest fades
 
 // Collapsing is presentation only: nodes, links and running agents are preserved.
 const collapsedBranches = new Set();
@@ -548,8 +548,7 @@ function applyState(s) {
     if (!n) {
       const parent = a.forkOf && agents.get(a.forkOf);
       const p = layout[a.id] || (parent ? nearParent(parent) : spawnPoint(agents.size, a.frameKey));
-      n = { x: p.x, y: p.y, born: performance.now(), color: a.color, phase: Math.random() * 6.28, dying: 0 };
-      if (!layout[a.id] && !a.external) setTimeout(() => agents.has(a.id) && saveLayout(a.id), 1500);
+      n = { x: p.x, y: p.y, born: performance.now(), color: a.color, phase: Math.random() * 6.28, dying: 0, fresh: !parent };
       agents.set(a.id, n);
     }
     n.a = a; n.color = a.color; n.dying = 0;
@@ -567,7 +566,7 @@ function applyState(s) {
   if (thread) renderThread();
   else if (selected?.type === 'node') renderPanel(false);
   if (selected?.type === 'edge') renderEpop();
-  settleFrames();
+  layoutAll();
 }
 
 // ---------- friends (multiplayer) ----------
@@ -620,7 +619,7 @@ const es = new EventSource('/api/events');
 let firstState = true;
 es.addEventListener('state', (ev) => {
   applyState(JSON.parse(ev.data));
-  if (firstState) { firstState = false; if (framesOverlap()) arrange(); fit(true); }
+  if (firstState) { firstState = false; fit(true); }
 });
 es.addEventListener('flow', (ev) => {
   const f = JSON.parse(ev.data);
@@ -640,10 +639,6 @@ es.addEventListener('flow', (ev) => {
   if (from && to) toast(`Context flowed: ${from.a.name} → ${to.a.name}`);
 });
 
-function saveLayout(id) {
-  const n = agents.get(id);
-  fetch('/api/layout', { method: 'POST', body: JSON.stringify({ [id]: { x: Math.round(n.x), y: Math.round(n.y) } }) });
-}
 async function addEdge(from, to) {
   const r = await fetch('/api/edges', { method: 'POST', body: JSON.stringify({ from, to }) });
   if (r.status === 409) return toast('Already linked');
@@ -768,29 +763,20 @@ cv.addEventListener('pointerdown', (ev) => {
     return;
   }
   const sx = ev.clientX, sy = ev.clientY;
-  if (h?.type === 'node') { const n = agents.get(h.id); drag = { mode: 'move', id: h.id, ox: w.x - n.x, oy: w.y - n.y, sx, sy, moved: false }; }
+  if (h?.type === 'node') drag = { mode: 'node', id: h.id, sx, sy }; // a click selects it, a drag links it
   else if (h?.type === 'ring') drag = { mode: 'link', id: h.id, sx, sy };
   else if (h?.type === 'x') { removeEdge(h.id); hover = null; }
   else if (h?.type === 'edge') {
     selected = { type: 'edge', id: h.id }; closePanel(); renderEpop();
     if (edges.find((e) => e.id === h.id)?.mode === 'talk') openThread({ edge: h.id });
   }
-  else if (h?.type === 'group') drag = { mode: 'group', key: h.key, wx: w.x, wy: w.y, sx, sy, moved: false };
   else drag = { mode: 'pan', sx, sy, cx: cam.tx, cy: cam.ty, moved: false };
 });
 addEventListener('pointermove', (ev) => {
   mouse.x = ev.clientX; mouse.y = ev.clientY;
   const w = toWorld(ev.clientX, ev.clientY); mouse.wx = w.x; mouse.wy = w.y;
-  if (drag?.mode === 'move') {
-    const n = agents.get(drag.id); if (!n) return;
-    if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) > 3) drag.moved = true;
-    const r = treeRoot(n), at = n.slot || n; // a node in a fork tree drags the whole tree by its root
-    r.x += w.x - drag.ox - at.x; r.y += w.y - drag.oy - at.y;
-  } else if (drag?.mode === 'group') {
-    if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) > 3) drag.moved = true;
-    const g = groupRects().find((r) => r.key === drag.key);
-    if (g) for (const [, n] of g.nodes) { n.x += w.x - drag.wx; n.y += w.y - drag.wy; delete n.goal; }
-    drag.wx = w.x; drag.wy = w.y;
+  if (drag?.mode === 'node' && !agents.get(drag.id)?.a?.external && Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) > 6) {
+    drag.mode = 'link';
   } else if (drag?.mode === 'pan') {
     if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) > 3) drag.moved = true;
     cam.tx = drag.cx + ev.clientX - drag.sx; cam.ty = drag.cy + ev.clientY - drag.sy;
@@ -800,27 +786,21 @@ addEventListener('pointermove', (ev) => {
   }
   cv.style.cursor = drag?.mode === 'link' ? 'crosshair' : drag?.mode ? 'grabbing'
     : EMBEDDED && openMod(ev) && hover?.type === 'node' ? 'pointer'
-    : hover?.type === 'ring' ? 'crosshair' : hover?.type === 'node' || hover?.type === 'group' ? 'grab'
+    : hover?.type === 'ring' ? 'crosshair' : hover?.type === 'node' ? 'pointer'
     : hover?.type === 'x' || hover?.type === 'edge' ? 'pointer' : 'default';
 });
 addEventListener('pointerup', () => {
   if (!drag) return;
-  if (drag.mode === 'move') {
-    if (drag.moved) saveLayout(heldId());
-    else if (agents.get(drag.id)?.a.external) openThread({ conv: agents.get(drag.id).a.external.id });
+  if (drag.mode === 'node') {
+    if (agents.get(drag.id)?.a.external) openThread({ conv: agents.get(drag.id).a.external.id });
     else { selected = { type: 'node', id: drag.id }; renderPanel(true); revealSelected(); }
   } else if (drag.mode === 'link') {
     const t = linkTarget();
     if (t) addEdge(drag.id, t);
-  } else if (drag.mode === 'group') {
-    if (drag.moved) saveAll();
   } else if (drag.mode === 'pan' && !drag.moved) {
     selected = null; closePanel();
   }
-  const pushed = drag.moved && (drag.mode === 'move' || drag.mode === 'group');
   drag = null;
-  settleFrames();
-  if (pushed) scheduleSave(); // frames shoved aside during the drag keep their new places
 });
 function linkTarget() {
   let best = null, bd = Infinity;
@@ -1510,7 +1490,7 @@ function drawEdge(e, t) {
   const fb = g.b.dying ? 1 - clamp((t - g.b.dying) / 600, 0, 1) : 1;
   const fade = Math.min(fa, fb, ease(clamp((t - Math.max(g.a.born, g.b.born)) / 900, 0, 1)));
   if (fade <= 0) return;
-  ctx.globalAlpha = matches && !(matches.has(e.from) && matches.has(e.to)) ? 0.12 : 1;
+  ctx.globalAlpha = (matches && !(matches.has(e.from) && matches.has(e.to))) || (focusId && e.from !== focusId && e.to !== focusId) ? 0.08 : 1;
   const burst = flows.get(e.id) || 0;
   const hot = hover?.id === e.id || selected?.id === e.id;
   const t0 = tAtDist(g, false, R + 8), t1 = tAtDist(g, true, R + 10);
@@ -1571,7 +1551,7 @@ function drawNode(id, n, t) {
   const r = R * (0.6 + 0.4 * appear) * (isTarget ? 1.1 : 1);
 
   ctx.save();
-  ctx.globalAlpha = vis * (matches && !matches.has(id) ? 0.14 : 1);
+  ctx.globalAlpha = vis * (matches && !matches.has(id) ? 0.14 : 1) * (focus && !focus.has(id) ? 0.3 : 1);
   ctx.translate(n.x, n.y);
 
   // arrival ping (message received / search focus)
@@ -1697,6 +1677,15 @@ function projectGroups() {
 // a project's frame: around its agents, with room for labels below and the tab on top.
 // A repo whose agents sit in more than one worktree gets a larger frame around the worktrees' frames
 // (key `<project>#`, listed first so it draws behind them); each inner frame then carries its `parent`.
+// a frame's tab: shade swatch, name and agent count
+const tabText = (g) => `${String(g.key).startsWith('remote:') ? '⇄ ' : ''}${String(g.label).toUpperCase()}  ${g.nodes.filter(([, n]) => !n.a.external).length}`;
+function tabWidth(g) {
+  const f = ctx.font;
+  ctx.font = '10.5px "Fragment Mono", ui-monospace, monospace';
+  const w = ctx.measureText(tabText(g)).width + 30;
+  ctx.font = f;
+  return w;
+}
 function groupRects() {
   const inner = [...projectGroups()].map(([key, g]) => {
     const xs = g.nodes.map(([, n]) => n.x), ys = g.nodes.map(([, n]) => n.y);
@@ -1705,6 +1694,8 @@ function groupRects() {
   });
   const byProject = new Map();
   for (const r of inner) byProject.set(r.project, [...(byProject.get(r.project) || []), r]);
+  for (const kids of byProject.values()) if (kids.length > 1) for (const r of kids) r.label = r.nodes[0][1].a.frameSub || r.label;
+  for (const r of inner) r.x1 = Math.max(r.x1, r.x0 + tabWidth(r) + 12); // never narrower than its tab
   const outer = [];
   for (const [project, kids] of byProject) {
     if (kids.length < 2) continue;
@@ -1712,7 +1703,8 @@ function groupRects() {
     const o = { key: `${project}#`, outer: true, project, label: kids[0].projectLabel, projectLabel: kids[0].projectLabel, shade: kids[0].shade,
       nodes: kids.flatMap((r) => r.nodes), x0: Math.min(...kids.map((r) => r.x0)) - P, x1: Math.max(...kids.map((r) => r.x1)) + P,
       y0, top: y0 - 20, y1: Math.max(...kids.map((r) => r.y1)) + P };
-    for (const r of kids) { r.parent = o.key; r.label = r.nodes[0][1].a.frameSub || r.label; }
+    for (const r of kids) r.parent = o.key;
+    o.x1 = Math.max(o.x1, o.x0 + tabWidth(o) + 12);
     outer.push(o);
   }
   return [...outer, ...inner];
@@ -1735,7 +1727,7 @@ function drawGroups() {
     }
     // tab: shade swatch, project name, agent count
     ctx.font = '10.5px "Fragment Mono", ui-monospace, monospace'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
-    const text = `${foreign ? '⇄ ' : ''}${g.label.toUpperCase()}  ${g.nodes.filter(([, n]) => !n.a.external).length}`, tw = ctx.measureText(text).width + 30;
+    const text = tabText(g), tw = ctx.measureText(text).width + 30;
     ctx.fillStyle = hot ? V.ink : V.paper; ctx.fillRect(x0, y0 - 20, tw, 20);
     ctx.strokeRect(x0, y0 - 20, tw, 20);
     ctx.fillStyle = shadePattern(g.shade); ctx.fillRect(x0 + 7, y0 - 14, 8, 8);
@@ -1745,101 +1737,94 @@ function drawGroups() {
   ctx.globalAlpha = 1; ctx.textBaseline = 'alphabetic';
 }
 
-// ---------- arrange ----------
-// pack every project into its own block: agents on a small grid, blocks in rows, biggest first
-function framesOverlap() {
-  const r = groupRects();
-  for (let i = 0; i < r.length; i++) for (let j = i + 1; j < r.length; j++)
-    if (r[i].x0 < r[j].x1 && r[j].x0 < r[i].x1 && r[i].top < r[j].y1 && r[j].top < r[i].y1) return true;
-  return false;
-}
-function arrange() {
-  layoutTrees();
-  // nodes below a fork root follow their root, so only free agents and roots take a cell;
-  // biggest repo first, a repo's worktrees side by side
-  const free = [...projectGroups().values()].map((g) => ({ ...g, nodes: g.nodes.filter(([, n]) => !n.slot) }));
-  const size = new Map();
-  for (const g of free) size.set(g.project, (size.get(g.project) || 0) + g.nodes.length);
-  const groups = free.sort((a, b) => size.get(b.project) - size.get(a.project)
-    || String(a.project).localeCompare(String(b.project)) || b.nodes.length - a.nodes.length);
-  if (!groups.length) return;
-  const CW = 230, CH = 150, GAP = 110;
-  const blocks = groups.map((g) => { const cols = Math.ceil(Math.sqrt(g.nodes.length)), rows = Math.ceil(g.nodes.length / cols); return { g, cols, w: cols * CW, h: rows * CH }; });
-  const rowW = Math.max(blocks[0].w, Math.sqrt(blocks.reduce((v, b) => v + (b.w + GAP) * (b.h + GAP), 0)) * 1.5);
-  let x = 0, y = 0, rowH = 0;
-  for (const b of blocks) {
-    if (x > 0 && x + b.w > rowW) { x = 0; y += rowH + GAP; rowH = 0; }
-    b.g.nodes.sort(([, p], [, q]) => p.a.name.localeCompare(q.a.name)).forEach(([, n], i) => {
-      n.goal = { x: x + (i % b.cols) * CW + CW / 2, y: y + Math.floor(i / b.cols) * CH + CH / 2 };
-    });
-    x += b.w + GAP; rowH = Math.max(rowH, b.h);
+// ---------- layout ----------
+// No physics and no free placement: the canvas lays itself out, the same way every time. Each project's
+// agents sit on a small grid (a fork tree takes as many cells as it is wide and deep), a repo's worktrees
+// sit side by side inside the repo's frame, and projects are packed in rows with linked projects next to
+// each other so links stay short. It runs again whenever an agent comes, goes, is renamed or moves to
+// another project; agents glide to their new places.
+const CW = 200, CH = 150, GAP = 64, INNER_GAP = 30;
+// boxes ({w, h}) in rows no wider than about `ratio` times the square they would fill; sets b.x, b.y
+function shelf(boxes, gap, ratio) {
+  if (!boxes.length) return { w: 0, h: 0 };
+  const area = boxes.reduce((v, b) => v + (b.w + gap) * (b.h + gap), 0);
+  const limit = Math.max(...boxes.map((b) => b.w), Math.sqrt(area) * ratio);
+  let x = 0, y = 0, rowH = 0, w = 0;
+  for (const b of boxes) {
+    if (x > 0 && x + b.w > limit) { x = 0; y += rowH + gap; rowH = 0; }
+    b.x = x; b.y = y; x += b.w + gap; rowH = Math.max(rowH, b.h); w = Math.max(w, x - gap);
   }
-  setTimeout(() => { saveAll(); fit(); }, 1400);
-  setTimeout(() => { for (const n of agents.values()) delete n.goal; }, 2000);
+  return { w, h: y + rowH };
 }
-
-// The frame you are dragging (or whose agent you are dragging) holds still and the other one yields.
-// A repo's outer frame moves as one against other projects; inside it its worktree frames keep apart.
-// Project frames never overlap, but nothing drifts either: overlapping frames are pushed apart while you
-// drag (so the one you move shoves the others aside), and after anything changes one settle pass pushes
-// until they are clear and then stops. A frame moves as a whole, fork children included, so it can clear.
-function separateFrames(rate = 0.35) {
-  if ([...agents.values()].some((n) => n.goal)) return false;
-  const rs = groupRects();
-  const heldIds = new Set(drag?.mode === 'move' ? [heldId()] : drag?.mode === 'group' ? (rs.find((r) => r.key === drag.key)?.nodes || []).map(([id]) => id) : []);
-  const holds = (r) => r.nodes.some(([id]) => heldIds.has(id));
-  // the agents a shift really moves: the frame with more of them gives way less
-  const mass = (r) => r.nodes.filter(([id, n]) => heldId() !== id && !n.slot).length;
-  let moved = false;
-  const apart = (list, GAP) => {
-    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
-      const a = list[i], b = list[j];
-      const ox = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) + GAP, oy = Math.min(a.y1, b.y1) - Math.max(a.top, b.top) + GAP;
-      if (ox <= 0 || oy <= 0) continue;
-      const horiz = ox < oy, amt = Math.min(horiz ? ox : oy, 60) * rate + 0.5;
-      const dir = horiz ? Math.sign((b.x0 + b.x1) - (a.x0 + a.x1)) || 1 : Math.sign((b.top + b.y1) - (a.top + a.y1)) || 1;
-      const ha = holds(a), hb = holds(b), ma = mass(a), mb = mass(b);
-      if (ha && hb) continue;
-      const sa = ha ? 0 : hb ? 1 : ma + mb ? mb / (ma + mb) : 0.5, sb = 1 - sa;
-      shiftGroup(a, horiz ? -dir * amt * sa : 0, horiz ? 0 : -dir * amt * sa, heldIds);
-      shiftGroup(b, horiz ? dir * amt * sb : 0, horiz ? 0 : dir * amt * sb, heldIds);
-      moved = true;
+let layoutSig = '';
+function layoutAll(force = false) {
+  const live = [...agents].filter(([, n]) => !n.dying && !n.hidden && n.a);
+  const sig = live.map(([id, n]) => `${id}|${n.a.frameKey}|${n.a.projectKey}|${n.a.forkOf || ''}|${n.a.name}`).sort().join('\n')
+    + `\n${edges.map((e) => `${e.from}>${e.to}`).sort().join(',')}`;
+  if (!force && sig === layoutSig) return false;
+  layoutSig = sig;
+  layoutTrees();
+  // a frame holds its free agents and fork roots; a root's box is as wide as its tree's leaves, as deep as its levels
+  const frames = new Map();
+  for (const [id, n] of live) {
+    if (n.slot) continue;
+    const kids = live.filter(([, k]) => k.slot && k.tree === id).map(([, k]) => k);
+    const leaves = kids.length ? Math.round((Math.max(...kids.map((k) => k.slot.x)) - Math.min(...kids.map((k) => k.slot.x))) / TREE_DX) + 1 : 1;
+    const depth = kids.length ? Math.round(Math.max(...kids.map((k) => k.slot.y - n.y)) / TREE_DY) : 0;
+    const f = frames.get(n.a.frameKey) || { key: n.a.frameKey, project: n.a.projectKey, items: [] };
+    f.items.push({ n, w: leaves * CW, h: (depth + 1) * CH });
+    frames.set(n.a.frameKey, f);
+  }
+  const projects = new Map();
+  for (const f of frames.values()) projects.set(f.project, [...(projects.get(f.project) || []), f]);
+  // a frame's box, measured the way groupRects draws it: R + 62 beside the agents, the tab and R + 50 above, R + 54 below
+  for (const f of frames.values()) {
+    f.items.sort((a, b) => a.n.a.name.localeCompare(b.n.a.name));
+    const c = shelf(f.items, 0, 1.5), a = f.items[0].n.a;
+    const label = (projects.get(f.project) || []).length > 1 ? a.frameSub || a.frame : a.frame;
+    f.w = Math.max(c.w - CW + 2 * (R + 62), tabWidth({ key: f.key, label, nodes: f.items.map((it) => [0, it.n]) }) + 12);
+    f.h = c.h - CH + 2 * R + 104;
+  }
+  // a repo with several worktrees: their frames inside the repo's frame (18 around, the tab above)
+  const blocks = [...projects].map(([key, fs]) => {
+    fs.sort((a, b) => b.items.length - a.items.length || String(a.key).localeCompare(String(b.key)));
+    if (fs.length === 1) return { key, frames: fs, w: fs[0].w, h: fs[0].h, ox: 0, oy: 0, size: fs[0].items.length };
+    const c = shelf(fs, INNER_GAP, 1.8);
+    const tab = tabWidth({ key, label: fs[0].items[0].n.a.project, nodes: fs.flatMap((f) => f.items.map((it) => [0, it.n])) }) + 12;
+    return { key, frames: fs, w: Math.max(c.w + 36, tab), h: c.h + 56, ox: 18, oy: 38, size: fs.reduce((v, f) => v + f.items.length, 0) };
+  });
+  // biggest project first, then whichever is linked most to those already placed
+  const proj = new Map(live.map(([id, n]) => [id, n.a.projectKey]));
+  const weight = new Map();
+  for (const e of edges) {
+    const a = proj.get(e.from), b = proj.get(e.to);
+    if (!a || !b || a === b) continue;
+    for (const [x, y] of [[a, b], [b, a]]) weight.set(`${x}\n${y}`, (weight.get(`${x}\n${y}`) || 0) + 1);
+  }
+  const left = blocks.sort((a, b) => b.size - a.size || String(a.key).localeCompare(String(b.key))), order = [];
+  while (left.length) {
+    let bi = 0, bw = -1;
+    left.forEach((b, i) => { const w = order.reduce((v, o) => v + (weight.get(`${o.key}\n${b.key}`) || 0), 0); if (w > bw) { bw = w; bi = i; } });
+    order.push(left.splice(bi, 1)[0]);
+  }
+  shelf(order, GAP, 1.7);
+  for (const b of order) for (const f of b.frames) {
+    const fx = b.x + b.ox + (f.x || 0), fy = b.y + b.oy + (f.y || 0);
+    for (const it of f.items) {
+      const g = { x: fx + R + 62 - CW / 2 + it.x + it.w / 2, y: fy + R + 50 + it.y };
+      if (it.n.fresh) { it.n.x = g.x; it.n.y = g.y; delete it.n.fresh; }
+      it.n.goal = g;
     }
-  };
-  apart(rs.filter((r) => !r.parent), 28);
-  for (const o of rs.filter((r) => r.outer)) apart(rs.filter((r) => r.parent === o.key), 16);
-  return moved;
-}
-function shiftGroup(g, dx, dy, held) {
-  for (const [id, n] of g.nodes) {
-    if (held.has(id)) continue;
-    n.x += dx; n.y += dy;
-    if (n.slot) { n.slot.x += dx; n.slot.y += dy; }
   }
+  return true;
 }
-function settleFrames() {
-  if (drag || [...agents.values()].some((n) => n.goal)) return;
-  layoutTrees();
-  for (const n of agents.values()) if (n.slot) { n.x = n.slot.x; n.y = n.slot.y; } // measure trees where they will be
-  const before = [...agents].map(([id, n]) => [id, n.x, n.y]);
-  let i = 0;
-  while (i < 200 && separateFrames(0.5)) i++;
-  if (i === 200) { for (const [id, x, y] of before) { const n = agents.get(id); if (n) { n.x = x; n.y = y; } } return; } // cannot clear: leave it, never creep
-  if (i) scheduleSave();
-}
-let saveTimer = null;
-function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveAll, 900); }
-function saveAll() {
-  const out = {};
-  for (const [id, n] of agents) if (!n.dying && !n.a?.external) out[id] = { x: Math.round(n.x), y: Math.round(n.y) };
-  fetch('/api/layout', { method: 'POST', body: JSON.stringify(out) });
-}
+function arrange() { layoutAll(true); setTimeout(fit, 500); }
 
 // ---------- fork trees ----------
 // a fork hangs under the agent it was forked from: every tree is laid out top-down from its root, which
 // moves like any agent (drag, physics, arrange) and the rest of the tree follows. n.tree is the id of the
 // root of n's tree, n.slot where a node below the root belongs.
-const TREE_DX = 280, TREE_DY = 170;
+const TREE_DX = 200, TREE_DY = 150; // the same as a layout cell (CW, CH)
 // a tree stays inside its project's frame: a fork that moved to another project hangs free
 const forkParent = (n) => { const p = n.a?.forkOf && agents.get(n.a.forkOf); return p && !p.dying && !p.hidden && p.a.projectKey === n.a.projectKey ? p : null; };
 function layoutTrees() {
@@ -1873,24 +1858,21 @@ function layoutTrees() {
   }
 }
 const treeRoot = (n) => (n?.slot && agents.get(n.tree)) || n;
-const heldId = () => drag?.mode === 'move' ? (treeRoot(agents.get(drag.id))?.a?.id ?? drag.id) : null;
 
-// No physics: agents stay where they are put. They move only when dragged, when Arrange or a new
-// placement gives them a goal, and children follow their fork tree's slots.
+// No physics: every agent glides to the place layoutAll() gave it, fork children to their slot under the root.
 function physics() {
   layoutTrees();
-  const held = heldId();
-  for (const [id, n] of agents) {
+  for (const n of agents.values()) {
     if (n.dying || n.hidden) continue;
     if (n.slot) { n.x = lerp(n.x, n.slot.x, 0.18); n.y = lerp(n.y, n.slot.y, 0.18); delete n.goal; continue; }
-    if (held === id) continue;
-    if (n.goal) { n.x = lerp(n.x, n.goal.x, 0.12); n.y = lerp(n.y, n.goal.y, 0.12); }
+    if (n.goal) { n.x = lerp(n.x, n.goal.x, 0.14); n.y = lerp(n.y, n.goal.y, 0.14); }
   }
 }
 
 function frame(t) {
   physics();
-  if (drag?.moved && (drag.mode === 'move' || drag.mode === 'group')) separateFrames();
+  focusId = drag?.mode === 'link' ? null : hover?.type === 'node' || hover?.type === 'ring' ? hover.id : selected?.type === 'node' ? selected.id : null;
+  focus = focusId ? new Set([focusId, ...edges.flatMap((e) => (e.from === focusId ? [e.to] : e.to === focusId ? [e.from] : []))]) : null;
   cam.x = lerp(cam.x, cam.tx, 0.16); cam.y = lerp(cam.y, cam.ty, 0.16); cam.k = lerp(cam.k, cam.tk, 0.16);
   const w = toWorld(mouse.x, mouse.y); mouse.wx = w.x; mouse.wy = w.y;
   for (const [id, v] of flows) { const nv = v * 0.985 - 0.002; nv <= 0 ? flows.delete(id) : flows.set(id, nv); }
@@ -1901,7 +1883,7 @@ function frame(t) {
   drawGrid();
   ctx.setTransform(dpr * cam.k, 0, 0, dpr * cam.k, dpr * cam.x, dpr * cam.y);
   drawGroups();
-  for (const e of edges) drawEdge(e, t);
+  for (const e of [...edges].sort((a, b) => (a.from === focusId || a.to === focusId) - (b.from === focusId || b.to === focusId))) drawEdge(e, t); // linked ones on top
   drawForks(t);
   ctx.globalAlpha = 1;
   drawPackets(t);

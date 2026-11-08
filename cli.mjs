@@ -11,6 +11,9 @@
 //   synapse plan [id]                  your latest shared plan (or that one); plans are with agents of any kind
 //   synapse plan start "<goal>" <agent>...   start one; they are linked with you and get the goal
 //   synapse plan note|task <text> | claim|done|reopen <n> | close   [--id id] change it; the others hear of it
+//   synapse saved [id]                     list archived chats (⌘S in the app), or print one
+//   synapse saved restore <id>             put an archived transcript back, byte for byte, to resume it
+//   synapse saved archive <file> [--keep]  archive a finished chat's transcript (removed unless --keep)
 //   synapse ask <agent> <question...> [--conversation id]   ask a friend's agent (name@owner) and wait for the answer
 //   synapse end <conversation>         end a conversation with a friend's agent
 //   synapse agents                     every live agent
@@ -36,11 +39,13 @@
 //   synapse requests                   requests you sent and received
 //   synapse accept <id> [--agents a,b] [--no-talk] | deny <id> | cancel <id>
 //                                      (accept lets their agent ask yours questions too, unless --no-talk)
+import path from 'node:path';
 import { FILES, readJSON, agentForProcess, listAgents, localAgents, findAgent, renameAgent, projectOf, renameProject } from './lib.mjs';
 import * as ops from './ops.mjs';
 import * as plan from './plan.mjs';
 import * as remote from './remote.mjs';
 import * as account from './account.mjs';
+import * as saved from './saved.mjs';
 
 const [cmd, ...rest] = process.argv.slice(2);
 const flags = new Set(rest.filter((a) => a.startsWith('--')));
@@ -189,9 +194,22 @@ try {
       out = renameProject(hit[0].key, args.slice(1).join(' '));
       break;
     }
+    case 'saved': {
+      if (!args[0]) { out = saved.list().map(({ id, name, kind, cwd, raw, size, removed }) => ({ id, name, kind, cwd, mb: +(raw / 1e6).toFixed(1), archivedKb: Math.ceil(size / 1024), original: removed ? 'archived' : 'kept' })); break; }
+      if (args[0] === 'restore') { out = await saved.restore(args[1]); break; }
+      if (args[0] === 'archive') { // archive a chat that is no longer running, by its transcript file
+        const file = path.resolve(args[1] || '');
+        const kind = file.includes(`${path.sep}.codex${path.sep}`) ? 'codex' : 'claude';
+        const agent = { id: path.basename(file, '.jsonl'), name: opt('--name') || path.basename(file, '.jsonl'), kind, format: kind, cwd: process.cwd(), transcript: file };
+        out = await saved.archive(agent, saved.prepare(agent).id, { keep: flags.has('--keep') });
+        break;
+      }
+      console.log(await saved.render(args[0]));
+      process.exit(0);
+    }
     case 'agents': out = listAgents().map(({ name, id, kind, cwd, status }) => ({ name, id, kind, cwd, status })); break;
     default:
-      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | ask <agent> <question> [--conversation id] | end <conversation> | talk <agent> on|off | agents | rename [agent] <name> | rename-project <project> <name> | invite | join <code> | friends | unfriend <friend> | sync | login | signup | logout | whoami | trust <who> | untrust <who> | people | request <person> [--target t] [--note n] | requests | accept <id> [--agents a,b] [--no-talk] | deny <id> | cancel <id>');
+      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | ask <agent> <question> [--conversation id] | end <conversation> | talk <agent> on|off | saved [id | restore <id> | archive <file> [--keep]] | agents | rename [agent] <name> | rename-project <project> <name> | invite | join <code> | friends | unfriend <friend> | sync | login | signup | logout | whoami | trust <who> | untrust <who> | people | request <person> [--target t] [--note n] | requests | accept <id> [--agents a,b] [--no-talk] | deny <id> | cancel <id>');
       process.exit(cmd ? 1 : 0);
   }
   if (cmd === 'ui') { /* server keeps running */ }

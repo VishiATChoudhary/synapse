@@ -5,20 +5,25 @@ import { connect } from './link';
 import * as cache from './cache';
 import * as media from './media';
 
-const FAST = 1500, PING = 30_000;
+const FAST = 1500, SHELL_FAST = 400, PING = 30_000;
+// what the computer sends can get lost on the way (a poll answer cut off when the app is suspended, a full mailbox):
+// every few seconds the phone says what it has, and the computer sends again what is missing
+const HAVE = 5000;
 
 export function createRemote(emit, acc, computer) {
   const conn = connect(acc, computer);
   // access: 'unknown' until the computer answers, 'waiting' until it is allowed there, then 'ok'
   let state = { agents: [], projects: [], kinds: [], computer: computer.name, online: false, access: 'unknown', error: null };
   let snap = { agents: [], projects: [], kinds: [], shares: [] };
-  let watch = null, messages = {}, lastSeen = 0, lastPing = 0, timer = null, stopped = false;
+  let watch = null, messages = {}, screens = {}, lastSeen = 0, lastPing = 0, timer = null, stopped = false;
+  let stateV = null, lastHave = 0, listed = false; // listed: the computer's own list arrived (not the one kept from last time)
+  const versions = {}; // chat or shell -> tag of what arrived last
   const waiting = new Map(); // spawn request -> resolve
   const opening = new Map(); // share request -> resolve({ share } or { error })
 
   const publish = () => {
-    const agents = snap.agents.map((a) => ({ ...a, needs: null, messages: messages[a.id] || [] }));
-    state = { ...state, agents, projects: snap.projects, kinds: snap.kinds, shares: snap.shares, online: Date.now() - lastSeen < 15_000 };
+    const agents = snap.agents.map((a) => ({ ...a, needs: null, messages: messages[a.id] || [], ...(a.shell ? { screen: screens[a.id] || null } : {}) }));
+    state = { ...state, agents, listed, projects: snap.projects, kinds: snap.kinds, shares: snap.shares, online: Date.now() - lastSeen < 15_000 };
     emit(state);
   };
   const fail = (e) => { state = { ...state, error: e.message }; emit(state); setTimeout(() => { state = { ...state, error: null }; emit(state); }, 5000); };
@@ -33,8 +38,9 @@ export function createRemote(emit, acc, computer) {
     lastSeen = Date.now();
     if (m.t === 'waiting') state = { ...state, access: 'waiting' };
     else if (m.t !== 'error') state = { ...state, access: 'ok' };
-    if (m.t === 'state') snap = { agents: m.agents || [], projects: m.projects || [], kinds: m.kinds || [], shares: m.shares || [] };
-    else if (m.t === 'messages') { messages = { ...messages, [m.id]: m.messages || [] }; cache.remember(m.id, m.messages || []); }
+    if (m.t === 'state') { snap = { agents: m.agents || [], projects: m.projects || [], kinds: m.kinds || [], shares: m.shares || [] }; stateV = m.v || null; listed = true; cache.rememberState(computer.id, snap); }
+    else if (m.t === 'messages') { messages = { ...messages, [m.id]: m.messages || [] }; if (m.v) versions[m.id] = m.v; cache.remember(m.id, m.messages || []); }
+    else if (m.t === 'screen') { screens = { ...screens, [m.id]: m.gone ? null : { lines: m.lines || [], cursor: m.cursor || null, cols: m.cols } }; if (m.v) versions[m.id] = m.v; }
     else if (m.t === 'media' || m.t === 'piece') media.receive(m);
     else if (m.t === 'spawned') { waiting.get(m.req)?.(m.id); waiting.delete(m.req); }
     else if (m.t === 'shared') { opening.get(m.req)?.({ share: m.share }); opening.delete(m.req); }
@@ -49,13 +55,15 @@ export function createRemote(emit, acc, computer) {
       // until the computer has allowed this phone, keep saying hello so it answers as soon as it is allowed
       const ok = state.access === 'ok';
       if (Date.now() - lastPing > (ok ? PING : 4000)) { lastPing = Date.now(); await conn.send(ok ? { t: 'ping', keep: cache.keep() } : hello()); }
+      if (ok && Date.now() - lastHave > HAVE) { lastHave = Date.now(); await conn.send({ t: 'have', id: watch, state: stateV, chat: (watch && versions[watch]) || null }); }
       for (const m of await conn.poll()) receive(m);
       publish();
     } catch (e) {
       if (e.status === 403) state = { ...state, access: 'removed' }; // the computer removed this phone, or it signed out elsewhere
       else if (e.status === 401) fail(new Error('Your sign-in expired. Sign in again.'));
     }
-    if (AppState.currentState === 'active') timer = setTimeout(tick, state.access === 'waiting' ? 4000 : FAST);
+    // a shell open on the phone looks more often, so what is typed shows up quickly
+    if (AppState.currentState === 'active') timer = setTimeout(tick, state.access === 'waiting' ? 4000 : watch?.startsWith('sh-') ? SHELL_FAST : FAST);
   }
   function request(msg, ms) {
     const req = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -71,6 +79,8 @@ export function createRemote(emit, acc, computer) {
   const sub = AppState.addEventListener('change', (s) => { if (s === 'active') wake(); else clearTimeout(timer); });
   // the kept chats show at once, before the computer answers
   cache.load().then((kept) => { messages = { ...kept, ...messages }; publish(); });
+  // the list as it was last time, until the computer answers: the app opens on chats, not on an empty screen
+  cache.lastState(computer.id).then((old) => { if (old && !snap.agents.length) { snap = old; publish(); } });
   wake();
   emit(state);
 
@@ -95,6 +105,8 @@ export function createRemote(emit, acc, computer) {
     },
     answer(id, option) { say({ t: 'send', id, text: option }); },
     stop(id) { say({ t: 'stop', id }); },
+    keys(id, keys) { say({ t: 'keys', id, keys }); },
+    type(id, text) { say({ t: 'send', id, text }); }, // a shell: typed as is, no chat bubble
     // resolves with the new agent's id once it is running on the computer (null if it did not start)
     // a link or file from an agent's chat, opened through a tunnel on the computer: resolves once it is live
     share(id, target) { return request({ t: 'share', id, target }, 90_000); }, // a tunnel plus its name appearing in DNS: about 10 s, at most about 70

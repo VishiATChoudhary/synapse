@@ -51,3 +51,26 @@ export function remember(id, messages) {
   entries[id] = { ...entries[id], messages: messages.slice(-40) };
   save();
 }
+
+// the last list of agents from each computer, so the app opens on it before the computer answers
+const STATE = 'state-v1.json';
+const states = Platform.OS === 'web'
+  ? { read: async () => globalThis.localStorage?.getItem(STATE) || null, write: async (v) => globalThis.localStorage?.setItem(STATE, v) }
+  : (() => {
+    const { File, Paths } = require('expo-file-system');
+    const file = () => new File(Paths.document, STATE);
+    return {
+      read: async () => (file().exists ? file().text() : null),
+      write: async (v) => { const f = file(); if (!f.exists) f.create(); await f.write(v); },
+    };
+  })();
+let lastStates = null, stateTimer = null;
+const readStates = async () => (lastStates ||= await states.read().then((v) => JSON.parse(v || '{}')).catch(() => ({})));
+export const lastState = async (computer) => (await readStates())[computer] || null;
+export function rememberState(computer, snap) {
+  readStates().then((all) => {
+    all[computer] = snap;
+    clearTimeout(stateTimer);
+    stateTimer = setTimeout(() => states.write(JSON.stringify(all)).catch(() => {}), 2000);
+  });
+}

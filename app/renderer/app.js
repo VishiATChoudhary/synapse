@@ -343,7 +343,7 @@ function sforkFilter(get) {
   };
 }
 
-async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resume = null, cwd = worktreePath, title = kind, prompt = null } = {}) {
+async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resume = null, cwd = worktreePath, title = kind, prompt = null, liaisonFor = null } = {}) {
   closeCanvas();
   const prof = M.profiles[kind] || { command: kind };
   const s = { id: nextId++, worktree: worktreePath, sessions: [], path: [] };
@@ -354,7 +354,7 @@ async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resu
   try {
     const made = await makeSession(s, {
       kind, title,
-      spawn: (cols, rows) => (resume ? synapse.pty.restore({ cwd, kind, resume, cols, rows }) : synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows, phoneReq, ...(prompt ? { prompt } : {}) })),
+      spawn: (cols, rows) => (resume ? synapse.pty.restore({ cwd, kind, resume, cols, rows }) : synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows, phoneReq, ...(prompt ? { prompt } : {}), ...(liaisonFor ? { liaisonFor } : {}) })),
     });
     if (resume) made.resume = resume;
     if (split && slot(split.target)) {
@@ -364,8 +364,9 @@ async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resu
       // A state refresh may have rendered the pending slot as a standalone pane.
       M.layouts = M.layouts.filter((node) => node !== s.id).map(insert);
     }
-  } catch (e) { M.slots = M.slots.filter((x) => x !== s); if (M.focused === s.id) M.focused = slot(previous)?.id ?? M.slots[0]?.id ?? null; toast(e.message, true); }
+  } catch (e) { M.slots = M.slots.filter((x) => x !== s); if (M.focused === s.id) M.focused = slot(previous)?.id ?? M.slots[0]?.id ?? null; toast(e.message, true); render(); return null; }
   render();
+  return s;
 }
 
 function splitShell(direction) {
@@ -1291,15 +1292,142 @@ function pickProfile(worktreePath) {
       body.appendChild(o);
       return o;
     });
+    // an agent that talks with friends' agents for the one on screen; theirs keep working, a copy of each answers
+    if (M.profiles.claude) {
+      const o = el('div', 'opt friend-opt');
+      o.append(el('span', 'n', 'F'), logo('claude'), el('span', 'k', 'ask a friend'), el('span', 'c', "talk with a friend's agents, they are never interrupted"));
+      o.onclick = () => { close(); askFriend(worktreePath); };
+      body.appendChild(o);
+      opts.push(o); keys.push('friend');
+    }
+    const launch = (k) => (k === 'friend' ? askFriend(worktreePath) : newSlot(worktreePath, k));
     body.tabIndex = 0; body.focus();
     body.onkeydown = (e) => {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { opts[sel].classList.remove('sel'); sel = (sel + (e.key === 'ArrowDown' ? 1 : keys.length - 1)) % keys.length; opts[sel].classList.add('sel'); }
-      if (e.key === 'Enter') { close(); newSlot(worktreePath, keys[sel]); }
-      if (/^[1-9]$/.test(e.key) && !e.metaKey && keys[e.key - 1]) { close(); newSlot(worktreePath, keys[e.key - 1]); }
+      if (e.key === 'Enter') { close(); launch(keys[sel]); }
+      if ((e.key === 'f' || e.key === 'F') && !e.metaKey && keys.includes('friend')) { close(); launch('friend'); }
+      if (/^[1-9]$/.test(e.key) && !e.metaKey && keys[e.key - 1] && keys[e.key - 1] !== 'friend') { close(); newSlot(worktreePath, keys[e.key - 1]); }
       if (e.key === 'Escape') close();
     };
   });
 }
+// ---------------------------------------------------------------- ask a friend
+// ⌘N, ask a friend: a new Claude tab, the liaison, that talks with a friend's agents for the agent on screen. It
+// reads them and asks them with synapse_ask, which a tool-less copy of their agent answers on their machine, so
+// their own sessions are never interrupted. It works for the agent on screen (it may ask what is shared with that
+// one), and that agent sees the liaison's conversation through a link, so the answers reach your work.
+// Friends' agents in this workspace come first; if none is shared, ask a friend to share theirs, or share yours.
+const sameWork = (a, wt) => { const p = String(a.project || '').toLowerCase(); return !!p && !!wt && [wt.project.label, wt.worktree.name].some((x) => String(x || '').toLowerCase() === p); };
+function liaisonPrompt({ forAgent, targets, workspace, waitingOn }) {
+  const who = targets.length ? targets.map((t) => `${t.ask}${t.mode === 'talk' ? '' : ' (read only for now)'}`).join(', ') : '';
+  return [
+    `You are a liaison: you talk with my friends' coding agents for me${forAgent ? ` and for my agent "${forAgent.name}"` : ''}. Their agents are busy with their own work and must never be interrupted.`,
+    'Rules: only use synapse_read and synapse_ask with their agents (synapse_ask is answered by a tool-less copy, their live session never sees it). Never synapse_send to them, never edit files or run commands that change anything.',
+    forAgent ? `My agent "${forAgent.name}" sees this conversation through a link, so write findings plainly: what they are doing, decisions, files and interfaces that touch ours, open questions.` : '',
+    who ? `Their agents: ${who}. Start with synapse_peers, then synapse_read each one and give me a short summary of what they are working on in ${workspace || 'this workspace'}. Then wait for my questions.`
+      : `Nothing is shared yet: I asked ${waitingOn} to share their agents in ${workspace || 'this workspace'}. Check synapse_peers now and then (every few minutes, when I ask) and tell me once something arrives; then read it and summarise.`,
+  ].filter(Boolean).join('\n\n');
+}
+// It acts for the agent on screen when the friend shared with that one, else for the agent of mine they shared with
+// (the friend's machine answers only that one); the agent on screen can then still read the liaison on demand.
+async function startLiaison(worktreePath, { targets = [], owner, waitingOn = null }) {
+  const mine = openAgent(), wt = worktreeOf(worktreePath), workspace = wt?.project.label || '';
+  const shares = (id) => targets.length && targets.every((t) => t.receivers?.some((r) => r.id === id));
+  let forAgent = mine;
+  if (targets.length && !(mine && shares(mine.id))) {
+    const rid = targets[0].receivers?.[0]?.id;
+    const local = rid && ((await synapse.requests.agents().catch(() => [])) || []).find((a) => a.id === rid);
+    if (rid) forAgent = { id: rid, name: local?.name || 'agent' };
+  }
+  const prompt = liaisonPrompt({ forAgent, targets, workspace, waitingOn });
+  const s = await newSlot(worktreePath, 'claude', null, null, { title: `ask ${owner}`, prompt, liaisonFor: forAgent ? { id: forAgent.id, name: forAgent.name } : null });
+  if (s && mine && forAgent && forAgent.id !== mine.id) synapseIdOf(s).then((id) => id && synapse.fork.link(id, mine.id)).catch(() => {});
+  return s;
+}
+// the liaison's own synapse id, once it shows up (a new Claude session registers after its first prompt)
+async function synapseIdOf(s, ms = 45_000) {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 700))) {
+    const id = s && M.agents[top(s)?.pty]?.synapseId;
+    if (id) return id;
+  }
+  return null;
+}
+async function askFriend(worktreePath) {
+  const wt = worktreeOf(worktreePath), workspace = wt?.project.label || 'this workspace';
+  const mine = openAgent();
+  modal('ask a friend', async (body, close) => {
+    body.appendChild(el('div', 'hint', `in ${workspace}${mine ? ` · for ${mine.name}` : ''} · their agents keep working: a copy of each answers`));
+    const box = el('div', 'friend-pick'); body.appendChild(box);
+    box.appendChild(el('div', 'hint', 'loading…'));
+    let agents = [];
+    try { agents = (await synapse.friends.agents()) || []; } catch {}
+    const ppl = await loadPeople(true);
+    box.replaceChildren();
+    const rows = [];
+    const row = (label, sub, run, cls = '') => {
+      const o = el('div', `opt ${cls}`);
+      o.append(el('span', 'n', rows.length < 9 ? String(rows.length + 1) : ''), el('span', 'k', label), el('span', 'c', sub));
+      o.onclick = () => { close(); run(); };
+      box.appendChild(o); rows.push({ o, run });
+      return o;
+    };
+    const section = (t) => box.appendChild(el('div', 'friend-sec', t));
+    // which of their agents I may reach: shared with me (the agent on screen, or any of mine)
+    const reach = (a) => ({ ...a, mode: a.receivers.some((r) => r.mode === 'talk') ? 'talk' : 'sync' });
+    const here = agents.filter((a) => sameWork(a, wt)).map(reach), elsewhere = agents.filter((a) => !sameWork(a, wt)).map(reach);
+    const byOwner = (list) => [...list.reduce((m, a) => m.set(a.owner, [...(m.get(a.owner) || []), a]), new Map())];
+    if (here.length) {
+      section(`their agents in ${workspace}`);
+      for (const [owner, list] of byOwner(here)) {
+        if (list.length > 1) row(`all of ${owner}'s (${list.length})`, list.map((a) => a.name).join(', '), () => startLiaison(worktreePath, { targets: list, owner }));
+        for (const a of list) row(`${a.name}@${owner}`, `${a.kind} · ${a.status === 'busy' ? 'working' : a.status} · ${a.mode === 'talk' ? 'read and ask' : 'read only'}`, () => startLiaison(worktreePath, { targets: [a], owner }));
+      }
+    }
+    if (elsewhere.length) {
+      section(here.length ? 'shared with you elsewhere' : `nobody shares agents in ${workspace} yet; shared elsewhere`);
+      for (const [owner, list] of byOwner(elsewhere)) row(`${owner}: ${list.length} agent${list.length > 1 ? 's' : ''}`, list.map((a) => `${a.name} (${a.project || '?'})`).join(', '), () => startLiaison(worktreePath, { targets: list, owner }));
+    }
+    // nobody shares here (or someone else should): ask a friend for theirs, or share the agent on screen with them
+    if (!ACC.user) { box.appendChild(el('div', 'hint', 'Sign in (Settings, friends) to ask a friend to share their agents.')); }
+    else {
+      section(`ask a friend to share their ${workspace} agents`);
+      const ask = async (p) => {
+        const to = p.handle || p.id, name = personName(p);
+        const s = await startLiaison(worktreePath, { owner: name, waitingOn: name });
+        // the share goes to the liaison itself, so it lands where the conversation is; else to the agent on screen
+        const id = (await synapseIdOf(s)) || mine?.id;
+        if (!id) return toast(`could not send the request: the new agent did not register in time`, true);
+        try { await synapse.requests.ask(to, id, `agents in ${workspace}`, `${ACC.user.name || 'A friend'} would like to ask your ${workspace} agents a few questions. A copy answers; your sessions are not interrupted.`); toast(`asked ${name} to share their ${workspace} agents`); }
+        catch (e) { toast(e.message, true); }
+      };
+      for (const p of ppl) row(`ask ${personName(p)}`, `${p.handle ? `@${p.handle} · ` : ''}they pick which agents to share, you hear when they accept`, () => ask(p));
+      if (mine) for (const p of ppl) row(`share ${mine.name} with ${personName(p)}`, 'read and ask: their agent can ask yours, yours keeps working', async () => {
+        try { await synapse.requests.offer(p.handle || p.id, mine.id, 'talk'); toast(`offered ${mine.name} to ${personName(p)}`); } catch (e) { toast(e.message, true); }
+      }, 'quiet');
+      const add = el('input'); add.placeholder = 'invite someone new: their handle or email, Enter';
+      add.onkeydown = async (e) => {
+        e.stopPropagation();
+        if (e.key === 'Escape') return close();
+        if (e.key !== 'Enter' || !add.value.trim()) return;
+        add.disabled = true;
+        try { const p = await synapse.people.add(add.value.trim()); peopleAt = 0; close(); await ask(p?.person || p?.trusted || p || { handle: add.value.trim() }); }
+        catch (err) { toast(err.message, true); add.disabled = false; }
+      };
+      box.appendChild(add);
+    }
+    if (!rows.length && !ACC.user) box.appendChild(el('div', 'hint', 'No friend shares an agent with you yet.'));
+    let sel = 0; rows[0]?.o.classList.add('sel');
+    body.tabIndex = 0; body.focus();
+    body.onkeydown = (e) => {
+      if (e.key === 'Escape') return close();
+      if (!rows.length) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { rows[sel].o.classList.remove('sel'); sel = (sel + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length; rows[sel].o.classList.add('sel'); rows[sel].o.scrollIntoView({ block: 'nearest' }); }
+      if (e.key === 'Enter') { close(); rows[sel].run(); }
+      if (/^[1-9]$/.test(e.key) && !e.metaKey && rows[e.key - 1]) { close(); rows[e.key - 1].run(); }
+    };
+  });
+}
+
 function deleteWorktreeButton(project, w, after) {
   const button = el('button', 'wt-delete');
   button.appendChild(gitIcon('trash'));
@@ -1755,7 +1883,7 @@ synapse.project.onWorktreeOpened(({ path: dir, branch }) => { refresh(); toast(`
 const SHORTCUTS = [
   ['layout', [['⌘B', 'toggle sidebar'], ['⌘D', 'split side by side'], ['⇧⌘D', 'split top and bottom']]],
   ['app', [['right-click', 'menu: agents, worktrees, remove, kill'], ['⌘T', 'shell'], ['⌃1 ⌃2 …', 'claude, codex, …'], ['⌘N', 'agent picker'], ['⇧⌘N', 'worktree'], ['⇧⌘F', 'fork'], ['⌘E', 'fork tree'], ['⌘W', 'close session'], ['⇧⌘⌫', 'pop fork'], ['⌘[ ⌘]', 'switch session'], ['⌘1-9', 'nth session'], ['⌃Tab ⌘G', 'node view'], ['⌘,', 'settings']]],
-  ['terminal', [['⌘F', 'find'], ['⌘⌫', 'clear line'], ['⌘← ⌘→', 'line start / end'], ['⌥⌫', 'delete word']]],
+  ['terminal', [['⌘F', 'find'], ['⌘S', 'archive the chat and clear'], ['⌘⌫', 'clear line'], ['⌘← ⌘→', 'line start / end'], ['⌥⌫', 'delete word']]],
   ['node view', [['⌘F /', 'search'], ['drag ring', 'link'], ['drag', 'move agent or project'], ['dbl-click', 'rename'], ['⌘-click', 'open its session'], ['scroll', 'zoom'], ['F', 'fit'], ['A', 'arrange'], ['⌫', 'unlink'], ['esc', 'back to terminals']]],
 ];
 // the gear in the node view asks for the same modal
@@ -2140,7 +2268,7 @@ const foreground = (term) => { const id = ownerOf(term)?.pty; return id ? synaps
 // the digit by its key, or by its place where the layout types something else on it (Italian, French: & é " ...)
 const digitOf = (e) => (/^[1-9]$/.test(e.key) ? e.key : /^Digit[1-9]$/.test(e.code) ? e.code.slice(-1) : null);
 const agentKey = (e) => (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && digitOf(e) ? agentProfiles()[digitOf(e) - 1] : null);
-const APP_KEYS = new Set(['shift+h', 'b', 'd', 'shift+d', 't', 'n', 'shift+n', 'f', 'shift+f', 'e', 'w', '[', ']', 'shift+backspace', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',']);
+const APP_KEYS = new Set(['s', 'shift+h', 'b', 'd', 'shift+d', 't', 'n', 'shift+n', 'f', 'shift+f', 'e', 'w', '[', ']', 'shift+backspace', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',']);
 // ⌘ + editing key -> what a macOS terminal sends for it (iTerm's natural editing, Ghostty's defaults)
 const META_EDIT = { Backspace: '\x15', ArrowLeft: '\x01', ArrowRight: '\x05' };
 window.addEventListener('keydown', (e) => {
@@ -2171,6 +2299,7 @@ window.addEventListener('keydown', (e) => {
     case 'shift+n': { const p = s ? worktreeOf(s.worktree)?.project : M.projects[0]; if (p) promptWorktree(p); break; }
     case 'shift+f': promptFork(); break;
     case 'f': openFind(); break;
+    case 's': saveSession(); break;
     case 'e': fanOpen ? closeFan() : openFan(); break;
     case 'shift+backspace': pop(); break;
     case 'w': { const t = top(s); if (t) requestCloseSession(s, t.id); break; }
@@ -2301,6 +2430,36 @@ async function applyLook(save = false) {
 }
 // ⌘F: find in the terminal in front. Matches light up as you type; ↩ and ⇧↩ step through them, esc closes.
 let finder = null;
+// ⌘S: clear the agent and archive its chat. The transcript is compressed losslessly in place of the original
+// (saved.mjs), so nothing is kept twice and `synapse saved restore <id>` brings it back byte for byte, ready to
+// resume. The cleared agent starts with a short digest waiting in its prompt that points at the archive.
+const kb = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+async function saveSession() {
+  const s = focusedSlot(), t = top(s);
+  if (!t?.pty) return toast('open an agent to save its chat', true);
+  let r;
+  try { r = await synapse.saved.save(t.pty); } catch (e) { return toast(e.message, true); }
+  modal('save and clear', (body, close) => {
+    body.append(el('div', 'hint', `${r.name} · ${r.messages} messages · ${kb(r.raw)} transcript, archived losslessly to about a fifth and removed · restore: synapse saved restore ${r.id}`));
+    const pre = el('pre', 'saved-digest', r.digest);
+    body.append(pre);
+    const row = el('div', 'row'), keep = el('button', 'btn', 'Cancel'), clear = el('button', 'btn sig', r.clears ? `Archive and clear (${r.clears})` : 'cannot clear this agent');
+    clear.disabled = !r.clears;
+    keep.onclick = close;
+    clear.onclick = async () => {
+      close();
+      toast('clearing; the digest goes into the prompt, then the old chat is archived');
+      try { const a = await synapse.saved.clear(t.pty, pre.textContent); toast(`archived ${r.name}: ${kb(a.raw)} → ${kb(a.size)}, lossless${a.removed ? '' : ' (the original was still changing, so it was kept)'}`); }
+      catch (e) { toast(e.message, true); }
+    };
+    row.append(keep, clear);
+    body.append(row);
+    body.tabIndex = 0; body.focus();
+    body.onkeydown = (e) => { if (e.key === 'Escape') close(); if (e.key === 'Enter' && r.clears) clear.click(); };
+    pre.contentEditable = 'plaintext-only'; // trim the digest before it goes in
+    pre.onkeydown = (e) => e.stopPropagation();
+  });
+}
 function openFind() {
   const x = top(focusedSlot());
   if (!x || workspaceOpen) return;
@@ -2402,6 +2561,7 @@ function runCommand(id) {
     case 'fork-tree': return fanOpen ? closeFan() : openFan();
     case 'canvas': return toggleCanvas();
     case 'search': return openFind();
+    case 'save-session': return saveSession();
     case 'theme-toggle': return toggleTheme();
     case 'past-chats': return openPastChats();
     case 'worktree': { const p = s ? worktreeOf(s.worktree)?.project : M.projects[0]; return p && promptWorktree(p); }
@@ -3637,6 +3797,7 @@ function winText(root) {
   const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let n = walk.nextNode(); n; n = walk.nextNode()) if (MAC_GLYPHS.test(n.data) && !n.parentElement?.closest('.xterm')) n.data = winKeys(n.data);
 }
+synapse.onNotch?.(({ notch, full }) => { document.body.style.setProperty('--notch', `${notch}px`); document.body.classList.toggle('full-screen', full); });
 if (WIN) {
   document.body.classList.add('win');
   winText(document.body);

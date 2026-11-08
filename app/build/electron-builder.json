@@ -15,6 +15,7 @@
     "plan.mjs",
     "remote.mjs",
     "talk.mjs",
+    "saved.mjs",
     "account.mjs",
     "hook.mjs",
     "mcp.mjs",

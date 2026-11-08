@@ -76,6 +76,17 @@ export function createDemo(emit) {
       needs: needs || null, messages, updatedAt: now - i * 300_000,
     })),
   };
+  // a shell tab on the computer: its screen, and a few commands it answers
+  const prompt = '~/dev/acme-api (main) $ ';
+  const shell = { id: 'sh-demo', kind: 'shell', shell: true, name: 'shell', about: null, worktree: null, project: PROJECTS[0], status: 'idle', inApp: true,
+    needs: null, messages: [], updatedAt: now - 120_000, preview: { role: 'assistant', text: prompt.trim() },
+    screen: { lines: [`${prompt}git status --short`, ' M src/auth/session.ts', '?? migrations/0042_refresh_tokens.sql', prompt], cursor: { x: prompt.length, y: 3 } } };
+  state.agents.splice(1, 0, shell);
+  const OUT = { ls: 'README.md  migrations  package.json  src  test', pwd: '/Users/you/dev/acme-api', 'git branch': '* main\n  rate-limit\n  review', whoami: 'you' };
+  const typeIn = (text, out) => patch('sh-demo', (a) => {
+    const lines = [...a.screen.lines.slice(0, -1), `${prompt}${text}`, ...(out == null ? [] : out.split('\n')), prompt].slice(-200);
+    return { screen: { lines, cursor: { x: prompt.length, y: lines.length - 1 } }, preview: { role: 'assistant', text: prompt.trim() } };
+  });
   const patch = (id, fn) => {
     state.agents = state.agents.map((a) => (a.id === id ? { ...a, ...fn(a), updatedAt: Date.now() } : a));
     emit({ ...state });
@@ -90,7 +101,10 @@ export function createDemo(emit) {
   emit({ ...state });
   return {
     name: 'demo',
+    type(id, text) { typeIn(text, OUT[text.trim()] ?? (text.trim() ? `zsh: this is a sample shell, try ls or git branch` : null)); },
+    keys(id, keys) { if (id === 'sh-demo' && keys.includes('ctrl-c')) typeIn('^C', null); if (id === 'sh-demo' && keys.includes('ctrl-l')) patch(id, () => ({ screen: { lines: [prompt], cursor: { x: prompt.length, y: 0 } } })); },
     send(id, text) {
+      if (id === 'sh-demo') return this.type(id, text);
       patch(id, push('user', text));
       work(id, REPLIES[n++ % REPLIES.length]);
     },

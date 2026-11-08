@@ -16,6 +16,7 @@ const DEMO = process.env.SYNAPSE_DEMO ? await import('./demo.mjs') : null;
 
 export const FILES = {
   edges: path.join(DATA, 'edges.json'),
+  liaisons: path.join(DATA, 'liaisons.json'),       // an agent started to talk with friends' agents -> the agent of mine it works for
   layout: path.join(DATA, 'layout.json'),
   cursors: path.join(DATA, 'cursors.json'),
   events: path.join(DATA, 'events.jsonl'),

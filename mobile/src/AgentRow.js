@@ -17,7 +17,7 @@ export function AgentRow({ a, fork, last, dot, onRename }) {
   return (
     <Press
       onPress={() => router.push(`/agent/${a.id}`)}
-      onLongPress={onRename && (() => { haptic.pick(); onRename(a); })} delayLongPress={350} sink={0.985}
+      onLongPress={onRename && !a.shell ? () => { haptic.pick(); onRename(a); } : undefined} delayLongPress={350} sink={0.985}
       style={{ flexDirection: 'row', gap: 12, paddingVertical: 13, paddingRight: 16, paddingLeft: fork ? 38 : 16, backgroundColor: t.card }}
     >
       {fork && <View style={{ position: 'absolute', left: 21, top: 0, height: 26, width: 10, borderLeftWidth: 1.5, borderBottomWidth: 1.5, borderColor: t.rule, borderBottomLeftRadius: 8 }} />}
