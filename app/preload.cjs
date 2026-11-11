@@ -43,6 +43,11 @@ contextBridge.exposeInMainWorld('synapse', {
     onShow: (fn) => on('phone:show', fn),
   },
   fork: { spawn: (a) => call('fork:spawn', a), link: (child, parent) => call('fork:link', { child, parent }), onRequest: (fn) => on('fork:request', fn) },
+  browser: {
+    list: (folders) => call('browser:list', { folders }),
+    set: (folder, dir) => call('browser:set', { folder, dir }),
+    open: (dir) => call('browser:open', { dir }),
+  },
   project: {
     add: (p) => call('project:add', { path: p }),
     protect: (p, on) => call('workspace:protect', { path: p, on }),
@@ -93,6 +98,8 @@ contextBridge.exposeInMainWorld('synapse', {
     accept: (id, agents, talk = true) => call('requests:accept', { id, agents, talk }),
     acceptOffer: (id, receiver) => call('requests:acceptOffer', { id, receiver }),
     offer: (to, agent, mode) => call('share:offer', { to, agent, mode }),
+    workspace: (to, folder) => call('share:workspace', { to, folder }),
+    stopWorkspace: (machineId, key) => call('share:stopWorkspace', { machineId, key }),
     ask: (to, agent, target, note) => call('requests:ask', { to, agent, target, note }),
     deny: (id) => call('requests:deny', { id }),
     cancel: (id) => call('requests:cancel', { id }),

@@ -124,6 +124,15 @@ export function peers(me, { all = false } = {}) {
     out.liaisonFor = { id: f.id, name: f.name };
     out.friendsAgents = edges.filter((e) => e.mirrored && e.to === f.id && byId.has(e.from)).map((e) => tag(e, byId.get(e.from)));
   }
+  // friends' whole workspaces: every agent in them can be read with read name@owner
+  const ws = new Map();
+  for (const e of edges) {
+    if (!e.mirrored || !e.workspace || !byId.has(e.from)) continue;
+    const k = `${e.owner}|${e.workspace}`;
+    if (!ws.has(k)) ws.set(k, { owner: e.owner, workspace: e.workspace, agents: [] });
+    if (!ws.get(k).agents.some((a) => a.id === e.from)) ws.get(k).agents.push(brief(byId.get(e.from)));
+  }
+  if (ws.size) out.friendsWorkspaces = [...ws.values()];
   if (all) out.allAgents = agents.filter((a) => a.id !== me.id).map(brief);
   return out;
 }
@@ -151,7 +160,8 @@ export function readContext(me, query, maxChars = 12000) {
   const other = resolve(listAgents(), query);
   const edges = readJSON(FILES.edges, []);
   if (other.remote) me = actorFor(me, other, edges);
-  if (!edges.some((e) => e.from === other.id && e.to === me.id)) {
+  // a friend's whole workspace is readable by any of my agents, not only the one that accepted it
+  if (!edges.some((e) => e.from === other.id && (e.to === me.id || (e.mirrored && e.workspace)))) {
     throw new Error(`${other.name} does not share context with you. Link it first ("link ${other.name}").`);
   }
   const { messages } = readAgentMessages(other);

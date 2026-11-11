@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { git, listChoices, createWorktree, openWorktree, deleteWorktree, choicePullRequest, pullRequests, fetchBranches } from '../worktrees.mjs';
+import { git, listChoices, createWorktree, openWorktree, deleteWorktree, safeDeleteWorktree, choicePullRequest, pullRequests, fetchBranches } from '../worktrees.mjs';
 
 const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-worktrees-')));
 const repo = path.join(fixture, 'repo'), home = path.join(fixture, 'checkouts');
@@ -62,6 +62,50 @@ try {
   assert.equal(listChoices(repo).find(w => w.path === detached).name, 'detached HEAD');
   assert.equal(openWorktree(repo, { kind: 'worktree', path: detached }, home), detached);
   console.log('PASS local/remote/retained/detached opening, tracking, collisions, safe creation and deletion');
+
+  // safe deletion: every kind of uncommitted work survives on the branch, even with a failing pre-commit hook
+  // and no identity configured; a locked worktree is unlocked; ignored files go with the folder
+  const read = (ref, file) => git(repo, ['show', `${ref}:${file}`]);
+  const messy = createWorktree(repo, 'messy', '', home);
+  fs.writeFileSync(path.join(messy, 'tracked.txt'), 'v1'); git(messy, ['add', 'tracked.txt']);
+  git(messy, ['-c', 'user.name=T', '-c', 'user.email=t@e', 'commit', '-qm', 'tracked']);
+  fs.writeFileSync(path.join(messy, 'tracked.txt'), 'v2 unstaged');
+  fs.writeFileSync(path.join(messy, 'staged.txt'), 'staged'); git(messy, ['add', 'staged.txt']);
+  fs.mkdirSync(path.join(messy, 'new dir')); fs.writeFileSync(path.join(messy, 'new dir', 'untracked.txt'), 'untracked');
+  fs.writeFileSync(path.join(messy, '.gitignore'), 'build/\n'); fs.mkdirSync(path.join(messy, 'build')); fs.writeFileSync(path.join(messy, 'build', 'x'), 'x');
+  const hooks = git(messy, ['rev-parse', '--git-path', 'hooks']);
+  fs.mkdirSync(path.resolve(messy, hooks), { recursive: true }); fs.writeFileSync(path.join(path.resolve(messy, hooks), 'pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  git(repo, ['worktree', 'lock', messy]);
+  assert.throws(() => deleteWorktree(repo, messy, true), /locked/, 'plain deletion still refuses');
+  const noIdentity = path.join(fixture, 'empty.gitconfig'); fs.writeFileSync(noIdentity, '');
+  const was = [process.env.GIT_CONFIG_GLOBAL, process.env.GIT_CONFIG_NOSYSTEM];
+  Object.assign(process.env, { GIT_CONFIG_GLOBAL: noIdentity, GIT_CONFIG_NOSYSTEM: '1' });
+  let saved;
+  try { saved = safeDeleteWorktree(repo, messy); }
+  finally { process.env.GIT_CONFIG_GLOBAL = was[0] ?? ''; if (was[0] === undefined) delete process.env.GIT_CONFIG_GLOBAL; if (was[1] === undefined) delete process.env.GIT_CONFIG_NOSYSTEM; }
+  fs.unlinkSync(path.join(path.resolve(repo, git(repo, ['rev-parse', '--git-path', 'hooks'])), 'pre-commit'));
+  assert.equal(git(repo, ['log', '-1', '--format=%ae', 'messy']), 'synapse@localhost', 'an identity even where none is configured');
+  assert.equal(fs.existsSync(messy), false);
+  assert.deepEqual([saved.saved, saved.files, saved.branch], [true, 4, 'messy']);
+  assert.equal(read('messy', 'tracked.txt'), 'v2 unstaged');
+  assert.equal(read('messy', 'staged.txt'), 'staged');
+  assert.equal(read('messy', 'new dir/untracked.txt'), 'untracked');
+  assert.throws(() => read('messy', 'build/x'), 'ignored files are not saved');
+  assert.match(git(repo, ['log', '-1', '--format=%s', 'messy']), /Saved by Synapse before deleting worktree/);
+
+  // a detached checkout with work: a new branch keeps it
+  const loose = path.join(fixture, 'loose');
+  git(repo, ['worktree', 'add', '--detach', loose]);
+  fs.writeFileSync(path.join(loose, 'loose.txt'), 'loose');
+  const kept = safeDeleteWorktree(repo, loose);
+  assert.match(kept.branch, /^synapse\/saved\/loose-/);
+  assert.equal(read(kept.branch, 'loose.txt'), 'loose');
+  // a clean one: nothing to save, plain removal
+  const clean = createWorktree(repo, 'clean', '', home);
+  assert.deepEqual(safeDeleteWorktree(repo, clean), { saved: false, files: 0, branch: 'clean', created: false });
+  assert.equal(fs.existsSync(clean), false);
+  assert.throws(() => safeDeleteWorktree(repo, repo), /Only a linked/);
+  console.log('PASS safe deletion: unstaged, staged, untracked, hooks, no identity, locked, detached, clean');
 
   git(repo, ['remote', 'set-url', 'origin', 'git@github.com:acme/repo.git']);
   const prs = [

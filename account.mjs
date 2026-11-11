@@ -1,6 +1,7 @@
 // Synapse Cloud account: sign-in, profile, trusted people and synapse requests.
 // The app, the CLI and the MCP server share one sign-in in ~/.synapse/account.json.
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import { FILES, readJSON, writeJSON, localAgents, findAgent, projectOf, remoteId, logEvent } from './lib.mjs';
 import { createEdge, setMode } from './ops.mjs';
@@ -159,6 +160,23 @@ export async function sendOffer({ to, agent, mode = 'sync', note } = {}) {
   return request;
 }
 
+// Share a whole workspace (a project, all its worktrees) with a trusted person: every agent working in it, now and
+// later, read only. It travels as an offer like one agent does; they accept by picking one of their agents, and from
+// then on any of their agents may read any of mine there (on demand: nothing is pushed into their prompts).
+export async function shareWorkspace({ to, folder } = {}) {
+  if (!to) throw new Error('who to share it with?');
+  if (!folder) throw new Error('which workspace? give a folder in it');
+  if (!(await cloudFeatures()).includes('offers')) throw new Error(OFFERS_LATER);
+  const p = projectOf(folder);
+  if (p.key.startsWith('project:')) throw new Error(`${folder} is not in a git repository; share a workspace from a repository`);
+  const c = await remote.cloudMachine(cloudUrl(), account()?.token);
+  const agent = { id: `ws-${crypto.createHash('sha1').update(p.key).digest('hex').slice(0, 16)}`, name: `${p.label} (whole workspace)`, kind: 'workspace', project: p.label };
+  const { request } = await api('POST', '/v1/requests', { to, machineId: c.machineId, agent, kind: 'offer', mode: 'sync' });
+  writeJSON(FILES.offers, { ...readJSON(FILES.offers, {}), [request.id]: { id: agent.id, name: agent.name, kind: 'workspace', workspace: p.key, label: p.label, cwd: p.key, at: Date.now() } });
+  await requests().catch(() => {});
+  return request;
+}
+
 // Someone offered me one of their agents: it goes to the agent of mine I pick (it reads the shared one).
 export async function acceptOffer(id, receiverId) {
   const req = await incoming(id);
@@ -241,7 +259,7 @@ export function externalLinks() {
   const out = [];
   for (const e of readJSON(FILES.edges, [])) {
     if (e.mirrored) {
-      out.push({ direction: 'in', owner: e.owner || ownerOf(e.remote), handle: cfg.peers[e.remote]?.handle || '', mode: e.mode || 'sync', agent: { id: e.from, name: e.fromName, kind: e.fromKind || kindIn(e.remote, e.from) }, local: { id: e.to, name: e.toName }, edgeId: e.id });
+      out.push({ direction: 'in', owner: e.owner || ownerOf(e.remote), handle: cfg.peers[e.remote]?.handle || '', mode: e.mode || 'sync', agent: { id: e.from, name: e.fromName, kind: e.fromKind || kindIn(e.remote, e.from) }, local: { id: e.to, name: e.toName }, edgeId: e.id, ...(e.workspace ? { workspace: e.workspace } : {}) });
       continue;
     }
     const m = machines.find((x) => e.to.startsWith(remoteId(x, '')));

@@ -97,6 +97,50 @@ export function deleteWorktree(repo, dir, force = false) {
   git(repo, ['worktree', 'remove', ...(force === true ? ['--force'] : []), '--', dir]);
 }
 
+// Safe deletion: nothing in the checkout is lost. Uncommitted work (staged, unstaged, untracked, conflicted) becomes
+// a commit on its branch; a detached HEAD whose commits no branch holds gets a branch of its own first. The branch
+// outlives the folder, so `git switch <branch>` (or a new worktree on it) brings everything back.
+// Ignored files (node_modules, build output, .env) are not saved: they go with the folder.
+const slow = (cwd, args, env) => {
+  try { return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000, env: { ...process.env, ...env } }).trim(); }
+  catch (e) { throw new Error((e.stderr || e.message || '').toString().trim()); }
+};
+const has = (cwd, args) => { try { git(cwd, args); return true; } catch { return false; } };
+const stamp = () => new Date().toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
+
+export function saveWorktree(dir) {
+  const files = git(dir, ['status', '--porcelain', '--untracked-files=all']).split('\n').filter(Boolean).length;
+  let branch = git(dir, ['branch', '--show-current']);
+  let made = false;
+  if (!branch) { // detached (or mid-rebase): keep HEAD reachable before anything else
+    const held = has(dir, ['rev-parse', '--verify', 'HEAD']) && git(dir, ['branch', '--contains', 'HEAD', '--format=%(refname:short)']).split('\n').filter(Boolean).length > 0;
+    if (!files && held) return { saved: false, files: 0, branch: null };
+    let name = `synapse/saved/${path.basename(dir).replace(/[^\w.-]+/g, '-')}-${stamp()}`, n = 2;
+    while (has(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])) name = `${name.replace(/-\d+$/, '')}-${n++}`;
+    git(dir, ['branch', name, 'HEAD']); // HEAD stays detached; the commit below is moved onto the branch after
+    branch = name; made = true;
+  }
+  if (!files) return { saved: made, files: 0, branch, created: made };
+  slow(dir, ['add', '-A', '--', '.']);
+  // no hooks (a failing lint must not block saving), no signing prompt, an identity even where none is configured
+  const who = has(dir, ['config', 'user.email']) ? [] : ['-c', 'user.name=Synapse', '-c', 'user.email=synapse@localhost'];
+  slow(dir, [...who, '-c', 'commit.gpgsign=false', 'commit', '--no-verify', '-q', '-m', `Saved by Synapse before deleting worktree ${path.basename(dir)}`,
+    '-m', `${files} uncommitted change${files === 1 ? '' : 's'} kept here so deleting the checkout lost nothing.`]);
+  if (made) git(dir, ['branch', '-f', branch, 'HEAD']);
+  return { saved: true, files, branch, commit: git(dir, ['rev-parse', '--short', 'HEAD']), created: made };
+}
+
+export function safeDeleteWorktree(repo, dir) {
+  const w = listWorktrees(repo).find(w => w.path === dir);
+  if (!w || w.home || w.bare) throw new Error('Only a linked worktree can be deleted.');
+  if (w.missing) { git(repo, ['worktree', 'prune']); return { saved: false, files: 0, branch: w.branch || null }; }
+  const result = saveWorktree(dir);
+  if (w.locked) git(repo, ['worktree', 'unlock', '--', dir]);
+  if (git(dir, ['status', '--porcelain', '--untracked-files=all'])) throw new Error('Could not save every change in this worktree; nothing was deleted.');
+  git(repo, ['worktree', 'remove', '--force', '--', dir]); // clean now; --force only for ignored files and submodules
+  return result;
+}
+
 export async function fetchBranches(repo) {
   await exec('git', ['-C', repo, 'fetch', '--all'], { timeout: 60000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
 }

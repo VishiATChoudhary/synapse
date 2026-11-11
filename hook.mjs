@@ -11,6 +11,7 @@ import {
 } from './lib.mjs';
 import path from 'node:path';
 import { isConnected, sync } from './remote.mjs';
+import { browserRule } from './browsers.mjs';
 
 const BUDGET = Number(process.env.SYNAPSE_BUDGET || 8000);
 const INTRO = fs.readFileSync(new URL('./skill/bootstrap.md', import.meta.url), 'utf8').trim();
@@ -21,6 +22,10 @@ async function main() {
   const input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
   const event = input.hook_event_name || 'UserPromptSubmit';
   const root = protectedRoot(input.cwd || process.cwd());
+  // Codex keeps its sessions under ~/.codex; everything else that runs this hook speaks for Claude
+  const kind = /[\\/]\.codex[\\/]/.test(String(input.transcript_path || '')) ? 'codex' : 'claude';
+  let browser = null;
+  try { browser = browserRule(input.cwd || process.cwd(), kind); } catch {}
   if (event === 'PreToolUse') return guard(input, root);
   // Claude's session_id is its Synapse id; Codex's is not, so find ourselves in the process tree
   const edgesAll = readJSON(FILES.edges, []);
@@ -61,12 +66,16 @@ async function main() {
       ...(parts.length ? { systemMessage: `synapse  ${parts.join('  ·  ')}` } : {}),
       hookSpecificOutput: {
         hookEventName: event,
-        additionalContext: INTRO + (me && me !== input.session_id ? `\n\nYour Synapse agent id is ${me}.` : '') + (root ? `\n\n${protectRule(root)}` : ''),
+        additionalContext: INTRO + (me && me !== input.session_id ? `\n\nYour Synapse agent id is ${me}.` : '') + (root ? `\n\n${protectRule(root)}` : '') + (browser ? `\n\n${browser}` : ''),
       },
     }));
     return;
   }
-  const rule = root && event === 'UserPromptSubmit' ? `<protected-folder>\n${protectRule(root)}\n</protected-folder>` : null;
+  // the workspace's rules, on every prompt: a protected folder, and which browser profile its agents use
+  const rule = event !== 'UserPromptSubmit' ? null : [
+    root ? `<protected-folder>\n${protectRule(root)}\n</protected-folder>` : null,
+    browser ? `<workspace-browser>\n${browser}\n</workspace-browser>` : null,
+  ].filter(Boolean).join('\n\n') || null;
   if (!me) {
     if (rule) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: rule } }));
     return;
@@ -81,8 +90,20 @@ async function main() {
   // on-demand links (a collapsed fork child) are not pulled in: the agent hears once that it can read them
   const onDemand = edgesNow.filter((e) => e.to === me && e.onDemand && !e.noticed);
   if (onDemand.length) {
-    blocks.push(`<linked-agents-on-demand>\n${onDemand.map((e) => `"${e.fromName}" (a fork of this session) shares its context with you. ` +
-      `It is not included here: read it with synapse_read("${e.fromName}") when the user asks or it would help.`).join('\n')}\n</linked-agents-on-demand>`);
+    // a friend's whole workspace: one line for it, naming the agents in it that are new to this session
+    const spaces = new Map();
+    for (const e of onDemand.filter((x) => x.workspace)) {
+      const k = `${e.owner}|${e.workspace}`;
+      spaces.set(k, [...(spaces.get(k) || []), e]);
+    }
+    const lines = [
+      ...onDemand.filter((e) => !e.workspace).map((e) => `"${e.fromName}" (a fork of this session) shares its context with you. ` +
+        `It is not included here: read it with synapse_read("${e.fromName}") when the user asks or it would help.`),
+      ...[...spaces.values()].map((list) => `${list[0].owner} shares their whole "${list[0].workspace}" workspace with you, read only: ` +
+        `${list.map((e) => `"${e.fromName}@${e.owner}"`).join(', ')}. Nothing from it is included here: read one with synapse_read("name@${list[0].owner}") ` +
+        'when the user asks or it would help. synapse_peers lists the agents in it.'),
+    ];
+    blocks.push(`<linked-agents-on-demand>\n${lines.join('\n')}\n</linked-agents-on-demand>`);
     const ids = new Set(onDemand.map((e) => e.id));
     writeJSON(FILES.edges, readJSON(FILES.edges, []).map((e) => ids.has(e.id) ? { ...e, noticed: true } : e));
   }

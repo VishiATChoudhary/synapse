@@ -20,6 +20,7 @@
 //   synapse rename [agent] <new name>  rename an agent (yourself if no agent given); empty name resets
 //   synapse rename-project <project> <new name>  rename a project (frame on the canvas); empty name resets
 //   synapse ui                         start the canvas (http://localhost:4747)
+//   synapse browser [profile|off]      the Chrome profile this folder's workspace opens (Claude in Chrome, Codex); no argument lists them
 //
 // Multiplayer (agents on a friend's machine):
 //   synapse invite [--name me]         print an invite code for a friend
@@ -36,6 +37,9 @@
 //   synapse trust <email|@handle>      add a trusted person (people you can send requests to)
 //   synapse untrust <who> | people     remove one | list them
 //   synapse request <person> [--target "their api agent"] [--note why]   ask to read one of their agents
+//   synapse share-workspace <person> [folder]   offer a whole workspace (every agent in it, now and later), read only
+//   synapse workspaces                 workspaces you share whole, and with whom
+//   synapse unshare-workspace <friend> [workspace]   stop sharing one
 //   synapse requests                   requests you sent and received
 //   synapse accept <id> [--agents a,b] [--no-talk] | deny <id> | cancel <id>
 //                                      (accept lets their agent ask yours questions too, unless --no-talk)
@@ -121,6 +125,15 @@ try {
     case 'trust': out = await account.trust(args.join(' ')); break;
     case 'untrust': out = await account.untrust(args.join(' ')); break;
     case 'people': out = await account.trusted(); break;
+    case 'share-workspace': out = shortRequest(await account.shareWorkspace({ to: args[0], folder: args[1] || process.cwd() })); break;
+    case 'workspaces': out = remote.sharedWorkspaces(); break;
+    case 'browser': {
+      const b = await import('./browsers.mjs');
+      if (!args.length) out = { workspace: projectOf(process.cwd()).label, browser: b.browserFor(process.cwd()), profiles: b.chromeProfiles().map((p) => ({ dir: p.dir, name: p.name, email: p.email, claude: !!p.claude, codex: !!p.codex })) };
+      else out = b.setBrowser(process.cwd(), ['off', 'none', 'any'].includes(args[0]) ? null : args.join(' '));
+      break;
+    }
+    case 'unshare-workspace': out = remote.stopWorkspaceFor(args[0], args.slice(1).join(' ')); break;
     case 'request': out = shortRequest(await account.sendRequest({ to: args[0], agent: whoami(), target: opt('--target'), note: opt('--note') })); break;
     case 'requests': {
       const { incoming, outgoing } = await account.requests();
@@ -209,7 +222,7 @@ try {
     }
     case 'agents': out = listAgents().map(({ name, id, kind, cwd, status }) => ({ name, id, kind, cwd, status })); break;
     default:
-      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | ask <agent> <question> [--conversation id] | end <conversation> | talk <agent> on|off | saved [id | restore <id> | archive <file> [--keep]] | agents | rename [agent] <name> | rename-project <project> <name> | invite | join <code> | friends | unfriend <friend> | sync | login | signup | logout | whoami | trust <who> | untrust <who> | people | request <person> [--target t] [--note n] | requests | accept <id> [--agents a,b] [--no-talk] | deny <id> | cancel <id>');
+      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | ask <agent> <question> [--conversation id] | end <conversation> | talk <agent> on|off | saved [id | restore <id> | archive <file> [--keep]] | browser [profile|off] | agents | rename [agent] <name> | rename-project <project> <name> | invite | join <code> | friends | unfriend <friend> | sync | login | signup | logout | whoami | trust <who> | untrust <who> | people | request <person> [--target t] [--note n] | share-workspace <person> [folder] | workspaces | unshare-workspace <friend> [workspace] | requests | accept <id> [--agents a,b] [--no-talk] | deny <id> | cancel <id>');
       process.exit(cmd ? 1 : 0);
   }
   if (cmd === 'ui') { /* server keeps running */ }

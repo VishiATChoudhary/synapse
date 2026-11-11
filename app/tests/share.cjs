@@ -88,6 +88,29 @@ const shareOf = (name) => `[...(${friend(name)})?.querySelectorAll('button') || 
   assert.equal(sent.kind, 'offer'); assert.equal(sent.mode, 'sync'); assert.equal(sent.to.handle, 'mara'); assert.match(sent.agent.id, /^codex-/);
   assert.equal(await js(`document.querySelector('#modal').hidden`), true, 'the sheet closes');
 
+  // the whole workspace instead: every agent in it, read only
+  await js(`${shareOf('Mara')}.click()`);
+  await until(() => js(`!document.querySelector('#modal').hidden`), 'the share sheet again');
+  const space = path.basename(fixture);
+  await js(`[...document.querySelectorAll('#modal .seg button')].find((b) => b.textContent === ${JSON.stringify(`whole ${space}`)}).click()`);
+  assert.match(await js(`document.querySelector('#modal .share-explain').textContent`), new RegExp(`Every agent in ${space}.*nothing is pushed into their prompts`));
+  await js(`[...document.querySelectorAll('#modal .row button')].find((b) => b.textContent === 'share').click()`);
+  await until(() => (read().outgoing || []).length === 2, 'the workspace offer went out');
+  assert.equal(read().outgoing[0].agent.kind, 'workspace');
+  assert.equal(read().outgoing[0].agent.name, `${space} (whole workspace)`);
+  // Mara accepted it, and shares her shop workspace back: one line each way, and mine can be stopped
+  fs.writeFileSync(feed, JSON.stringify({ ...read(), outgoing: read().outgoing.slice(1),
+    workspaces: [{ machineId: 'm-mara', friend: 'Mara', handle: 'mara', key: 'k-acme', label: 'acme', agents: ['api', 'web'], ready: true }],
+    links: [...read().links, ...['cart', 'search'].map((n) => ({ direction: 'in', owner: 'Mara', handle: 'mara', mode: 'sync', workspace: 'shop', agent: { id: `r-${n}`, name: n }, local: { id: 'x', name: 'x' }, edgeId: `w-${n}` }))] }));
+  await js(`document.querySelector('#btn-friends').click()`);
+  await until(async () => /your whole acme workspace \(2 agents now\) · read only/.test(await pop()), 'my shared workspace in friends');
+  assert.match(await pop(), /their whole shop workspace \(2 agents\) → all your agents · read only/);
+  assert.doesNotMatch(await pop(), /their cart →/, 'not one line per agent');
+  await js(`[...document.querySelectorAll('#friends-pop .friend-flow.ws button')].find((b) => b.textContent === 'stop').click()`);
+  await until(() => !(read().workspaces || []).length, 'stopped');
+  await until(async () => !/your whole acme workspace/.test(await pop()), 'gone from friends');
+  await js(`document.querySelector('#btn-friends').click()`);
+
   // back in friends: the offer waits for Mara
   await js(`document.querySelector('#btn-friends').click()`);
   await until(async () => new RegExp(`offered ${agentName} · waiting for them to accept`).test(await pop()), 'the pending offer in friends');

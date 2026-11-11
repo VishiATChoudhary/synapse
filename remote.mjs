@@ -173,6 +173,35 @@ export function friends() {
   };
 }
 
+// Workspaces I share whole, per friend: what each covers right now.
+export function sharedWorkspaces() {
+  const c = config(), states = readJSON(FILES.peerState, {}), locals = localAgents();
+  return Object.entries(c.peers).flatMap(([m, p]) => Object.entries(p.workspaces || {}).map(([key, w]) => ({
+    machineId: m, friend: states[m]?.name || p.name, handle: p.handle || null, key, label: w.label, since: w.since,
+    ready: !!states[m]?.workspaces, // their Synapse reads workspaces (0.6.19 and later)
+    agents: locals.filter((a) => projectOf(a.cwd).key === key).map((a) => a.name),
+  })));
+}
+// from the command line: a friend by name, a workspace by its name (or the only one shared with them)
+export function stopWorkspaceFor(friend, workspace) {
+  const [m, p] = findFriend(config(), friend);
+  const list = Object.entries(p.workspaces || {});
+  const q = String(workspace || '').toLowerCase().trim();
+  const hit = q ? list.find(([k, w]) => w.label.toLowerCase() === q || k === workspace) : list.length === 1 ? list[0] : null;
+  if (!hit) throw new Error(list.length ? `which workspace? ${list.map(([, w]) => w.label).join(', ')}` : `no workspace is shared with ${p.name}`);
+  return stopWorkspace(m, hit[0]);
+}
+export function stopWorkspace(machineId, key) {
+  const c = config();
+  const p = c.peers[machineId];
+  if (!p?.workspaces?.[key]) throw new Error('that workspace is not shared with them');
+  const { label } = p.workspaces[key];
+  delete p.workspaces[key];
+  saveConfig(c);
+  logEvent({ type: 'workspace-unshared', to: p.name, workspace: label });
+  return { stopped: label, friend: p.name };
+}
+
 function findFriend(c, query) {
   const q = String(query || '').toLowerCase().trim();
   const hit = Object.entries(c.peers).find(([m, p]) => m === q || p.name.toLowerCase() === q)
@@ -276,7 +305,8 @@ function cleanAgents(list) {
 }
 function cleanShares(list) {
   return (Array.isArray(list) ? list : []).slice(0, 500).filter((s) => s && typeof s.from === 'string' && typeof s.to === 'string')
-    .map((s) => ({ from: clean(s.from, 120), to: clean(s.to, 160), fromName: clean(s.fromName, 48), ...(s.mode === 'talk' ? { mode: 'talk' } : {}) }));
+    .map((s) => ({ from: clean(s.from, 120), to: clean(s.to, 160), fromName: clean(s.fromName, 48), ...(s.mode === 'talk' ? { mode: 'talk' } : {}),
+      ...(typeof s.workspace === 'string' && clean(s.workspace, 60) ? { workspace: clean(s.workspace, 60) } : {}) }));
 }
 
 // The links a friend has drawn from their agents to ours live in our edges.json too ("mirrored"),
@@ -291,9 +321,11 @@ function mirror(m, shares, owner) {
     return {
       id, from: remoteId(m, s.from), to: s.to, fromName: s.fromName, toName: locals.get(s.to)?.name || old?.toName || s.to,
       ...(s.mode ? { mode: s.mode } : {}), fromKind: old?.fromKind, toKind: locals.get(s.to)?.kind, mirrored: true, remote: m, owner, createdAt: old?.createdAt || Date.now(),
+      // part of a whole workspace they share: any of my agents may read it when it helps, nothing is pushed into prompts
+      ...(s.workspace ? { workspace: s.workspace, onDemand: true, ...(old?.noticed ? { noticed: true } : {}) } : {}),
     };
   });
-  const same = before.length === next.length && before.every((e) => next.some((x) => x.id === e.id && x.fromName === e.fromName && x.owner === e.owner && x.mode === e.mode));
+  const same = before.length === next.length && before.every((e) => next.some((x) => x.id === e.id && x.fromName === e.fromName && x.owner === e.owner && x.mode === e.mode && x.workspace === e.workspace));
   if (same) return;
   writeJSON(FILES.edges, [...edges.filter((e) => !(e.mirrored && e.remote === m)), ...next]);
   const gone = before.filter((e) => !next.some((x) => x.id === e.id));
@@ -382,7 +414,7 @@ async function pull(c, timeout) {
       if (name !== c.peers[m].name) { c.peers[m].name = name; cfgChanged = true; }
       const shares = cleanShares(it.shares);
       // talkRequests: their Synapse takes a talk-request (0.4.0 drops it without a word)
-      states[m] = { name, agents: cleanAgents(it.agents), shares, seen: Date.now(), ...(it.talkRequests === true ? { talkRequests: true } : {}) };
+      states[m] = { name, agents: cleanAgents(it.agents), shares, seen: Date.now(), ...(it.talkRequests === true ? { talkRequests: true } : {}), ...(it.workspaces === true ? { workspaces: true } : {}) };
       mirror(m, shares, name);
     } else if (it.type === 'context' && typeof it.agent === 'string') {
       const n = appendLog(m, it.agent, it.messages);
@@ -402,7 +434,8 @@ async function pull(c, timeout) {
   }
   if (cfgChanged) {
     const latest = config();
-    for (const [m, p] of Object.entries(c.peers)) if (!latest.blocked.includes(m) && !revoked.has(m)) latest.peers[m] = { ...latest.peers[m], ...p };
+    // workspaces are left as they are on disk: shared or stopped while this sync ran, that change stands
+    for (const [m, { workspaces, ...p }] of Object.entries(c.peers)) if (!latest.blocked.includes(m) && !revoked.has(m)) latest.peers[m] = { ...latest.peers[m], ...p };
     saveConfig(latest);
   }
   writeJSON(FILES.peerState, states);
@@ -415,6 +448,17 @@ async function pull(c, timeout) {
 export async function linkOffer(it) {
   const m = clean(it.from, 40), r = it.receiver, a = it.agent;
   if (!m || !r?.id || !a?.id) return;
+  const kept0 = readJSON(FILES.offers, {})[it.id];
+  if (kept0?.workspace) { // a whole workspace: every agent in it, now and later, readable by their agents
+    const c = config();
+    if (c.peers[m]) {
+      c.peers[m].workspaces = { ...(c.peers[m].workspaces || {}), [kept0.workspace]: { label: kept0.label, into: clean(r.id, 120), since: Date.now() } };
+      saveConfig(c);
+      logEvent({ type: 'workspace-shared', id: it.id, to: c.peers[m].name, workspace: kept0.label });
+    }
+    const offers = readJSON(FILES.offers, {}); delete offers[it.id]; writeJSON(FILES.offers, offers);
+    return;
+  }
   const { createEdge, setMode } = await import('./ops.mjs');
   const owner = config().peers[m]?.name || 'friend';
   const kept = readJSON(FILES.offers, {})[it.id];
@@ -494,6 +538,7 @@ async function push(c, timeout) {
   const done = new Set(); // ids sent, or that can never be sent
   const now = Date.now();
   const brief = locals.map((a) => ({ id: a.id, name: a.name, kind: a.kind, status: a.status, project: projectOf(a.cwd).label, startedAt: a.startedAt }));
+  const states = readJSON(FILES.peerState, {});
   let count = 0;
 
   for (const [m, peer] of Object.entries(c.peers)) {
@@ -503,6 +548,16 @@ async function push(c, timeout) {
       .map((e) => (byId.has(e.from)
         ? { from: e.from, to: e.to.slice(prefix.length), fromName: byId.get(e.from).name, ...(e.mode === 'talk' ? { mode: 'talk' } : {}) }
         : { from: e.from, to: e.to.slice(prefix.length), fromName: e.snapshot.name, mode: 'talk', dormant: true }));
+    // whole workspaces shared with them: every agent working in one (any of its worktrees), also ones started later.
+    // Only to a Synapse that reads them on demand; an older one would push each into its agent's every prompt.
+    if (states[m]?.workspaces) {
+      for (const [key, w] of Object.entries(peer.workspaces || {})) {
+        for (const a of locals) {
+          if (projectOf(a.cwd).key !== key || shares.some((x) => x.from === a.id && x.to === w.into)) continue;
+          shares.push({ from: a.id, to: w.into, fromName: a.name, workspace: w.label });
+        }
+      }
+    }
     const items = [];
     const marks = {};
     const sharedFrom = [...new Set(shares.map((s) => s.from))];
@@ -520,10 +575,10 @@ async function push(c, timeout) {
       agents = [...agents, { id: e.from, name: e.snapshot.name, kind: e.snapshot.kind, status: 'closed', project: projectOf(e.snapshot.cwd).label, startedAt: null }];
     }
     // 'tr' is in the signature so an update to this version tells friends at once that it takes talk requests
-    const sig = sha(JSON.stringify(['tr', c.name, agents.map((a) => [a.id, a.name, a.status, a.project]), shares]));
+    const sig = sha(JSON.stringify(['tr', 'ws', c.name, agents.map((a) => [a.id, a.name, a.status, a.project]), shares]));
     const last = sent[`state:${m}`];
     if (!last || last.sig !== sig || now - last.t > HEARTBEAT) {
-      items.push({ type: 'state', name: c.name, agents, shares, talkRequests: true });
+      items.push({ type: 'state', name: c.name, agents, shares, talkRequests: true, workspaces: true });
       marks[`state:${m}`] = { sig, t: now };
     }
 

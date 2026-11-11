@@ -1438,15 +1438,16 @@ function deleteWorktreeButton(project, w, after) {
   button.onclick = (e) => {
     e.stopPropagation();
     const sessions = M.slots.filter(s => s.worktree === w.path);
-    confirm(`Delete the checkout at ${w.path}? The Git branch is kept. Uncommitted changes prevent deletion.${sessions.length ? ' Sessions in this checkout will close.' : ''}`, async () => {
+    const ask = (q, ok) => (M.safeDelete ? confirmWorktreeDelete(w, q, ok) : confirm(`${q} Uncommitted changes prevent deletion.`, ok, { danger: 'Delete worktree' }));
+    ask(`Delete the checkout at ${w.path}? The Git branch is kept.${sessions.length ? ' Sessions in this checkout will close.' : ''}`, async () => {
       try {
-        await synapse.worktree.remove({ repo: project.path, dir: w.path });
+        const r = await synapse.worktree.remove({ repo: project.path, dir: w.path });
         for (const s of sessions) closeSession(s, root(s).id);
         prStatuses.delete(w.path);
-        await refresh(); toast('Worktree deleted; branch kept.');
+        await refresh(); toast(`Worktree deleted; branch kept${savedNote(r)}.`);
         if (after) after();
       } catch (e) { toast(e.message, true); }
-    }, { danger: 'Delete worktree' });
+    });
   };
   return button;
 }
@@ -1800,6 +1801,15 @@ async function confirmDirty(cwd, question, action, onOk) {
   const text = dirty ? `${dirty} uncommitted change${dirty === 1 ? '' : 's'} in ${tilde(cwd)}. ${question}` : question;
   confirm(text, onOk, { danger: dirty ? `${action} anyway` : action });
 }
+// deleting a checkout: with safe deletion on, uncommitted work is committed to its branch first, so nothing to fear
+async function confirmWorktreeDelete(w, question, onOk) {
+  if (!M.safeDelete) return confirmDirty(w.path, question, 'Delete', onOk);
+  let dirty = 0;
+  try { dirty = await synapse.git.dirty(w.path); } catch {}
+  const keep = dirty ? `${dirty} uncommitted change${dirty === 1 ? '' : 's'} will be committed to ${w.branch ? `branch ${w.branch}` : 'a new branch'} first, so nothing is lost. ` : '';
+  confirm(`${keep}${question}`, onOk, { danger: 'Delete' });
+}
+const savedNote = (r) => (r?.saved && r.files ? ` · ${r.files} change${r.files === 1 ? '' : 's'} saved on ${r.branch}` : r?.created ? ` · kept on branch ${r.branch}` : '');
 const slotsIn = (paths) => M.slots.filter((s) => paths.includes(s.worktree));
 const closeSlots = (slots) => { for (const s of slots) { const r = root(s); if (r) closeSession(s, r.id); } };
 // one session stack, with everything forked from it
@@ -1811,8 +1821,8 @@ function closeSlotAsk(s) {
 // a checkout: git worktree remove, forced only after the uncommitted-changes question was answered
 function removeWorktreeAsk(project, w) {
   const open = slotsIn([w.path]);
-  confirmDirty(w.path, `Delete worktree ${w.name}${open.length ? ` and close ${open.length} session${open.length === 1 ? '' : 's'} in it` : ''}? The folder is removed.`, 'Delete', async () => {
-    try { await synapse.worktree.remove({ repo: project.path, dir: w.path, force: true }); closeSlots(open); toast(`worktree ${w.name} removed`); }
+  confirmWorktreeDelete(w, `Delete worktree ${w.name}${open.length ? ` and close ${open.length} session${open.length === 1 ? '' : 's'} in it` : ''}? The folder is removed.`, async () => {
+    try { const r = await synapse.worktree.remove({ repo: project.path, dir: w.path, force: true }); closeSlots(open); toast(`worktree ${w.name} removed${savedNote(r)}`); }
     catch (e) { toast(e.message, true); }
     await refresh();
   });
@@ -1840,8 +1850,28 @@ function killAgentAsk(a) {
   });
 }
 const agentMenu = (worktreePath) => profileOrder().map((k) => ({ label: M.profiles[k].label || k, run: () => newSlot(worktreePath, k) }));
+// Which Chrome profile a workspace's agents use (Claude in Chrome, Codex's Chrome plugin): a submenu with the
+// profiles Chrome has, or "agents choose". The prompt hook tells every agent working there (browsers.mjs).
+async function browserItem(p) {
+  const folder = p.worktrees[0]?.path || p.path;
+  if (!folder) return null;
+  let r;
+  try { r = await synapse.browser.list([folder]); } catch { return null; }
+  if (!r.profiles.length) return null;
+  const cur = r.chosen[folder], name = (dir) => r.profiles.find((x) => x.dir === dir)?.name || dir;
+  const pick = async (dir) => {
+    try { await synapse.browser.set(folder, dir); toast(dir ? `${p.label}: agents use the ${name(dir)} Chrome profile` : `${p.label}: agents pick the browser`); }
+    catch (err) { toast(err.message, true); }
+  };
+  const tags = (x) => [x.email, x.claude ? null : 'no Claude extension', x.codex ? null : 'no Codex extension'].filter(Boolean).join(' · ');
+  return { label: cur ? `Browser: ${name(cur)}` : 'Browser', sub: [
+    { label: `${cur ? '' : '✓ '}Agents choose`, run: () => pick(null) }, '-',
+    ...r.profiles.map((x) => ({ label: `${x.dir === cur ? '✓ ' : ''}${x.name}${tags(x) ? `  (${tags(x)})` : ''}`, run: () => pick(x.dir) })),
+    ...(cur ? ['-', { label: `Open ${name(cur)} in Chrome`, run: () => synapse.browser.open(cur).catch((err) => toast(err.message, true)) }] : []),
+  ] };
+}
 // the sidebar: project tab, checkout row, session row, or the empty pane
-$('.side').addEventListener('contextmenu', (e) => {
+$('.side').addEventListener('contextmenu', async (e) => {
   e.preventDefault();
   const slotRow = e.target.closest('.slot'), wtRow = e.target.closest('.wt'), projBox = e.target.closest('.proj');
   const p = projBox && M.projects.find((x) => x.key === projBox.dataset.key);
@@ -1852,7 +1882,9 @@ $('.side').addEventListener('contextmenu', (e) => {
     if (top(s)) items.push(...sessionActions(s, top(s)));
     items.push('-', { label: 'Close session', danger: true, run: () => closeSlotAsk(s) });
   } else if (w) {
-    items.push({ label: 'New agent', sub: agentMenu(w.path) }, { label: 'New worktree', run: () => promptWorktree(p) }, '-');
+    items.push({ label: 'New agent', sub: agentMenu(w.path) }, { label: 'New worktree', run: () => promptWorktree(p) });
+    const b = await browserItem(p);
+    items.push(...(b ? [b] : []), '-');
     items.push(w.protected
       ? { label: 'Unprotect', run: () => protectFolder(w, false) }
       : { label: 'Protect (read only)', run: () => protectFolder(w, true) });
@@ -1861,7 +1893,8 @@ $('.side').addEventListener('contextmenu', (e) => {
   } else if (p) {
     const first = p.worktrees[0]?.path;
     if (first) items.push({ label: 'New agent', sub: agentMenu(first) });
-    items.push({ label: 'New worktree', run: () => promptWorktree(p) }, '-', { label: 'Remove from sidebar', run: () => removeFromSidebar(p.worktrees.map((x) => x.path), p.label) });
+    const b = await browserItem(p);
+    items.push({ label: 'New worktree', run: () => promptWorktree(p) }, ...(b ? [b] : []), '-', { label: 'Remove from sidebar', run: () => removeFromSidebar(p.worktrees.map((x) => x.path), p.label) });
   } else {
     items.push({ label: 'New workspace', run: () => promptProject() });
   }
@@ -1972,6 +2005,13 @@ async function openSettings() {
       try { M.autoSendFork = (await synapse.settings.set({ autoSendFork: fcb.checked })).autoSendFork; toast(fcb.checked ? 'forks send their question right away' : 'a fork\'s question waits in its prompt for you'); }
       catch (e) { fcb.checked = !fcb.checked; toast(e.message, true); }
     };
+    const safeRow = el('label', 'opt set'), scb = el('input');
+    scb.type = 'checkbox'; scb.checked = s.safeWorktreeDelete !== false;
+    safeRow.append(scb, el('span', 'k', 'safe worktree auto-deletion'), el('span', 'c', 'deleting a worktree first commits its uncommitted changes (untracked files too) to its branch, so it never refuses and nothing is lost; ignored files go with the folder'));
+    scb.onchange = async () => {
+      try { M.safeDelete = (await synapse.settings.set({ safeWorktreeDelete: scb.checked })).safeWorktreeDelete; toast(scb.checked ? 'deleting a worktree saves its changes to the branch first' : 'worktrees with uncommitted changes ask before they are deleted'); }
+      catch (e) { scb.checked = !scb.checked; toast(e.message, true); }
+    };
     const doneRow = el('label', 'opt set'), dcb = el('input');
     dcb.type = 'checkbox'; dcb.checked = s.notifyDone !== false;
     doneRow.append(dcb, el('span', 'k', 'notify when done'), el('span', 'c', 'a notification when an agent finishes while Synapse is in the background, a toast when you are looking at another one'));
@@ -2049,7 +2089,7 @@ async function openSettings() {
       tools.append(b);
     }
     toolsRow.append(el('span', 'k', 'open'), el('span', 'c', 'activity, friends, fork and splits · past chats is below, ⇧⌘H'), tools);
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), toolsRow, viewRow, pastRow, importRows({ remove: true }), linkRow, forkRow, doneRow, soundRow, errRow, loginRow, updRow, tourRow);
+    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), toolsRow, viewRow, pastRow, importRows({ remove: true }), linkRow, forkRow, safeRow, doneRow, soundRow, errRow, loginRow, updRow, tourRow);
     const commands = el('div', 'agent-commands'), commandInputs = new Map();
     for (const [kind, profile] of Object.entries(s.profiles || {})) {
       const row = el('label', 'opt set'), input = el('input');
@@ -2602,7 +2642,7 @@ async function refreshPullRequests() {
 }
 async function refresh() { apply(await synapse.state()); }
 function apply(st) {
-  M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo; M.autoSendFork = !!st.autoSendFork; M.wakeAgents = !!st.wakeAgents;
+  M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo; M.autoSendFork = !!st.autoSendFork; M.safeDelete = st.safeWorktreeDelete !== false; M.wakeAgents = !!st.wakeAgents;
   const talks = JSON.stringify([st.talks || [], st.talkRequests || []]);
   if (talks !== M.talksSig) { M.talksSig = talks; M.talks = st.talks || []; M.talkRequests = st.talkRequests || []; renderDot(); }
   // remember which agent each session runs while it is alive: that id is what a restart resumes. A resumed
@@ -2803,7 +2843,9 @@ function talkRequestRow(r) {
 // Top right, under fork. Friends lists the trusted people and what flows between you, with anything waiting on you
 // on top. Share offers the open agent to one of them, read only or read and ask; they pick which of their agents
 // receives it, and once they accept, this Mac links the two.
-const openAgent = () => { const s = top(focusedSlot()), a = s && M.agents[s.pty]; return a?.synapseId ? { id: a.synapseId, name: a.name, kind: a.kind } : null; };
+const openAgent = () => { const slot = focusedSlot(), s = top(slot), a = s && M.agents[s.pty]; return a?.synapseId ? { id: a.synapseId, name: a.name, kind: a.kind, folder: slot.worktree || null } : null; };
+// workspaces I share whole with this person
+const workspacesOut = (p) => (ACC.feed.workspaces || []).filter((w) => (p.handle && w.handle === p.handle) || (!w.handle && w.friend === p.name));
 const offersIn = () => (ACC.feed.incoming || []).filter((r) => r.kind === 'offer' && r.status === 'pending');
 const asksIn = () => pendingRequests().filter((r) => r.kind !== 'offer');
 const asksOut = (p) => (ACC.feed.outgoing || []).filter((r) => r.kind !== 'offer' && r.status === 'pending' && (r.to?.handle ? r.to.handle === p.handle : r.to?.name === p.name));
@@ -2831,8 +2873,11 @@ function offerRow(r, done) {
   who.append(avatar(r.from), el('b', '', personName(r.from)));
   if (r.from?.handle && r.from?.name) who.append(el('span', 'h', `@${r.from.handle}`));
   const what = el('div', 'req-what');
-  what.append('shares ', el('span', 'ag', `${r.agent?.kind || 'agent'} · ${r.agent?.name || '?'}`), ` with you, ${r.mode === 'talk' ? 'read and ask' : 'read only'}`);
-  box.append(who, what, el('div', 'req-note', 'Pick which of your agents gets it: that one can read it' + (r.mode === 'talk' ? ' and ask it questions.' : '.')));
+  const ws = r.agent?.kind === 'workspace';
+  if (ws) what.append('shares ', el('span', 'ag', r.agent?.name || 'a workspace'), ' with you, read only');
+  else what.append('shares ', el('span', 'ag', `${r.agent?.kind || 'agent'} · ${r.agent?.name || '?'}`), ` with you, ${r.mode === 'talk' ? 'read and ask' : 'read only'}`);
+  box.append(who, what, el('div', 'req-note', ws ? 'Every agent in it, now and later. All your agents can read them when they need to (nothing is pushed into prompts); pick which one hears about it.'
+    : 'Pick which of your agents gets it: that one can read it' + (r.mode === 'talk' ? ' and ask it questions.' : '.')));
   const pick = el('select', 'req-pick');
   pick.setAttribute('aria-label', 'which of your agents gets it');
   if (!ACC.agents.length) { const o = el('option', '', 'start an agent to receive it'); o.value = ''; pick.append(o); pick.disabled = true; }
@@ -2900,10 +2945,21 @@ function renderFriends() {
     ask.title = p.pending ? 'they have not joined Synapse yet' : !p.trustsYou ? 'they have not added you back yet' : `ask ${p.name || p.handle} for one of their agents`;
     ask.onclick = () => { closeFriends(); openAsk(p); };
     head.append(ask, share);
-    const meta = el('div', 'friend-meta', p.pending ? 'invited, not on Synapse yet' : !p.trustsYou ? 'has not added you back yet' : out.length || inn.length ? `sees ${out.length} of your agents · you see ${inn.length} of theirs` : 'nothing shared yet');
+    const meta = el('div', 'friend-meta', p.pending ? 'invited, not on Synapse yet' : !p.trustsYou ? 'has not added you back yet' : out.length || inn.length || workspacesOut(p).length ? `sees ${out.length + workspacesOut(p).reduce((n, w) => n + w.agents.length, 0)} of your agents · you see ${inn.length} of theirs` : 'nothing shared yet');
     row.append(head, meta);
     for (const l of out) row.append(el('div', 'friend-flow', `your ${l.local?.name || 'agent'} → their ${l.agent?.name || 'agent'} · ${l.mode === 'talk' ? 'read and ask' : 'read only'}`));
-    for (const l of inn) row.append(el('div', 'friend-flow in', `their ${l.agent?.name || 'agent'} → your ${l.local?.name || 'agent'} · ${l.mode === 'talk' ? 'read and ask' : 'read only'}`));
+    for (const w of workspacesOut(p)) {
+      const line = el('div', 'friend-flow ws', `your whole ${w.label} workspace (${w.agents.length} agent${w.agents.length === 1 ? '' : 's'} now) · read only${w.ready ? '' : ' · they need Synapse 0.6.19 to see it'}`);
+      const stop = el('button', 'friends-link', 'stop');
+      stop.onclick = async () => { stop.disabled = true; try { await synapse.requests.stopWorkspace(w.machineId, w.key); toast(`stopped sharing ${w.label} with ${p.name || p.handle}`); renderFriends(); } catch (e) { toast(e.message, true); stop.disabled = false; } };
+      line.append(' ', stop);
+      row.append(line);
+    }
+    // a friend's whole workspace is one line, not one per agent in it
+    const spaces = new Map();
+    for (const l of inn) if (l.workspace) spaces.set(l.workspace, [...(spaces.get(l.workspace) || []), l]);
+    for (const [label, list] of spaces) row.append(el('div', 'friend-flow in', `their whole ${label} workspace (${list.length} agent${list.length === 1 ? '' : 's'}) → all your agents · read only`));
+    for (const l of inn.filter((x) => !x.workspace)) row.append(el('div', 'friend-flow in', `their ${l.agent?.name || 'agent'} → your ${l.local?.name || 'agent'} · ${l.mode === 'talk' ? 'read and ask' : 'read only'}`));
     for (const o of offersOut(p)) row.append(el('div', 'friend-flow wait', `offered ${o.agent?.name || 'an agent'} · waiting for them to accept`));
     for (const o of asksOut(p)) row.append(el('div', 'friend-flow wait', `asked for ${o.target || 'an agent'} into your ${o.agent?.name || 'agent'} · waiting for them`));
     pop.append(row);
@@ -2992,8 +3048,10 @@ async function openShare(preset) {
     }));
     draw();
     const seg = el('div', 'seg'), explain = el('div', 'hint share-explain');
-    const say = () => { explain.textContent = mode === 'talk' ? 'Their agent can read this one and ask it questions; a copy with no tools answers. Nobody can type into your agent.' : 'Their agent can read what this one is doing. Nothing else.'; };
-    for (const [v, label] of [['sync', 'read only'], ['talk', 'read and ask']]) {
+    const say = () => { explain.textContent = mode === 'workspace' ? `Every agent in ${space.label}, in all its worktrees, now and later. Any of their agents can read them when it needs to; nothing is pushed into their prompts, and they cannot ask or type into yours.`
+      : mode === 'talk' ? 'Their agent can read this one and ask it questions; a copy with no tools answers. Nobody can type into your agent.' : 'Their agent can read what this one is doing. Nothing else.'; };
+    const space = a.folder && worktreeOf(a.folder)?.project;
+    for (const [v, label] of [['sync', 'read only'], ['talk', 'read and ask'], ...(space ? [['workspace', `whole ${space.label}`]] : [])]) {
       const b = el('button', v === mode ? 'on' : '', label);
       b.onclick = () => { mode = v; [...seg.children].forEach((x) => x.classList.toggle('on', x === b)); say(); };
       seg.appendChild(b);
@@ -3004,7 +3062,11 @@ async function openShare(preset) {
     go.onclick = async () => {
       go.disabled = true;
       const p = ok.find((x) => x.handle === pick);
-      try { await synapse.requests.offer(pick, a.id, mode); toast(`offered ${a.name} to ${p?.name || pick} · they pick which of their agents gets it`); close(); }
+      try {
+        if (mode === 'workspace') { await synapse.requests.workspace(pick, a.folder); toast(`offered your whole ${space.label} workspace to ${p?.name || pick}`); }
+        else { await synapse.requests.offer(pick, a.id, mode); toast(`offered ${a.name} to ${p?.name || pick} · they pick which of their agents gets it`); }
+        close();
+      }
       catch (e) { toast(e.message, true); go.disabled = false; }
     };
     row.append(cancel, go);
@@ -3728,6 +3790,7 @@ async function desktopAction(action, args) {
         { label: 'New worktree', run: () => promptWorktree(p) },
         { label: 'Worktrees', sub: worktrees },
         { label: 'Rename project', run: () => rename('Rename project', p.label, (name) => synapse.project.rename(p.key, name)) },
+        ...(await browserItem(p).then((b) => (b ? [b] : []))),
         '-', { label: 'Remove from sidebar', danger: true, run: () => removeFromSidebar(p.worktrees.map((w) => w.path), p.label) },
       ], Math.max(0, Number(args.x) || 0), Math.max(48, (Number(args.y) || 0) + 48));
       return;

@@ -27,7 +27,7 @@ const pulls = [['local-feature', 'open', null], ['closed-feature', 'closed', nul
 fs.writeFileSync(path.join(fixture, 'bin', 'gh'), `#!/bin/sh\nprintf '%s' '${JSON.stringify([pulls])}'\n`, { mode: 0o755 });
 Object.assign(process.env, { SYNAPSE_HOME: state, SUPERSET_HOME: path.join(fixture, 'superset'), SHELL: '/bin/sh', PATH: `${path.join(fixture, 'bin')}:${process.env.PATH}` });
 for (const key of Object.keys(process.env)) if (key.startsWith('SYNAPSE_SHOT') || key === 'SYNAPSE_DEBUG') delete process.env[key];
-fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ autoSymlink: true, workspaces: [repo], profiles: { shell: { command: 'cat', label: 'Shell' } } }));
+fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ autoSymlink: true, safeWorktreeDelete: false, workspaces: [repo], profiles: { shell: { command: 'cat', label: 'Shell' } } }));
 process.chdir(repo); app.setPath('userData', path.join(fixture, 'electron'));
 let win;
 const errors = [];
@@ -84,11 +84,22 @@ async function opened(branch) {
   await remove(); await click('#modal-body .btn.danger');
   await until(() => js(`document.querySelector('.toast')?.textContent.includes('untracked')`), 'dirty worktree error');
   assert.ok(fs.existsSync(retained)); assert.equal(await count(), 5, 'failed deletion keeps sessions');
-  fs.unlinkSync(path.join(retained, 'unsaved'));
+  // safe worktree auto-deletion, turned on in settings: the change is committed to the branch, then the folder goes
+  await js(`document.querySelector('#settings').click()`);
+  await until(() => js(`[...document.querySelectorAll('#modal label.opt')].some(l => l.textContent.includes('safe worktree auto-deletion'))`), 'safe deletion setting');
+  assert.equal(await js(`[...document.querySelectorAll('#modal label.opt')].find(l => l.textContent.includes('safe worktree auto-deletion')).querySelector('input').checked`), false);
+  await js(`[...document.querySelectorAll('#modal label.opt')].find(l => l.textContent.includes('safe worktree auto-deletion')).querySelector('input').click()`);
+  await until(() => JSON.parse(fs.readFileSync(path.join(state, 'app.json'))).safeWorktreeDelete === true, 'safe deletion saved');
+  await js(`document.querySelector('#modal').click()`); // the backdrop closes settings
+  await until(() => js(`document.querySelector('#modal').hidden`), 'settings closed');
   await js(`synapse.worktree.rename(${JSON.stringify(retained)}, 'Finished checkout')`);
-  await remove(); await click('#modal-body .btn.danger');
+  await remove();
+  await until(() => js(`document.querySelector('#modal-body')?.textContent.includes('1 uncommitted change will be committed to branch merged-feature first')`), 'safe deletion question');
+  await click('#modal-body .btn.danger');
   await until(async () => !fs.existsSync(retained) && await count() === 4, 'worktree and session removed');
+  await until(() => js(`[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('1 change saved on merged-feature'))`), 'saved toast');
   assert.ok(git('branch', '--list', 'merged-feature'), 'branch retained');
+  assert.equal(git('show', 'merged-feature:unsaved'), 'keep', 'the uncommitted file lives on in the branch');
   const config = JSON.parse(fs.readFileSync(path.join(state, 'app.json')));
   assert.ok(!config.workspaces.includes(retained)); assert.ok(!config.worktreeNames[retained]);
   assert.ok(!(await js('synapse.project.library()')).some(w => w.path === retained));
@@ -97,7 +108,7 @@ async function opened(branch) {
   assert.equal(await js(`document.querySelector('.branch-open .c').textContent`), 'local');
   assert.equal(await js(`document.querySelector('.branch-open .pr-status').getAttribute('aria-label')`), 'PR #3 · merged');
   assert.deepEqual(errors, []);
-  console.log('PASS GUI deletion, cancellation, dirty protection, session/config/library cleanup, retained branch and PR state');
-})().catch(async e => { console.error(e); if (win) console.error(await js(`(async () => JSON.stringify({modal:document.querySelector('#modal').hidden, hint:document.querySelector('#modal-body .hint')?.textContent, tree:document.querySelector('#tree').textContent, terms:document.querySelectorAll('.term').length, state:await synapse.state()}))()`)); process.exitCode = 1; }).finally(() => {
+  console.log('PASS GUI deletion, cancellation, dirty protection, safe deletion setting and save, session/config/library cleanup, retained branch and PR state');
+})().catch(async e => { console.error(e); if (win) console.error(await js(`(async () => JSON.stringify({modal:document.querySelector('#modal').hidden, hint:document.querySelector('#modal-body .hint')?.textContent, tree:document.querySelector('#tree').textContent, terms:document.querySelectorAll('.term').length, state:await synapse.state()}))()`)); console.error("renderer errors:", errors); process.exitCode = 1; }).finally(() => {
   app.once('will-quit', () => app.exit(process.exitCode || 0)); app.quit();
 });

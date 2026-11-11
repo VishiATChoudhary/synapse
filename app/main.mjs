@@ -9,12 +9,13 @@ import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
-import { git, listChoices, listWorktrees, createWorktree, openWorktree, deleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
+import { git, listChoices, listWorktrees, createWorktree, openWorktree, deleteWorktree, safeDeleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
 import * as saved from '../saved.mjs';
 import { DATA, FILES, WIN, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, readAgentMessages, takeInbox } from '../lib.mjs';
 import { createEdge, allowTalkRequest, dismissTalkRequest, setMode, removeEdge } from '../ops.mjs';
 import { openRequests, talkPerHour, talkModel, clampPerHour } from '../talk.mjs';
-import { isConnected } from '../remote.mjs';
+import { isConnected, sharedWorkspaces, stopWorkspace } from '../remote.mjs';
+import * as browsers from '../browsers.mjs';
 import { createUpdater, bundleOf, MANIFEST_URL } from './updater.mjs';
 import * as phone from './phone.mjs';
 import { collect as collectActivity, lastWeek } from './activity.mjs';
@@ -274,14 +275,16 @@ function addWorktree(repo, name, base) {
   return addWorkspace(createWorktree(repo, name, base, path.join(DATA, 'worktrees')));
 }
 
+// safe deletion (the default, settings can turn it off): uncommitted work is committed to the branch first
 function removeWorktree(repo, dir, force = false) {
-  deleteWorktree(repo, dir, force);
+  const saved = config().safeWorktreeDelete !== false ? safeDeleteWorktree(repo, dir) : (deleteWorktree(repo, dir, force), null);
   const c = config();
   c.workspaces = c.workspaces.filter((w) => w !== dir);
   if (c.worktreeNames) delete c.worktreeNames[dir];
   writeJSON(FILES.app, c);
   for (const [link, target] of libraryLinks()) if (target === dir) { try { fs.unlinkSync(link); } catch {} }
   for (const t of ptys.values()) if (t.cwd === dir || t.cwd.startsWith(dir + path.sep)) { try { t.p.kill(); } catch {} }
+  return saved;
 }
 
 // ---------------------------------------------------------------- ptys
@@ -318,12 +321,14 @@ function cleanEnv() {
   return env;
 }
 
+// the Chrome profile the folder's workspace uses, for Codex's Chrome plugin (browsers.mjs)
+function browserEnvFor(cwd) { try { return browsers.browserEnv(cwd); } catch { return {}; } }
 async function spawnPty({ cwd, kind, command, cols = 120, rows = 36, extraEnv = {} }) {
   await integrationSetup;
   const id = String(nextPty++);
   const env = {
     ...cleanEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'synapse', LANG: process.env.LANG || 'en_US.UTF-8',
-    SYNAPSE_APP: '1', SYNAPSE_SESSION: id, ...extraEnv,
+    SYNAPSE_APP: '1', SYNAPSE_SESSION: id, ...browserEnvFor(cwd), ...extraEnv,
   };
   // exec so the pty's pid is the agent's own pid, which is how Synapse identifies it. Windows has no exec:
   // the agent is a child of cmd.exe there, matched back to this terminal through ptys.json (lib.mjs hostPid)
@@ -368,7 +373,7 @@ function state() {
   const messages = readJSON(FILES.messages, []);
   const unread = {};
   for (const m of messages) if (!m.delivered) unread[m.to] = (unread[m.to] || 0) + 1;
-  return { projects: projects(), agents: byPty, edges, unread, talks: openTalks(), talkRequests: openTalkRequests(edges), profiles: config().profiles, autoSendFork: !!config().autoSendFork, wakeAgents: config().wakeAgents !== false, demo: DEMO };
+  return { projects: projects(), agents: byPty, edges, unread, talks: openTalks(), talkRequests: openTalkRequests(edges), profiles: config().profiles, autoSendFork: !!config().autoSendFork, safeWorktreeDelete: config().safeWorktreeDelete !== false, wakeAgents: config().wakeAgents !== false, demo: DEMO };
 }
 
 // ---------------------------------------------------------------- agent talk
@@ -804,7 +809,9 @@ async function pollRequests() {
       let links = [];
       try { links = a.externalLinks(); } catch {}
       const canOffer = (await a.cloudFeatures().catch(() => [])).includes('offers');
-      next = { incoming: r.incoming || [], outgoing: r.outgoing || [], links, incomingTrust: r.incomingTrust || [], canOffer, offersLater: canOffer ? '' : a.OFFERS_LATER };
+      let workspaces = [];
+      try { workspaces = sharedWorkspaces(); } catch {}
+      next = { incoming: r.incoming || [], outgoing: r.outgoing || [], links, workspaces, incomingTrust: r.incomingTrust || [], canOffer, offersLater: canOffer ? '' : a.OFFERS_LATER };
     }
   }
   feed = next;
@@ -1021,6 +1028,13 @@ handle('history:sources', () => chats.sources());
 handle('history:import', ({ kind }) => { const out = chats.importChats(kind); chats.pastChats().catch(() => {}); return out; }); // index it now, so the list opens quick
 handle('history:remove', ({ kind }) => chats.removeChats(kind));
 handle('history:past', () => chats.pastChats());
+// which Chrome profile each workspace's agents use: Chrome's profiles, and the choice for each folder asked about
+handle('browser:list', ({ folders = [] } = {}) => ({
+  profiles: browsers.chromeProfiles().map((p) => ({ dir: p.dir, name: p.name, email: p.email, claude: !!p.claude, codex: !!p.codex })),
+  chosen: Object.fromEntries(folders.map((f) => [f, browsers.browserFor(f)?.dir || null])),
+}));
+handle('browser:set', ({ folder, dir }) => browsers.setBrowser(folder, dir || null));
+handle('browser:open', ({ dir }) => { const p = browsers.chromeProfiles(dir)[0]; if (!p) throw new Error('that Chrome profile is gone'); browsers.openProfile(p); });
 handle('project:rename', ({ key, name }) => {
   const all = projects();
   if (!all.some((p) => p.key === key)) throw new Error('workspace is no longer open');
@@ -1028,7 +1042,7 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [] });
+const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, safeWorktreeDelete: c.safeWorktreeDelete !== false, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [] });
 handle('settings:get', () => settingsOut(config()));
 // an agent finished a turn while Synapse was in the background (the renderer decides when): say so, with the
 // start of its last reply; a click brings that session to the front
@@ -1106,6 +1120,7 @@ handle('settings:set', (patch) => {
   }
   if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink;
   if ('autoSendFork' in patch) c.autoSendFork = !!patch.autoSendFork;
+  if ('safeWorktreeDelete' in patch) c.safeWorktreeDelete = !!patch.safeWorktreeDelete;
   if ('notifyDone' in patch) c.notifyDone = !!patch.notifyDone;
   if ('doneSound' in patch) c.doneSound = DONE_SOUNDS.includes(patch.doneSound) ? patch.doneSound : 'bubbleTap';
   if ('errorSound' in patch) c.errorSound = !!patch.errorSound;
@@ -1268,6 +1283,27 @@ handle('share:offer', async ({ to, agent, mode }) => {
     f.outgoing = [out, ...(f.outgoing || [])];
     writeJSON(FAKE, f);
   } else out = await (await acct()).sendOffer({ to, agent: a, mode });
+  await pollRequests();
+  return out;
+});
+// a whole workspace to a trusted person, read only: every agent in it, now and later
+handle('share:workspace', async ({ to, folder }) => {
+  if (FAKE) {
+    const f = fake(), p = (f.people || []).find((x) => x.handle === to || x.id === to), name = path.basename(String(folder || 'workspace'));
+    const out = { id: `w-${Date.now()}`, kind: 'offer', mode: 'sync', status: 'pending', to: { handle: p?.handle || to, name: p?.name || to }, agent: { id: `ws-${name}`, name: `${name} (whole workspace)`, kind: 'workspace' } };
+    f.outgoing = [out, ...(f.outgoing || [])];
+    writeJSON(FAKE, f);
+    await pollRequests();
+    return out;
+  }
+  const out = await (await acct()).shareWorkspace({ to, folder });
+  await pollRequests();
+  return out;
+});
+handle('share:stopWorkspace', async ({ machineId, key }) => {
+  let out;
+  if (FAKE) { const f = fake(); out = { stopped: (f.workspaces || []).find((w) => w.key === key)?.label }; f.workspaces = (f.workspaces || []).filter((w) => !(w.machineId === machineId && w.key === key)); writeJSON(FAKE, f); }
+  else out = stopWorkspace(machineId, key);
   await pollRequests();
   return out;
 });
