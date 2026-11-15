@@ -11,6 +11,7 @@ import { FILES, readJSON, writeJSON, readAgentMessages, renameAgent, renameProje
 import { createEdge, removeEdge, setMode, endTalk, allowTalkRequest, dismissTalkRequest } from './ops.mjs';
 import { createDiscovery } from './discovery.mjs';
 import { slashItems } from './commands.mjs';
+import * as plan from './plan.mjs';
 import * as remote from './remote.mjs';
 import * as talk from './talk.mjs';
 
@@ -232,6 +233,13 @@ async function handleRequest(req, res) {
     if (!owner) { res.writeHead(404, { 'cache-control': 'max-age=600' }); return res.end(); }
     res.writeHead(302, { location: `https://avatars.githubusercontent.com/${encodeURIComponent(owner)}?s=96`, 'cache-control': 'max-age=86400' });
     return res.end();
+  }
+  if (p === '/api/plans' && req.method === 'POST') { // a shared plan from the GUI, as synapse_plan_start would
+    const { from, agents: with_ = [], goal } = await body(req);
+    const me = agents().find((a) => a.id === from);
+    if (!me) return json(res, 404, { error: 'That agent is not running.' });
+    try { const out = plan.start(me, { goal, agents: Array.isArray(with_) ? with_.map(String).slice(0, 12) : [] }); lastSig = ''; broadcast('state', state()); return json(res, 200, out); }
+    catch (error) { return json(res, 400, { error: error.message }); }
   }
   if (p === '/api/commands' && req.method === 'GET') { // the / menu: built-in commands, your commands, skills
     const kind = url.searchParams.get('kind') === 'codex' ? 'codex' : 'claude', cwd = url.searchParams.get('cwd') || '';

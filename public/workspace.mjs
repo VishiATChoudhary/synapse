@@ -221,6 +221,7 @@ const ICONS = {
   paperclip: '<path d="m21 11-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l8-8"/>',
   users: '<circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M16 4.6a3.2 3.2 0 0 1 0 6.3M18 14.3c1.7.7 2.8 2.4 3 4.7"/>',
   sort: '<path d="M4 6h16M7 12h10M10 18h4"/>',
+  archive: '<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4m0-14.2-1.4 1.4M6.3 17.7l-1.4 1.4"/>',
   moon: '<path d="M20.5 13a8.5 8.5 0 0 1-9.5-9.5A8.5 8.5 0 1 0 20.5 13Z"/>',
   help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 4.8 1c-.7 1.1-2.3 1.3-2.3 3M12 17h.01"/>',
@@ -330,7 +331,7 @@ function initialize() {
       const message = event.data;
       const owns = (id) => desktop?.sessions.some((s) => s.id === id && s.pane === pane.dataset.paneKey);
       if (message?.type === 'synapse:desktop-bootstrap') {
-        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done'].map((key) => [key, getStorage(key, null)]));
+        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived'].map((key) => [key, getStorage(key, null)]));
         pane.contentWindow.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, location.origin);
       }
       if (message?.type === 'synapse:desktop-ready') sendPaneState(pane);
@@ -567,9 +568,9 @@ function initialize() {
   const readJSON = (key, fallback) => { try { return JSON.parse(getStorage(key, '')) ?? fallback; } catch { return fallback; } };
   // Every agent has a state, like a thread in T3: it needs you, it is working, it finished while you were away
   // (done, until you open it), or it rests. Snoozed agents step aside until their time or until they need you.
-  let snoozed = readJSON('synapse-snoozed', {}), doneSet = new Set(readJSON('synapse-done', []));
+  let snoozed = readJSON('synapse-snoozed', {}), doneSet = new Set(readJSON('synapse-done', [])), archived = readJSON('synapse-archived', {});
   const lastStatus = new Map();
-  const saveMarks = () => { setStorage('synapse-snoozed', JSON.stringify(snoozed)); setStorage('synapse-done', JSON.stringify([...doneSet])); };
+  const saveMarks = () => { setStorage('synapse-snoozed', JSON.stringify(snoozed)); setStorage('synapse-done', JSON.stringify([...doneSet])); setStorage('synapse-archived', JSON.stringify(archived)); };
   const needsYou = (a) => ['waiting', 'needs_input'].includes(a.status);
   function trackStates() {
     let changed = false;
@@ -585,10 +586,12 @@ function initialize() {
     const live = new Set(state.agents.map((a) => a.id));
     for (const id of [...doneSet]) if (!live.has(id)) { doneSet.delete(id); changed = true; }
     for (const id of Object.keys(snoozed)) if (!live.has(id) && !String(id).startsWith('desktop-')) { delete snoozed[id]; changed = true; }
+    for (const id of Object.keys(archived)) if (!live.has(id) && Date.now() - archived[id] > 7 * 86_400_000) { delete archived[id]; changed = true; }
     if (changed) saveMarks();
   }
   const stateOf = (a) => (needsYou(a) ? 'needs' : a.status === 'busy' ? 'working' : doneSet.has(a.id) ? 'done' : a.exited ? 'ended' : 'idle');
   const isSnoozed = (a) => snoozed[a.id] !== undefined && a.id !== selectedId;
+  const isArchived = (a) => archived[a.id] !== undefined && a.id !== selectedId;
   function snooze(id, until) {
     if (until === null) delete snoozed[id]; else snoozed[id] = until;
     saveMarks(); renderSidebar();
@@ -596,21 +599,78 @@ function initialize() {
     if (until !== null) toast(`Snoozed ${a ? titleOf(a) : 'session'}${until ? ` until ${new Date(until).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : ' until it needs you'}`, () => snooze(id, null));
   }
   const tomorrowMorning = () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); return d.getTime(); };
+  // Right-click an agent: everything the /synapse skill does (link, message, plan, read, share), plus snooze,
+  // archive and the session itself
   function sessionActions(agent) {
-    const z = snoozed[agent.id] !== undefined;
+    const z = snoozed[agent.id] !== undefined, arch = archived[agent.id] !== undefined;
+    const linkable = !agent.owned || agent.backendId, peers = relations(agent.id);
+    const others = state.agents.filter((a) => a.id !== agent.id && (!a.owned || a.backendId) && !a.remote);
+    const mine = friends?.signedIn && friends.agents.some((a) => a.id === (agent.backendId || agent.id));
     return [
+      { label: 'Open', icon: 'arrow-right', run: () => navigate('session', agent.id) },
+      { label: 'Rename…', icon: 'edit', run: () => { navigate('session', agent.id); renameAgent(); } },
+      ...(linkable ? [
+        { heading: 'Synapse' },
+        ...(others.length ? [{ label: 'Link to another agent…', icon: 'network', run: () => linkAgent(agent) }] : []),
+        ...peers.map((p) => ({ label: `Unlink ${titleOf(p.agent)}`, icon: 'unlink', run: () => removeLinks(p.edges.map((e) => e.id)) })),
+        { label: 'Send a message…', icon: 'message', run: () => messageAgent(agent) },
+        ...(others.length && !agent.remote ? [{ label: 'Start a plan with…', icon: 'check', run: () => planWith(agent) }] : []),
+        { label: 'Read its context', icon: 'panel-right', run: () => { navigate('session', agent.id); inspectorOpen = true; setStorage('synapse-inspector', 'open'); inspectorFile = null; inspectorSignature = ''; syncInspector(); } },
+        { label: 'Copy its handle', icon: 'copy', run: () => navigator.clipboard.writeText(agent.remote ? `${agent.name}@${agent.remote.handle || agent.remote.owner}` : agent.name).then(() => toast(`Copied ${agent.name}: use it with synapse read, send or link.`), () => toast(agent.name)) },
+      ] : []),
+      ...(mine ? [{ heading: 'Friends' }, { label: 'Share with a friend…', icon: 'users', run: () => { friendPreset = { who: null, agent: agent.backendId || agent.id }; addConnection('share'); } }] : []),
+      '-',
       ...(z ? [{ label: 'Wake up', icon: 'sun', run: () => snooze(agent.id, null) }] : [
         { label: 'Snooze 1 hour', icon: 'clock', run: () => snooze(agent.id, Date.now() + 3_600_000) },
         { label: 'Snooze until tomorrow', icon: 'clock', run: () => snooze(agent.id, tomorrowMorning()) },
         { label: 'Snooze until it needs me', icon: 'clock', run: () => snooze(agent.id, 0) },
       ]),
       ...(doneSet.has(agent.id) ? [{ label: 'Mark as seen', icon: 'check', run: () => { doneSet.delete(agent.id); saveMarks(); renderSidebar(); } }] : []),
-      '-',
-      { label: 'Rename', icon: 'edit', run: () => { navigate('session', agent.id); renameAgent(); } },
-      ...(agent.owned ? [{ label: 'Open in Terminal', icon: 'terminal', run: () => runDesktop('terminal', { id: agent.id }) }, { label: 'Close session', danger: true, run: () => runDesktop('close', { id: agent.id }) }] : []),
+      arch ? { label: 'Unarchive', icon: 'archive', run: () => archive(agent.id, false) } : { label: 'Archive', icon: 'archive', run: () => archive(agent.id, true) },
+      ...(agent.owned ? ['-', { label: 'Open in Terminal', icon: 'terminal', run: () => runDesktop('terminal', { id: agent.id }) }, { label: 'Close session', danger: true, run: () => runDesktop('close', { id: agent.id }) }] : []),
     ];
   }
-
+  function archive(id, on) {
+    if (on) { archived[id] = Date.now(); delete snoozed[id]; doneSet.delete(id); } else delete archived[id];
+    saveMarks();
+    if (on && selectedId === id) { const next = state.agents.find((a) => a.id !== id && !archived[a.id]); navigate(next ? 'session' : 'overview', next?.id || null); }
+    renderSidebar();
+    const a = byId.get(id);
+    toast(on ? `Archived ${a ? titleOf(a) : 'session'}. It keeps running; find it under Archived.` : 'Back in the list.', on ? () => archive(id, false) : undefined);
+  }
+  const backend = (a) => a.backendId || a.id;
+  const agentOptions2 = (omit) => state.agents.filter((a) => a.id !== omit && (!a.owned || a.backendId) && !a.remote)
+    .map((a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(titleOf(a))} · ${escapeHtml(a.name)}</option>`).join('');
+  function linkAgent(agent) {
+    openModal(`Link ${titleOf(agent)}`, `<p class="dialog-copy">Linked agents get each other's context on their next prompt and can message each other.</p>
+      <label class="field-label" for="link-other">With</label><select class="field" id="link-other">${agentOptions2(agent.id)}</select>
+      <label class="field-label" for="link-way">Context flows</label><select class="field" id="link-way"><option value="both">Both ways</option><option value="out">From ${escapeHtml(agent.name)} to the other</option><option value="in">From the other to ${escapeHtml(agent.name)}</option></select>`, 'Link', async () => {
+      const other = $('link-other').value, way = $('link-way').value;
+      if (way !== 'in') await createEdge(agent.id, other);
+      if (way !== 'out') await createEdge(other, agent.id);
+      await reloadState(); toast('Linked. Context arrives on their next prompt.');
+    });
+  }
+  function messageAgent(agent) {
+    openModal(`Message ${titleOf(agent)}`, `<label class="field-label" for="agent-note">Message</label><textarea class="field" id="agent-note" rows="4" maxlength="12000" required placeholder="What should ${escapeHtml(agent.name)} know or do?"></textarea><p class="field-hint">${agent.owned ? 'Typed into the session as your next prompt.' : 'Delivered on its next prompt or inbox check.'}</p>`, 'Send', async () => {
+      const text = $('agent-note').value.trim(); if (!text) throw new Error('Write a message first.');
+      if (agent.owned) await desktopCall('submit', { id: agent.id, text });
+      else await api(`/api/agents/${encodeURIComponent(agent.id)}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
+      recentCache.delete(agent.id); toast('Sent.');
+    });
+  }
+  function planWith(agent) {
+    const choices = state.agents.filter((a) => a.id !== agent.id && (!a.owned || a.backendId) && !a.remote)
+      .map((a) => `<label class="plan-pick"><input type="checkbox" value="${escapeHtml(backend(a))}"><span>${escapeHtml(titleOf(a))}</span><small>${escapeHtml(a.name)} · ${escapeHtml(kindName(a))}</small></label>`).join('');
+    openModal('Start a plan', `<p class="dialog-copy">${escapeHtml(agent.name)} and the agents you pick get the goal, are linked, and split the work into tasks they claim and finish.</p>
+      <label class="field-label" for="plan-goal">Goal</label><textarea class="field" id="plan-goal" rows="3" maxlength="2000" required placeholder="e.g. ship the new checkout behind a flag"></textarea>
+      <p class="field-label">With</p><div class="plan-picks">${choices}</div>`, 'Start plan', async () => {
+      const with_ = [...document.querySelectorAll('.plan-picks input:checked')].map((i) => i.value);
+      if (!with_.length) throw new Error('Pick at least one other agent.');
+      await api('/api/plans', { method: 'POST', body: JSON.stringify({ from: backend(agent), agents: with_, goal: $('plan-goal').value }) });
+      await reloadState(); toast('Plan started. The others got the goal.');
+    });
+  }
   const shelves = new Map(), flatSections = new Map();
   let peopleSection = null;
   function shelf(key, label, entries, nodeOf) {
@@ -654,6 +714,8 @@ function initialize() {
     const settled = (a) => !hits && a.id !== selectedId && !doneSet.has(a.id) && (a.exited || (!['busy', 'waiting', 'needs_input'].includes(a.status) && Date.now() - (a.lastActivity || 0) > 86_400_000));
     const settledTree = (entry) => settled(entry.agent) && entry.children.every(settledTree);
     const snoozedTree = (entry) => !hits && isSnoozed(entry.agent) && entry.children.every((c) => isSnoozed(c.agent) || settledTree(c));
+    const archivedTree = (entry) => !hits && isArchived(entry.agent) && entry.children.every((c) => isArchived(c.agent) || archivedTree(c));
+    const archivedRoots = [];
     const sessionNode = ({ agent, children }, depth = 0, place = '') => {
       live.add(agent.id);
       let node = sessionElements.get(agent.id);
@@ -751,7 +813,8 @@ function initialize() {
           node.hidden = !!hits && !roots.length;
           const keep = [];
           for (const entry of roots) {
-            if (snoozedTree(entry)) snoozedRoots.push({ entry, place: group.name });
+            if (archivedTree(entry)) archivedRoots.push({ entry, place: group.name });
+            else if (snoozedTree(entry)) snoozedRoots.push({ entry, place: group.name });
             else if (settledTree(entry)) settledRoots.push({ entry, place: group.name });
             else keep.push(entry);
           }
@@ -769,7 +832,8 @@ function initialize() {
       const rows = [];
       for (const item of agents) {
         const entry = { agent: item.a, children: [] };
-        if (!hits && isSnoozed(item.a)) snoozedRoots.push({ entry, place: item.place });
+        if (!hits && isArchived(item.a)) archivedRoots.push({ entry, place: item.place });
+        else if (!hits && isSnoozed(item.a)) snoozedRoots.push({ entry, place: item.place });
         else if (settled(item.a)) settledRoots.push({ entry, place: item.place });
         else rows.push({ ...item, entry });
       }
@@ -788,6 +852,7 @@ function initialize() {
     const byRecent = (x, y) => (y.entry.agent.lastActivity || 0) - (x.entry.agent.lastActivity || 0);
     if (snoozedRoots.length) desired.push(shelf('snoozed', 'Snoozed', snoozedRoots.sort(byRecent), ({ entry, place }) => sessionNode(entry, 0, place)));
     if (settledRoots.length) desired.push(shelf('settled', 'Settled', settledRoots.sort(byRecent), ({ entry, place }) => sessionNode(entry, 0, place)));
+    if (archivedRoots.length) desired.push(shelf('archived', 'Archived', archivedRoots.sort(byRecent), ({ entry, place }) => sessionNode(entry, 0, place)));
     for (const [id, node] of sessionElements) if (!live.has(id)) { node.remove(); sessionElements.delete(id); }
     for (const [key, node] of worktreeElements) if (!liveWorktrees.has(key)) { node.remove(); worktreeElements.delete(key); }
     for (const [key, section] of projectElements) if (!groups.some((group) => group.key === key)) { section.remove(); projectElements.delete(key); }
@@ -1511,7 +1576,9 @@ function initialize() {
     try {
       const data = agent.owned && !agent.backendId
         ? await desktopCall('output', { id })
-        : await api(`/api/agents/${encodeURIComponent(agent.backendId || id)}/recent?limit=${requestedLimit}`, { signal: recentController.signal });
+        : await api(`/api/agents/${encodeURIComponent(agent.backendId || id)}/recent?limit=${requestedLimit}`, { signal: recentController.signal })
+          // a session of ours the server has just lost track of (restarted, re-registering): show its terminal meanwhile
+          .catch((error) => { if (agent.owned && error.status === 404) return desktopCall('output', { id }); throw error; });
       if (agent.owned && !data.messages?.length && !data.chat?.length) Object.assign(data, await desktopCall('output', { id }));
       recentCache.delete(id); recentCache.set(id, { data, activity, revision, limit: requestedLimit, backend: agent.backendId, transcript: agent.transcript });
       if (paneKey) parent.postMessage({ type: 'synapse:pane-recent', id, cached: recentCache.get(id) }, location.origin);
@@ -1847,6 +1914,7 @@ function initialize() {
   const slashBox = document.createElement('div');
   slashBox.className = 'slash-pop'; slashBox.id = 'slash-pop'; slashBox.setAttribute('role', 'listbox'); slashBox.hidden = true;
   let slashHits = [], slashIndex = 0, slashItemsFor = null, slashLoading = null;
+  const KIND_ORDER = ['command', 'setting', 'skill', 'agent'];
   async function slashCatalog(agent) {
     const key = `${agent.kind}:${agent.cwd}`;
     if (slashItemsFor?.key === key) return slashItemsFor.items;
@@ -1855,7 +1923,8 @@ function initialize() {
   }
   function slashQuery() {
     const input = $('message-input'), text = input.value.slice(0, input.selectionStart);
-    const m = text.match(/^\s*([/$])([\w:.-]*)$/);
+    // anywhere a word starts: at the beginning, after a space or a new line (not inside a path like /Users/me)
+    const m = text.match(/(?:^|\s)([/$])([\w:.-]*)$/);
     return m && { sigil: m[1], q: m[2].toLowerCase() };
   }
   async function updateSlash() {
@@ -1866,10 +1935,10 @@ function initialize() {
     const score = (i) => { if (!hit.q) return 1; const n = wordScore(hit.q, i.name); return n >= 0 ? n + 100 : wordScore(hit.q, i.description) >= 0 && hit.q.length > 2 ? 1 : -1; };
     slashHits = items.filter((i) => (hit.sigil === '$' ? i.sigil === '$' : !i.sigil || agent.kind !== 'codex'))
       .map((i) => ({ i, s: score(i) })).filter((x) => x.s >= 0)
-      .sort((a, b) => b.s - a.s || (a.i.kind === b.i.kind ? 0 : a.i.kind === 'command' ? -1 : 1) || a.i.name.localeCompare(b.i.name)).slice(0, 60).map((x) => x.i);
+      .sort((a, b) => KIND_ORDER.indexOf(a.i.kind) - KIND_ORDER.indexOf(b.i.kind) || b.s - a.s || a.i.name.localeCompare(b.i.name)).slice(0, hit.q ? 60 : 200).map((x) => x.i);
     if (!slashHits.length) { slashBox.innerHTML = `<p class="mention-foot">No command or skill matches “${escapeHtml(hit.q)}”.</p>`; slashBox.hidden = false; return; }
     slashIndex = Math.min(slashIndex, slashHits.length - 1);
-    const label = (i) => (i.kind === 'skill' ? 'Skills' : 'Commands');
+    const label = (i) => ({ skill: 'Skills', setting: 'Settings', agent: 'Subagents' })[i.kind] || 'Commands';
     let last = '';
     slashBox.innerHTML = slashHits.map((i, n) => {
       const head = label(i) !== last ? `<p class="mention-head">${label(i)}</p>` : ''; last = label(i);
@@ -2086,6 +2155,7 @@ function initialize() {
     const el = document.createElement('div'); el.className = 'pop-menu'; el.setAttribute('role', 'menu');
     for (const item of items) {
       if (item === '-') { el.append(Object.assign(document.createElement('div'), { className: 'pop-sep' })); continue; }
+      if (item.heading) { el.append(Object.assign(document.createElement('div'), { className: 'pop-heading', textContent: item.heading })); continue; }
       const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'menuitem');
       b.className = item.danger ? 'danger' : '';
       b.innerHTML = `${item.icon ? icon(item.icon) : '<span class="pop-gap"></span>'}<span>${escapeHtml(item.label)}</span>${item.keys ? `<kbd>${escapeHtml(item.keys)}</kbd>` : ''}`;
@@ -2116,7 +2186,7 @@ function initialize() {
     const forkable = ['claude', 'codex'].includes(agent.kind) || state.demo;
     dropdown($('session-menu'), [
       { label: 'Rename', icon: 'edit', run: renameAgent },
-      ...sessionActions(agent).filter((item) => item !== '-' && /^(Snooze|Wake|Mark)/.test(item.label)),
+      ...sessionActions(agent).filter((item) => item !== '-' && !item.heading && /^(Snooze|Wake|Mark|Archive|Unarchive|Link|Send a message|Start a plan)/.test(item.label)),
       ...(agent.owned ? [
         ...(forkable ? [{ label: 'Fork conversation', icon: 'branch', run: forkSession, action: 'fork' }] : []),
         { label: 'Open in Terminal', icon: 'terminal', run: desk('terminal') },
@@ -2173,15 +2243,49 @@ function initialize() {
       { label: 'Fable', icon: agent.modelName?.startsWith('Fable') ? 'check' : '', run: pick('fable') },
     ]);
   });
-  $('attach-files').onclick = async () => {
-    const agent = byId.get(selectedId); if (!agent?.owned) return;
-    const paths = await desktopCall('attach', { id: agent.id }).catch((e) => { toast(e.message); return []; });
+  // paths go into the prompt, quoted when they hold spaces; Claude Code and Codex read files and images from paths
+  function insertPaths(paths) {
     if (!paths?.length) return;
     const input = $('message-input'), text = paths.map((p) => (/\s/.test(p) ? `"${p}"` : p)).join(' ');
     const at = input.selectionStart ?? input.value.length, before = input.value.slice(0, at);
     input.setRangeText(`${before && !/\s$/.test(before) ? ' ' : ''}${text} `, at, input.selectionEnd ?? at, 'end');
     input.dispatchEvent(new Event('input', { bubbles: true })); input.focus();
+  }
+  $('attach-files').onclick = async () => {
+    const agent = byId.get(selectedId); if (!agent?.owned) return;
+    insertPaths(await desktopCall('attach', { id: agent.id }).catch((e) => { toast(e.message); return []; }));
   };
+  const base64 = (file) => new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1] || ''); r.onerror = () => reject(r.error); r.readAsDataURL(file); });
+  async function saveDropped(files) {
+    const out = [];
+    for (const file of files) {
+      if (file.size > 50 * 1024 * 1024) { toast(`${file.name} is over 50 MB.`); continue; }
+      out.push((await desktopCall('save-file', { name: file.name, data: await base64(file) })).path);
+    }
+    return out;
+  }
+  // paste: files copied in Finder keep their real paths; an image (a screenshot) is saved and pasted as its path
+  $('message-input').addEventListener('paste', async (event) => {
+    const data = event.clipboardData;
+    if (!embedded || !data || ![...data.types].includes('Files')) return;
+    event.preventDefault();
+    try {
+      const got = await desktopCall('paste');
+      if (got.paths.length) { insertPaths(got.paths); if (got.saved) toast('Image saved and added as a path.'); return; }
+      insertPaths(await saveDropped([...data.files]));
+    } catch (e) { toast(e.message); }
+  });
+  // drop: files dragged onto the composer are copied where the agent can read them
+  for (const target of [$('thread-view')]) { // the composer sits inside the conversation: one target covers both
+    target.addEventListener('dragover', (event) => { if (embedded && [...event.dataTransfer.types].includes('Files')) { event.preventDefault(); $('composer').classList.add('dropping'); } });
+    target.addEventListener('dragleave', (event) => { if (!target.contains(event.relatedTarget)) $('composer').classList.remove('dropping'); });
+    target.addEventListener('drop', async (event) => {
+      $('composer').classList.remove('dropping');
+      if (!embedded || !event.dataTransfer.files.length) return;
+      event.preventDefault();
+      try { insertPaths(await saveDropped([...event.dataTransfer.files])); } catch (e) { toast(e.message); }
+    });
+  }
   $('close-search').onclick = () => $('search-dialog').close();
   $('close-dialog').onclick = $('cancel-dialog').onclick = () => $('action-dialog').close();
   $('theme-toggle').onclick = () => {
@@ -2346,7 +2450,7 @@ if (typeof document !== 'undefined' && document.getElementById('workspace')) {
         const origin = new URLSearchParams(location.search).has('pane') ? location.origin : 'null';
         if (event.source !== parent || event.origin !== origin || event.data?.type !== 'synapse:desktop-bootstrap') return;
         clearTimeout(timer); removeEventListener('message', receive);
-        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done'];
+        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived'];
         for (const key of keys) {
           try {
             const value = event.data.preferences?.[key];

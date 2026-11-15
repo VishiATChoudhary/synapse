@@ -65,7 +65,7 @@ contextBridge.exposeInMainWorld('synapse', {
   settings: { usage: () => call('talk:usage'), get: () => call('settings:get'), set: (patch) => call('settings:set', patch) },
   git: { dirty: (cwd) => call('git:dirty', { cwd }) },
   git: { changes: (dir) => call('git:changes', { dir }), commit: (dir, message) => call('git:commit', { dir, message }), push: (dir) => call('git:push', { dir }), pr: (dir) => call('git:pr', { dir }) },
-  files: { exists: (cwd, paths) => call('files:exists', { cwd, paths }), reveal: (dir) => call('folder:reveal', { dir }), pick: (cwd) => call('files:pick', { cwd }) },
+  files: { exists: (cwd, paths) => call('files:exists', { cwd, paths }), reveal: (dir) => call('folder:reveal', { dir }), pick: (cwd) => call('files:pick', { cwd }), fromClipboard: () => call('clipboard:files'), save: (name, data) => call('files:save', { name, data }) },
   agent: { kill: (pid) => call('agent:kill', { pid }), rename: (pty, name) => call('agent:rename', { pty, name }) },
   account: {
     get: () => call('account:get'),

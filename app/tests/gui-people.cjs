@@ -2,7 +2,7 @@
 // fake requests feed (SYNAPSE_FAKE_REQUESTS), the open agent is a stand-in "codex" (an idle node script by that name),
 // and the / menu reads commands and skills from a fixture home.
 // Run: SYNAPSE_APP_PORT=<free port> npx electron tests/gui-people.cjs
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -86,10 +86,53 @@ const menuText = () => ui(`[...document.querySelectorAll('.pop-menu button')].ma
   await until(() => ui(`document.querySelector('#slash-pop .slash-option[aria-selected="true"] .slash-name').textContent === '/approvals'`), 'typing filters');
   await ui(`document.querySelector('#message-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))`);
   assert.equal(await ui(`document.querySelector('#message-input').value`), '/approvals ', 'Enter inserts the command, it does not send');
+  await type('please run /appr');
+  await until(() => ui(`!document.querySelector('#slash-pop').hidden && document.querySelector('#slash-pop .slash-option[aria-selected="true"] .slash-name').textContent === '/approvals'`), '/ works in the middle of a message');
+  await ui(`document.querySelector('#message-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }))`);
+  assert.equal(await ui(`document.querySelector('#message-input').value`), 'please run /approvals ');
+  await type('see /Users/me/x');
+  assert.equal(await ui(`document.querySelector('#slash-pop').hidden`), true, 'a path is not a command');
   await type('$dep');
   await until(() => ui(`!document.querySelector('#slash-pop').hidden && document.querySelector('#slash-pop').textContent.includes('Check a deploy before it ships')`), '$ lists skills with what they do');
   await type('');
   console.log('PASS / menu: commands and skills with descriptions, filtered, inserted with Enter');
+
+  // paste and drop: the page cannot see file paths, so files arrive as paths the app provides. The real clipboard is
+  // left alone: its reader is stood in for, first with copied Finder files, then empty (an image pasted from a page)
+  let clip = { paths: [path.join(fixture, 'notes with space.txt')] };
+  fs.writeFileSync(clip.paths[0], 'x');
+  ipcMain.removeHandler('clipboard:files'); ipcMain.handle('clipboard:files', () => ({ ok: true, value: clip }));
+  const paste = (name) => ui(`(() => { const i = document.querySelector('#message-input'); i.focus(); const dt = new DataTransfer(); dt.items.add(new File([new Uint8Array([137, 80, 78, 71, 1, 2, 3])], ${JSON.stringify(name)}, { type: 'image/png' })); i.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); })()`);
+  await type('look at');
+  await paste('ignored.png');
+  await until(async () => (await ui(`document.querySelector('#message-input').value`)) === `look at "${clip.paths[0]}" `, 'copied Finder files paste as their paths');
+  clip = { paths: [] };
+  await type('');
+  await paste('shot.png');
+  await until(() => ui(`/pastes\\/paste-.*-shot\\.png $/.test(document.querySelector('#message-input').value)`), 'a pasted image is saved and pasted as its path');
+  const saved = (await ui(`document.querySelector('#message-input').value`)).trim();
+  assert.deepEqual([...fs.readFileSync(saved)], [137, 80, 78, 71, 1, 2, 3], 'the saved file holds the pasted bytes');
+  await type('');
+  await ui(`(() => { const dt = new DataTransfer(); dt.items.add(new File(['hello'], 'drop me.md', { type: 'text/markdown' })); document.querySelector('#composer').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); })()`);
+  await until(() => ui(`/drop-me\\.md $/.test(document.querySelector('#message-input').value)`), 'a dropped file is copied and added as a path');
+  assert.equal(fs.readFileSync((await ui(`document.querySelector('#message-input').value`)).trim(), 'utf8'), 'hello');
+  await type('');
+  console.log('PASS paste and drop: Finder files paste as paths, images and dropped files are saved and added as paths');
+
+  // right-click: the /synapse actions. A second codex, then link the two from the menu
+  await native(`[...document.querySelectorAll('#launch .launch-item')].find((b) => b.textContent.trim() === 'Codex').click()`);
+  await until(() => native(`synapse.requests.agents().then((a) => a.length > 1)`), 'a second codex registered', 30000);
+  await until(() => ui(`[...document.querySelectorAll('.session-row')].filter((r) => r.querySelector('.session-kind')?.dataset.kind === 'codex').length === 2`), 'both codexes listed');
+  await until(() => ui(`(() => { const row = [...document.querySelectorAll('.session-row')].find((r) => r.querySelector('.session-kind').dataset.kind === 'codex'); row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 140, clientY: 160 })); return [...document.querySelectorAll('.pop-menu button')].some((b) => b.textContent === 'Link to another agent…'); })()`), 'menu offers Link once both are known to Synapse');
+  const menu = await ui(`[...document.querySelectorAll('.pop-menu > *')].map((e) => e.textContent)`);
+  for (const item of ['Synapse', 'Send a message…', 'Start a plan with…', 'Read its context', 'Copy its handle', 'Archive']) assert.ok(menu.includes(item), `${item} in ${menu}`);
+  if (process.env.PEOPLE_SHOT) fs.writeFileSync(process.env.PEOPLE_SHOT, (await win.webContents.capturePage()).toPNG());
+  await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent === 'Link to another agent…').click()`);
+  await until(() => ui(`document.querySelector('#action-dialog').open && !!document.querySelector('#link-other')`), 'link dialog');
+  const edgesBefore = await ui(`fetch('/api/state').then((r) => r.json()).then((s) => s.edges.length)`);
+  await ui(`document.querySelector('#action-form').requestSubmit()`);
+  await until(async () => (await ui(`fetch('/api/state').then((r) => r.json()).then((s) => s.edges.length)`)) === edgesBefore + 2, 'linked both ways');
+  console.log('PASS right-click: link, message, plan, read and copy, the /synapse actions; Link connects two agents both ways');
 
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);
 })().catch(async (e) => {

@@ -23,12 +23,16 @@ test('the / menu lists built-ins, your and the project commands, skills, and ena
   put(path.join(home, '.claude/plugins/cache/m/good/1.10.0/skills/new/SKILL.md'), '---\nname: new\ndescription: Newest version\n---');
   put(path.join(home, '.claude/plugins/cache/m/off/1.0.0/skills/hidden/SKILL.md'), '---\nname: hidden\n---');
   put(path.join(home, '.codex/skills/railway/SKILL.md'), '---\nname: railway\ndescription: Deploy\n---');
+  put(path.join(home, '.claude/agents/reviewer.md'), '---\nname: reviewer\ndescription: Reviews diffs\n---');
   const claude = slashItems('claude', cwd, home), names = claude.map((i) => i.name);
   for (const n of ['clear', 'model', 'ship', 'git:sync', 'test', 'brief', 'good:new']) assert.ok(names.includes(n), n);
   for (const n of ['good:old', 'off:hidden']) assert.ok(!names.includes(n), n);
   assert.equal(claude.find((i) => i.name === 'ship').hint, '[version]');
   assert.equal(claude.find((i) => i.name === 'git:sync').description, 'Sync the branch with main');
   assert.equal(claude.find((i) => i.name === 'test').source, 'project');
+  const reviewer = claude.find((i) => i.name === 'reviewer');
+  assert.deepEqual([reviewer.kind, reviewer.sigil, reviewer.description], ['agent', '@agent-', 'Reviews diffs']);
+  assert.equal(claude.find((i) => i.name === 'config').kind, 'setting');
   const codex = slashItems('codex', cwd, home);
   assert.ok(codex.some((i) => i.name === 'approvals'));
   assert.deepEqual(codex.filter((i) => i.sigil === '$').map((i) => i.name), ['railway']);

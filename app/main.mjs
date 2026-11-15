@@ -1,7 +1,7 @@
 // Synapse desktop: Electron main process.
 // Owns the PTYs, reads Synapse state from ~/.synapse through lib.mjs, watches fork requests
 // filed by the prompt hook, and pushes everything to the renderer over IPC.
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, screen, shell, systemPreferences } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, screen, shell, systemPreferences } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -948,7 +948,7 @@ handle('pty:restore', ({ cwd, kind, resume, cols, rows }) => {
 handle('sessions:load', () => readJSON(SESSIONS, null));
 handle('sessions:save', (data) => writeJSON(SESSIONS, data));
 const UI_STATE = path.join(DATA, 'workspace-ui.json');
-const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done']);
+const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived']);
 handle('workspace:load', () => readJSON(UI_STATE, {}));
 handle('workspace:save', ({ key, value }) => {
   if (!UI_KEYS.has(key) || typeof value !== 'string' || value.length > 768 * 1024) throw new Error('Invalid workspace preference.');
@@ -1146,6 +1146,43 @@ handle('project:remove', ({ path: p }) => { const c = config(); c.workspaces = c
 // how many uncommitted changes a folder has (0 when it is not a repo); the renderer asks before anything destructive
 // a workspace or worktree folder in Finder (Explorer on Windows): the folder itself opens
 // files to attach to a prompt: their paths go into the message, which Claude Code and Codex both read
+// Pasting into the GUI composer: a web page cannot see where a pasted or dropped file lives, so the app reads the
+// clipboard itself. Copied files give their paths; an image (a screenshot) is saved and gives the saved file's path.
+const PASTES = path.join(DATA, 'pastes');
+const stampName = (ext) => `paste-${new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
+export function clipboardFiles() {
+  const out = [];
+  if (process.platform === 'darwin') {
+    const plist = clipboard.read('NSFilenamesPboardType');
+    for (const m of plist.matchAll(/<string>([^<]+)<\/string>/g)) out.push(m[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&apos;/g, "'").replace(/&quot;/g, '"'));
+    if (!out.length) { const url = clipboard.read('public.file-url'); if (url.startsWith('file://')) try { out.push(fileURLToPath(url)); } catch {} }
+  } else if (WIN) {
+    const raw = clipboard.readBuffer('FileNameW');
+    if (raw.length) out.push(...raw.toString('ucs2').split('\0').filter(Boolean));
+  }
+  return out.filter((p) => path.isAbsolute(p) && fs.existsSync(p));
+}
+handle('clipboard:files', () => {
+  const files = clipboardFiles();
+  if (files.length) return { paths: files };
+  const image = clipboard.readImage();
+  if (image.isEmpty()) return { paths: [] };
+  fs.mkdirSync(PASTES, { recursive: true });
+  const file = path.join(PASTES, stampName('png'));
+  fs.writeFileSync(file, image.toPNG());
+  return { paths: [file], saved: true };
+});
+// a file dropped on the GUI composer arrives as bytes; keep a copy where the agent can read it
+handle('files:save', ({ name, data }) => {
+  const bytes = Buffer.from(String(data || ''), 'base64');
+  if (!bytes.length || bytes.length > 50 * 1024 * 1024) throw new Error('Files up to 50 MB can be dropped here.');
+  const clean = String(name || '').replace(/[^\w.@-]+/g, '-').replace(/^[-.]+/, '').slice(-80);
+  const ext = (clean.match(/\.([\w]{1,8})$/) || [])[1] || 'bin';
+  fs.mkdirSync(PASTES, { recursive: true });
+  const file = path.join(PASTES, clean ? `${stampName(ext).replace(/\.\w+$/, '')}-${clean}` : stampName(ext));
+  fs.writeFileSync(file, bytes);
+  return { path: file };
+});
 handle('git:changes', async ({ dir }) => changes(String(dir)));
 handle('git:commit', async ({ dir, message }) => commitAll(String(dir), message));
 handle('git:push', async ({ dir }) => pushBranch(String(dir)));

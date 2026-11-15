@@ -269,6 +269,15 @@ async function reach(a, b) {
   await ui(`document.querySelector('[data-shelf="snoozed"] [data-agent="desktop-second"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 200 }))`);
   await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent === 'Wake up').click()`);
   await until(() => ui(`!document.querySelector('[data-shelf="snoozed"]')?.isConnected && !!document.querySelector(${JSON.stringify(worktree(repo))} + ' [data-agent="desktop-second"]')`), 'wake brings it back');
+  // Archive: right-click, Archive, it moves to the Archived shelf (still running); Unarchive brings it back
+  await ui(`document.querySelector(${JSON.stringify(session('third'))}).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 200 }))`);
+  await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent === 'Archive').click()`);
+  await until(() => ui(`!!document.querySelector('[data-shelf="archived"] [data-agent="desktop-third"]')`), 'archived session moves to its shelf');
+  assert.ok((await rpc('state')).sessions.some((s) => s.id === 'desktop-third'), 'archiving keeps the session running');
+  await ui(`document.querySelector('[data-shelf="archived"] .settled-button').click()`);
+  await ui(`document.querySelector('[data-shelf="archived"] [data-agent="desktop-third"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 200 }))`);
+  await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent === 'Unarchive').click()`);
+  await until(() => ui(`!document.querySelector('[data-shelf="archived"]')?.isConnected && !!document.querySelector(${JSON.stringify(worktree(repo))} + ' [data-agent="desktop-third"]')`), 'unarchive brings it back');
   // Group by status: every agent on its own row under its state; back to projects after
   await click('#group-by');
   await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent === 'Group by status').click()`);

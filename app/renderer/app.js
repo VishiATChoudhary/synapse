@@ -3768,6 +3768,8 @@ async function desktopAction(action, args) {
       if (args.op === 'pr') return synapse.git.pr(dir);
       throw new Error('Unknown git action.');
     }
+    case 'paste': return synapse.files.fromClipboard();
+    case 'save-file': return synapse.files.save(String(args.name || ''), String(args.data || ''));
     case 'attach': { const { s } = ownSession(args.id); return synapse.files.pick(s.worktree); }
     case 'terminal': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } showWorkspace(false); return; }
     case 'model': {

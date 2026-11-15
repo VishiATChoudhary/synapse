@@ -218,3 +218,8 @@ test('a project shows its GitHub owner picture; checkouts not on GitHub get none
   assert.equal((await fetch(`${base}/api/avatar?dir=relative/path`, { redirect: 'manual' })).status, 404);
   await rm(repo, { recursive: true, force: true }); await rm(plain, { recursive: true, force: true });
 });
+
+test('a plan from the GUI needs a running agent to start it', async () => {
+  const r = await fetch(`${base}/api/plans`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ from: 'nobody', agents: ['x'], goal: 'g' }) });
+  assert.equal(r.status, 404);
+});
