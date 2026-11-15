@@ -1004,3 +1004,9 @@ export function takeInbox(id) {
 }
 
 export const linked = (edges, a, b) => edges.some((e) => (e.from === a && e.to === b) || (e.from === b && e.to === a));
+
+// the GitHub user or org in a remote URL (https or ssh); null for anything not on GitHub
+export function ownerFromRemote(remote) {
+  const m = String(remote || '').trim().match(/github\.com[:/]+([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/[^\s]+$/i);
+  return m ? m[1] : null;
+}

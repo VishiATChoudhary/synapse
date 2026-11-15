@@ -29,13 +29,60 @@ function discoverProjects() {
   return [...groups.values()].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
 }
 
+// A session's title, like a chat app's thread name: Claude Code's own aiTitle (its newest), else the first
+// thing you asked. Read from the transcript's tail and head only, so a large transcript costs the same.
+function readSlice(file, start, length) {
+  const fd = fs.openSync(file, 'r');
+  try { const buf = Buffer.alloc(length); const n = fs.readSync(fd, buf, 0, length, start); return buf.toString('utf8', 0, n); }
+  finally { fs.closeSync(fd); }
+}
+const clip = (text) => {
+  const line = String(text).replace(/\s+/g, ' ').trim();
+  if (line.length <= 64) return line;
+  const cut = line.slice(0, 64); const space = cut.lastIndexOf(' ');
+  return `${(space > 40 ? cut.slice(0, space) : cut).replace(/[\s,.;:]+$/, '')}…`;
+};
+const ownWords = (text) => typeof text === 'string' && text.trim() && !/^\s*(<|#\s*AGENTS\.md|\[Request interrupted|Caveat:)/.test(text);
+// the model a session runs, from its newest transcript entry: claude-opus-5-5 reads "Opus 5.5"
+export function modelName(id) {
+  const m = String(id || '').match(/^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/);
+  if (m) return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ''}`;
+  return String(id || '').replace(/^gpt-/i, 'GPT-').slice(0, 40);
+}
+export function transcriptModel(file) {
+  const size = fs.statSync(file).size;
+  const tail = readSlice(file, Math.max(0, size - 256_000), Math.min(size, 256_000));
+  const all = [...tail.matchAll(/"model":"((?:claude|gpt|o\d)[\w.-]{0,40})"/g)];
+  return all.length ? all.at(-1)[1] : '';
+}
+export function transcriptTitle(file) {
+  const size = fs.statSync(file).size;
+  const tail = readSlice(file, Math.max(0, size - 512_000), Math.min(size, 512_000));
+  const titles = [...tail.matchAll(/"aiTitle":"((?:[^"\\]|\\.){1,200})"/g)];
+  if (titles.length) { try { return clip(JSON.parse(`"${titles.at(-1)[1]}"`)); } catch {} }
+  const head = readSlice(file, 0, Math.min(size, 256_000));
+  for (const line of head.split('\n')) {
+    let o; try { o = JSON.parse(line); } catch { continue; }
+    if (o.aiTitle) return clip(o.aiTitle);
+    let text = null;
+    if (o.type === 'user' && !o.isMeta) {
+      const c = o.message?.content;
+      text = typeof c === 'string' ? c : Array.isArray(c) ? c.find((x) => x?.type === 'text')?.text : null;
+    } else if (o.type === 'response_item' && o.payload?.role === 'user') {
+      text = o.payload.content?.map((x) => x?.text).find(ownWords);
+    } else if (o.type === 'event_msg' && o.payload?.type === 'user_message') text = o.payload.message;
+    if (ownWords(text)) return clip(text);
+  }
+  return '';
+}
+
 if (!isMainThread) {
   const previews = new Map();
   parentPort.on('message', () => {
     try {
       const agents = listAgents().map((agent) => {
         let lastActivity = agent.updatedAt || agent.startedAt || 0;
-        let preview = '';
+        let preview = '', title = '', model = '';
         try {
           const file = transcriptFile(agent);
           const mtime = agent.format === 'demo' ? lastActivity : file && fs.statSync(file).mtimeMs;
@@ -51,13 +98,18 @@ if (!isMainThread) {
                 .replace(/(\*\*|__|`)/g, '')
                 .replace(/\*([^*\n]+)\*/g, '$1')
                 .replace(/\s+/g, ' ').trim().slice(0, 180) || '';
-              previews.set(agent.id, { mtime, preview });
+              let title = previews.get(agent.id)?.title || '';
+              if (agent.format !== 'demo' && (!title || Date.now() - (previews.get(agent.id)?.titledAt || 0) > 60_000)) {
+                try { title = transcriptTitle(file); } catch {}
+                let model = ''; try { model = transcriptModel(file); } catch {}
+                previews.set(agent.id, { mtime, preview, title, model, titledAt: Date.now() });
+              } else previews.set(agent.id, { ...previews.get(agent.id), mtime, preview, title });
             }
-            preview = previews.get(agent.id)?.preview || '';
+            preview = previews.get(agent.id)?.preview || ''; title = agent.title || previews.get(agent.id)?.title || ''; model = previews.get(agent.id)?.model || '';
           }
         } catch { /* A session may exit while its transcript is being scanned. */ }
         const project = projectOfAgent(agent), wt = project.worktree;
-        return { ...agent, project: project.label, projectKey: project.key, color: colorOf(project.key), projectAuto: project.autoLabel, frameKey: wt ? `${project.key}#${wt.path}` : project.key, frame: wt ? `${project.label} / ${wt.name}` : project.label, frameSub: wt?.name || null, worktreePath: wt?.path || (project.key.startsWith('project:') ? agent.cwd : project.key), worktreeName: wt?.name || 'Main checkout', worktreeHome: !wt, lastActivity, preview };
+        return { ...agent, project: project.label, projectKey: project.key, color: colorOf(project.key), projectAuto: project.autoLabel, frameKey: wt ? `${project.key}#${wt.path}` : project.key, frame: wt ? `${project.label} / ${wt.name}` : project.label, frameSub: wt?.name || null, worktreePath: wt?.path || (project.key.startsWith('project:') ? agent.cwd : project.key), worktreeName: wt?.name || 'Main checkout', worktreeHome: !wt, lastActivity, preview, title, model, modelName: model ? modelName(model) : '' };
       });
       const live = new Set(agents.map((agent) => agent.id));
       for (const id of previews.keys()) if (!live.has(id)) previews.delete(id);

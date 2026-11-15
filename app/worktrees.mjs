@@ -183,3 +183,58 @@ export function choicePullRequest(repo, choice, pulls) {
     return matches.find(p => p.state === 'OPEN') || matches[0] || null;
   } catch { return null; }
 }
+
+// ---------------------------------------------------------------- changes panel (GUI): what a session's checkout
+// has changed, and the three steps after: commit, push, pull request.
+const NUM = (v) => (v === '-' ? 0 : Number(v) || 0);
+function lineCount(file) {
+  try { const st = fs.statSync(file); if (!st.isFile() || st.size > 2_000_000) return 0; const t = fs.readFileSync(file, 'utf8'); return t ? t.split('\n').length - (t.endsWith('\n') ? 1 : 0) : 0; } catch { return 0; }
+}
+export function changes(dir) {
+  if (!has(dir, ['rev-parse', '--is-inside-work-tree'])) return { git: false };
+  const branch = git(dir, ['branch', '--show-current']) || null;
+  const hasHead = has(dir, ['rev-parse', '--verify', 'HEAD']);
+  const stat = new Map();
+  if (hasHead) for (const line of git(dir, ['diff', '--numstat', 'HEAD', '--']).split('\n').filter(Boolean)) {
+    const [a, d, ...p] = line.split('\t'); stat.set(p.join('\t'), [NUM(a), NUM(d)]);
+  }
+  // raw, not trimmed: a status line starts with a meaningful space (" M file")
+  const raw = execFileSync('git', ['-C', dir, 'status', '--porcelain=v1', '--untracked-files=all'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 });
+  const files = raw.split('\n').filter(Boolean).slice(0, 500).map((line) => {
+    const code = line.slice(0, 2), rest = line.slice(3), file = rest.includes(' -> ') ? rest.split(' -> ').pop() : rest;
+    const clean = file.replace(/^"|"$/g, '');
+    const [add, del] = code === '??' ? [lineCount(path.join(dir, clean)), 0] : stat.get(clean) || [0, 0];
+    return { path: clean, status: code === '??' ? 'A' : code.trim()[0] || 'M', add, del };
+  });
+  let upstream = null, ahead = 0, behind = 0, base = null, baseAdd = 0, baseDel = 0;
+  try { upstream = git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']); } catch {}
+  if (upstream) { try { [behind, ahead] = git(dir, ['rev-list', '--left-right', '--count', '@{u}...HEAD']).split(/\s+/).map(Number); } catch {} }
+  try { base = git(dir, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']); } catch {}
+  if (!base) for (const b of ['origin/main', 'origin/master', 'main', 'master']) if (has(dir, ['rev-parse', '--verify', '--quiet', b])) { base = b; break; }
+  if (base && hasHead && base.replace(/^origin\//, '') !== branch) {
+    try { for (const line of git(dir, ['diff', '--numstat', `${base}...HEAD`]).split('\n').filter(Boolean)) { const [a, d] = line.split('\t'); baseAdd += NUM(a); baseDel += NUM(d); } } catch { base = null; }
+  } else base = null;
+  let remote = false; try { remote = !!git(dir, ['remote']); } catch {}
+  return { git: true, branch, upstream, ahead, behind, remote, files, add: files.reduce((n, f) => n + f.add, 0), del: files.reduce((n, f) => n + f.del, 0), base, baseAdd, baseDel };
+}
+export function commitAll(dir, message) {
+  const text = String(message || '').trim();
+  if (!text) throw new Error('Write a commit message first.');
+  slow(dir, ['add', '-A', '--', '.']);
+  slow(dir, ['commit', '-q', '-m', text]); // your hooks and signing run as they would in a terminal
+  return { commit: git(dir, ['rev-parse', '--short', 'HEAD']) };
+}
+export async function pushBranch(dir) {
+  const branch = git(dir, ['branch', '--show-current']);
+  if (!branch) throw new Error('Check out a branch before pushing.');
+  try { await exec('git', ['-C', dir, 'push', '-u', 'origin', branch], { timeout: 120000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }); }
+  catch (e) { throw new Error((e.stderr || e.message || '').toString().trim().split('\n').pop()); }
+  return { branch };
+}
+// the open pull request for this branch, or a new one filled from its commits
+export async function pullRequest(dir) {
+  const run = (args) => exec('gh', args, { cwd: dir, timeout: 60000 }).then((r) => r.stdout.trim());
+  try { const url = JSON.parse(await run(['pr', 'view', '--json', 'url,state'])); if (url.state === 'OPEN') return { url: url.url, created: false }; } catch {}
+  try { const out = await run(['pr', 'create', '--fill']); return { url: out.split('\n').filter((l) => /^https?:\/\//.test(l)).pop() || out, created: true }; }
+  catch (e) { throw new Error((e.stderr || e.message || '').toString().trim().split('\n').pop() || 'Could not open a pull request. Is the GitHub CLI signed in?'); }
+}

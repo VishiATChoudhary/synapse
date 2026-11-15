@@ -107,8 +107,11 @@ async function reach(a, b) {
     console.log('PASS GUI order, fork topology, selection and drafts survive a restart');
     return;
   }
-  const indents = await ui(`${JSON.stringify([project(repo) + ' .project-name', worktree(repo) + ' .worktree-name', ...['parent', 'child-one', 'grandchild'].map((id) => session(id) + ' .session-name')])}.map((s) => document.querySelector(s).getBoundingClientRect().left)`);
-  for (let i = 1; i < indents.length; i++) assert.ok(indents[i] > indents[i - 1], `level ${i} is indented: ${indents}`);
+  // flat like T3: the main checkout has no label of its own, other worktrees get a slim branch line, forks indent
+  const indents = await ui(`${JSON.stringify(['parent', 'child-one', 'grandchild'].map((id) => session(id) + ' .session-name'))}.map((s) => document.querySelector(s).getBoundingClientRect().left)`);
+  for (let i = 1; i < indents.length; i++) assert.ok(indents[i] > indents[i - 1], `fork level ${i} is indented: ${indents}`);
+  assert.ok(await ui(`!document.querySelector(${JSON.stringify(worktree(repo) + ' .worktree-heading')}).offsetParent`), 'the main checkout has no extra label');
+  assert.ok(await ui(`!!document.querySelector('[data-worktree-path=${JSON.stringify(path.join(fixture, 'feature-a'))}] .worktree-heading').offsetParent`), 'a worktree shows its branch line');
   assert.equal(await ui(`document.querySelector(${JSON.stringify(session('checkout-0'))}).closest('.worktree-group').dataset.worktreePath`), path.join(fixture, 'feature-a'));
   console.log('PASS project → worktree → session → fork hierarchy has visible indentation');
 
@@ -121,7 +124,7 @@ async function reach(a, b) {
     await sleep(1300);
     assert.equal(await ui(`window.draggedRow === document.querySelector(${JSON.stringify(parentNode)})`), true, 'state refresh preserves the dragged element');
   });
-  assert.deepEqual((await rootOrder()).slice(0, 3), ['desktop-second', 'desktop-parent', 'desktop-third']);
+  await until(async () => JSON.stringify((await rootOrder()).slice(0, 3)) === JSON.stringify(['desktop-second', 'desktop-parent', 'desktop-third']), 'dropped session settles into its new place');
   assert.equal(await ui(`document.querySelector('#message-input').value`), 'Keep this draft while dragging');
   assert.equal(await ui(`document.querySelector(${JSON.stringify(session('parent'))}).getAttribute('aria-current')`), 'page');
   console.log('PASS real pointer dragging reorders a session with its fork subtree without losing its draft or selection');
@@ -142,8 +145,8 @@ async function reach(a, b) {
   assert.equal(savedForks.find((s) => s.key === 'grandchild').parent, savedForks.findIndex((s) => s.key === 'child-one'));
   console.log('PASS fork sibling dragging and keyboard reordering preserve descendant ancestry');
 
-  await click(worktree(repo) + ' .worktree-button');
-  await drag(worktree(repo) + ' .worktree-button', await reach(worktree(repo), worktree(path.join(fixture, 'feature-a'))));
+  const featureA = worktree(path.join(fixture, 'feature-a'));
+  await drag(featureA + ' .worktree-button', await reach(featureA, worktree(repo)));
   assert.deepEqual((await treeOrder()).slice(0, 2), [path.join(fixture, 'feature-a'), repo]);
   for (const key of await projectOrder()) if (await ui(`document.querySelector(${JSON.stringify(project(key) + ' .project-button')}).getAttribute('aria-expanded') === 'true'`)) await click(project(key) + ' .project-button');
   const before = await projectOrder();
@@ -185,21 +188,18 @@ async function reach(a, b) {
   assert.equal(await ui(`document.querySelector('#message-input').value`), 'Keep this draft while dragging');
   console.log('PASS Activity opens and closes inside GUI without exposing Terminal UI or losing the draft');
 
-  await click('.canvas-link');
-  let canvas;
-  await until(() => { canvas = gui.frames.find((f) => f.url.endsWith('/canvas')); return canvas; }, 'GUI canvas');
-  await until(() => canvas.executeJavaScript(`!!document.querySelector('#c')`, true), 'canvas loaded');
-  assert.equal(await native(`document.querySelector('#mode-gui').getAttribute('aria-pressed')`), 'true');
-  assert.equal(await native(`document.querySelector('#canvas').hidden`), true, 'Terminal canvas remains hidden');
-  await canvas.executeJavaScript(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`, true);
-  await until(() => ui(`!document.querySelector('#thread-view').hidden`), 'canvas returns to GUI conversation');
+  // the canvas belongs to Terminal mode: the GUI has no way into it
+  assert.equal(await ui(`!!document.querySelector('.canvas-link')?.offsetParent`), false, 'no canvas button in GUI');
+  await ui(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', metaKey: true, bubbles: true }))`);
+  await sleep(200);
+  assert.ok(await ui(`document.querySelector('#canvas-view').hidden && !document.querySelector('#thread-view').hidden`), '⌘G stays in the conversation');
   await click('#session-menu'); await click('[data-session-action="fork-tree"]');
   await until(() => native(`!document.querySelector('#fan').hidden`), 'GUI fork tree');
   assert.equal(await native(`document.querySelector('#mode-gui').getAttribute('aria-pressed')`), 'true');
   assert.equal(await native(`document.querySelectorAll('#fan .fcard').length`), 4);
   assert.ok(await native(`document.querySelector('#fan').getBoundingClientRect().top >= 48`), 'fork tree stays below the mode toolbar');
   await native(`document.querySelector('#fan-esc').click()`);
-  console.log('PASS Canvas and fork tree stay in GUI mode with no Terminal UI exposed');
+  console.log('PASS GUI has no canvas; the fork tree stays in GUI mode with no Terminal UI exposed');
 
   const beforeSplit = (await rpc('state')).sessions;
   await click('#session-menu'); await click('[data-session-action="split"]');
@@ -235,12 +235,57 @@ async function reach(a, b) {
   assert.equal(await ui(`document.querySelector('#message-input').value`), 'Keep this draft while dragging');
   console.log('PASS GUI splits render independent conversations and drafts, target their own PTYs, nest, and close without switching mode');
 
+  if (process.platform === 'darwin') {
+    await until(() => native(`getComputedStyle(document.querySelector('.desktop-toolbar')).display === 'none' && document.querySelector('#desktop-workspace').getBoundingClientRect().top === 0`), 'GUI has no extra toolbar on macOS');
+    await until(() => native(`[...document.querySelectorAll('#gui-drag > div')].some((d) => d.style.webkitAppRegion === 'drag' && d.offsetWidth > 200)`), 'GUI header strips drag the window');
+    assert.ok(await native(`[...document.querySelectorAll('#gui-drag > div')].some((d) => d.style.webkitAppRegion === 'no-drag')`), 'header buttons stay clickable');
+    assert.ok(await ui(`parseFloat(getComputedStyle(document.querySelector('.brand-row')).paddingLeft) >= 76`), 'room for the window buttons');
+    await ui(`document.querySelector('#desktop-settings').click()`);
+    await until(() => native(`!document.querySelector('#modal').hidden`), 'sidebar gear opens Settings');
+    await native(`document.querySelector('#modal').click()`);
+    console.log('PASS GUI header is the title bar: drag strips, clickable controls, settings in the sidebar');
+  }
+
+  // Changes: a new file shows on the composer chip and in the panel; Commit clears it
+  fs.writeFileSync(path.join(repo, 'notes.txt'), 'one\ntwo\n');
+  await click(session('parent'));
+  await until(() => ui(`!document.querySelector('#changes-chip').hidden && document.querySelector('#changes-chip').textContent.includes('1 file')`), 'changes chip shows the new file');
+  await click('#changes-chip');
+  await until(() => ui(`!!document.querySelector('[data-change-file="notes.txt"]')`), 'changes panel lists the file').catch(async (e) => { console.error('INSPECTOR', await ui(`document.querySelector('#inspector').hidden + ' ' + document.querySelector('#inspector').innerText.slice(0, 400)`)); throw e; });
+  assert.equal(await ui(`document.querySelector('[data-change-file="notes.txt"] .add').textContent`), '+2');
+  await click('[data-git="commit"]');
+  await ui(`document.querySelector('#commit-message').value = 'Add notes'; document.querySelector('#action-form').requestSubmit()`);
+  await until(() => ui(`document.querySelector('#changes-chip').hidden && !document.querySelector('[data-change-file]')`), 'commit clears the changes');
+  assert.equal(execFileSync('git', ['-C', repo, 'log', '-1', '--format=%s'], { encoding: 'utf8' }).trim(), 'Add notes');
+  await click('[data-action="close-inspector"]');
+  console.log('PASS Changes panel: chip, changed files, commit from the GUI');
+
+  // Snooze: right-click a session, snooze it, it steps into the Snoozed shelf; Wake brings it back
+  await ui(`document.querySelector(${JSON.stringify(session('second'))}).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 200 }))`);
+  await until(() => ui(`[...document.querySelectorAll('.pop-menu button')].some((b) => b.textContent === 'Snooze 1 hour')`), 'row menu offers snooze');
+  await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent === 'Snooze 1 hour').click()`);
+  await until(() => ui(`!!document.querySelector('[data-shelf="snoozed"] [data-agent="desktop-second"]')`), 'snoozed session moves to the shelf');
+  await ui(`document.querySelector('[data-shelf="snoozed"] .settled-button').click()`);
+  await ui(`document.querySelector('[data-shelf="snoozed"] [data-agent="desktop-second"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 200 }))`);
+  await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent === 'Wake up').click()`);
+  await until(() => ui(`!document.querySelector('[data-shelf="snoozed"]')?.isConnected && !!document.querySelector(${JSON.stringify(worktree(repo))} + ' [data-agent="desktop-second"]')`), 'wake brings it back');
+  // Group by status: every agent on its own row under its state; back to projects after
+  await click('#group-by');
+  await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent === 'Group by status').click()`);
+  await until(() => ui(`!!document.querySelector('[data-flat="idle"] [data-agent="desktop-child-one"]') && !document.querySelector('.project-group')`), 'status grouping lists forks as their own rows');
+  await click('#group-by');
+  await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent === 'Group by project').click()`);
+  await until(() => ui(`!!document.querySelector(${JSON.stringify(session('child-one'))})?.closest('.session-children')`), 'project grouping restores the fork tree');
+  await until(() => { const ui = JSON.parse(fs.readFileSync(path.join(state, 'workspace-ui.json'), 'utf8')); return ui['synapse-group'] === 'project' && 'synapse-snoozed' in ui; }, 'grouping and snoozes are saved with the workspace');
+  assert.equal(await ui(`document.querySelector('#toast').hidden || !document.querySelector('#toast-text').textContent.includes('Could not save')`), true, 'no preference errors');
+  console.log('PASS snooze, wake, and grouping by status or project');
   fs.writeFileSync(expectedFile, JSON.stringify({ projects: await projectOrder(), worktrees: await treeOrder(), sessions: await rootOrder() }));
   if (process.env.SYNAPSE_GUI_SCREENSHOT) {
-    await click(project(repo) + ' .project-button'); await click(worktree(repo) + ' .worktree-button');
+    const unfold = async (s) => { if (await ui(`document.querySelector(${JSON.stringify(s)}).getAttribute('aria-expanded') === 'false'`)) { await click(s); return true; } return false; };
+    const p = await unfold(project(repo) + ' .project-button'), w = await unfold(worktree(repo) + ' .worktree-button');
     await ui(`document.querySelector(${JSON.stringify(project(repo))}).scrollIntoView({ block: 'start' })`);
     await sleep(300); fs.writeFileSync(process.env.SYNAPSE_GUI_SCREENSHOT, (await win.webContents.capturePage()).toPNG());
-    await click(worktree(repo) + ' .worktree-button'); await click(project(repo) + ' .project-button');
+    if (w) await click(worktree(repo) + ' .worktree-button'); if (p) await click(project(repo) + ' .project-button');
   }
   await sleep(500);
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy/.test(e)), []);

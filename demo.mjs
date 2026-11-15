@@ -40,13 +40,15 @@ const AGENTS = [
   ['cursor-landing', 'cursor-agent', '/dev/acme-web', []],
 ];
 
+const TITLES = {"api-auth": "Short-lived JWTs with refresh rotation", "api-rate-limit": "Per-tenant API rate limits", "api-review": "Review the auth branch", "web-checkout": "Checkout on the new design system", "web-e2e": "Playwright tests for checkout", "infra-terraform": "Postgres read replica", "research-vector-db": "pgvector vs a vector DB", "ml-eval": "Ranking eval on new embeddings"};
+
 export function demoAgents() {
   const tick = Math.floor(Date.now() / 6000);
   return AGENTS.map(([name, kind, cwd, demo], i) => ({
     id: `demo-${name}`, pid: 100 + i, kind, name, cwd, demo,
     status: (tick + i) % 4 === 0 ? 'busy' : 'idle',
     startedAt: now - i * 600_000, updatedAt: now,
-    transcript: demo.length ? `demo:${name}` : null, format: 'demo',
+    transcript: demo.length ? `demo:${name}` : null, format: 'demo', title: TITLES[name] || '',
   })).concat(process.env.SYNAPSE_DEMO_TRANSCRIPT ? [{ // tests: one agent with a real Claude transcript
     id: 'demo-media', pid: 199, kind: 'claude', name: 'media', cwd: process.env.SYNAPSE_DEMO_CWD || '/tmp', status: 'idle',
     startedAt: now, updatedAt: now, transcript: process.env.SYNAPSE_DEMO_TRANSCRIPT, format: 'claude',

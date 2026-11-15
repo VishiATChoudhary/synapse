@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-PQ8kUkfI3XptXyyv7ccYhuBGeztHih8jClnedcjmBwU='; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; frame-src http://127.0.0.1:*; connect-src 'self'; object-src 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-PQ8kUkfI3XptXyyv7ccYhuBGeztHih8jClnedcjmBwU='; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http://127.0.0.1:*; font-src 'self'; frame-src http://127.0.0.1:*; connect-src 'self'; object-src 'none'; base-uri 'none'">
 <title>Synapse</title>
 <script>document.documentElement.dataset.theme = localStorage.getItem('synapse-mode') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'signal');</script>
 <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">

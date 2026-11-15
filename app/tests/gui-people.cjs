@@ -1,0 +1,98 @@
+// Real Electron test for the GUI's People, sharing status and / menu, on the live code paths: friends come from the
+// fake requests feed (SYNAPSE_FAKE_REQUESTS), the open agent is a stand-in "codex" (an idle node script by that name),
+// and the / menu reads commands and skills from a fixture home.
+// Run: SYNAPSE_APP_PORT=<free port> npx electron tests/gui-people.cjs
+const { app, BrowserWindow } = require('electron');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+
+const root = path.resolve(__dirname, '../..');
+const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-gui-people-')));
+const state = path.join(fixture, 'state'), feed = path.join(fixture, 'feed.json'), bin = path.join(fixture, 'bin'), home = path.join(fixture, 'home');
+for (const d of [state, bin, path.join(home, '.codex', 'skills', 'deploy-check')]) fs.mkdirSync(d, { recursive: true });
+fs.writeFileSync(path.join(home, '.codex', 'skills', 'deploy-check', 'SKILL.md'), '---\nname: deploy-check\ndescription: Check a deploy before it ships\n---\n');
+fs.writeFileSync(path.join(bin, 'codex'), '#!/usr/bin/env node\nsetInterval(() => {}, 1 << 30);\n');
+fs.chmodSync(path.join(bin, 'codex'), 0o755);
+fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], skipLogin: true, profiles: { codex: { command: `exec ${path.join(bin, 'codex')}`, label: 'Codex' } } }));
+const writeFeed = (extra = {}) => fs.writeFileSync(feed, JSON.stringify({
+  account: { id: 'u1', name: 'Me', handle: 'me' }, outgoing: [], links: [], incomingTrust: [],
+  people: [{ id: 'p1', handle: 'mara', name: 'Mara', trustsYou: true }, { id: 'p2', handle: 'jonas', name: 'Jonas', trustsYou: false }],
+  incoming: [{ id: 'o1', kind: 'offer', mode: 'talk', status: 'pending', from: { handle: 'mara', name: 'Mara' }, agent: { id: 'r-web', name: 'web', kind: 'claude', project: 'shop' } }],
+  ...extra,
+}));
+writeFeed();
+Object.assign(process.env, { HOME: home, SYNAPSE_HOME: state, SYNAPSE_FAKE_REQUESTS: feed, SYNAPSE_REQUEST_POLL: '300', SYNAPSE_CLOUD: 'http://127.0.0.1:9', SYNAPSE_DESKTOP_VIEW: 'gui', SHELL: '/bin/zsh' });
+for (const key of Object.keys(process.env)) if (key.startsWith('SYNAPSE_SHOT') || key === 'SYNAPSE_DEBUG' || key === 'SYNAPSE_DEMO') delete process.env[key];
+process.chdir(fixture);
+app.setPath('userData', path.join(fixture, 'electron'));
+let win, gui, failed = false;
+const errors = [];
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function until(check, label, ms = 20000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) { if (await check().catch(() => false)) return; await sleep(100); }
+  throw new Error(`Timed out: ${label}`);
+}
+const ui = (code) => gui.executeJavaScript(code, true);
+const native = (code) => win.webContents.executeJavaScript(code, true);
+const menuText = () => ui(`[...document.querySelectorAll('.pop-menu button')].map((b) => b.textContent)`);
+
+(async () => {
+  await import(pathToFileURL(path.join(root, 'app/main.mjs')));
+  await until(async () => { win = BrowserWindow.getAllWindows()[0]; return win; }, 'app window');
+  win.setBounds({ width: 1400, height: 950 }); win.show();
+  win.webContents.on('console-message', (e) => { if (e.level === 'error') errors.push(e.message); });
+  await until(async () => { gui = win.webContents.mainFrame.frames.find((f) => f.url.includes('?desktop=1')); return gui; }, 'GUI frame');
+  await until(() => ui(`!!document.querySelector('#project-list')`), 'GUI ready');
+
+  // a Codex session in the fixture project
+  await until(() => native(`[...document.querySelectorAll('#launch .launch-item')].some((b) => b.textContent.trim() === 'Codex')`), 'Codex launcher');
+  await native(`[...document.querySelectorAll('#launch .launch-item')].find((b) => b.textContent.trim() === 'Codex').click()`);
+  await until(() => ui(`[...document.querySelectorAll('.session-row')].some((r) => r.querySelector('.session-kind')?.dataset.kind === 'codex')`), 'the codex session in the sidebar', 30000);
+  await ui(`[...document.querySelectorAll('.session-row')].find((r) => r.querySelector('.session-kind').dataset.kind === 'codex').click()`);
+
+  // friends see the codex once Synapse has registered it
+  await until(() => native(`synapse.requests.agents().then((a) => a.length > 0)`), 'the codex is registered for friends', 30000);
+  // People: Mara trusts you and offers an agent; Jonas has not added you back
+  await until(() => ui(`!!document.querySelector('.people-group') && document.querySelector('.people-group').textContent.includes('Mara')`), 'People lists your friends');
+  const people = await ui(`[...document.querySelectorAll('.person-row')].map((r) => r.textContent)`);
+  assert.ok(people.some((t) => t.includes('Mara') && t.includes('1 request for you')), `Mara has a request: ${people}`);
+  assert.ok(people.some((t) => t.includes('Jonas') && t.includes('Has not added you back')), `Jonas waits: ${people}`);
+  await ui(`[...document.querySelectorAll('.person-row')].find((r) => r.textContent.includes('Mara')).click()`);
+  await until(async () => (await menuText()).some((t) => t.startsWith('Ask Mara for an agent')), 'Mara: ask for an agent');
+  assert.ok((await menuText()).some((t) => t.startsWith('Share "') && t.endsWith('with Mara…')), 'Mara: share the open agent');
+  await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent.startsWith('Ask Mara')).click()`);
+  await until(() => ui(`document.querySelector('#action-dialog').open && document.querySelector('#friend-who')?.value === 'mara'`), 'ask dialog opens with Mara chosen');
+  await ui(`document.querySelector('#cancel-dialog').click()`);
+  console.log('PASS People: friends with their state, and asking or sharing starts with that person');
+
+  // sharing status of the open agent: link it to Mara in the feed, the details panel says so
+  const mine = await native(`(async () => (await synapse.requests.agents()).map((a) => ({ id: a.id, name: a.name })))()`);
+  writeFeed({ links: [{ direction: 'out', owner: 'Mara', mode: 'talk', agent: { name: 'web', kind: 'claude' }, local: { id: mine[0].id, name: mine[0].name } }] });
+  await ui(`document.querySelector('#context-toggle').getAttribute('aria-expanded') === 'true' || document.querySelector('#context-toggle').click()`);
+  await until(() => ui(`(document.querySelector('.sharing')?.textContent || '').includes('Shared with Mara')`), 'details panel shows the share', 30000);
+  assert.ok(await ui(`document.querySelector('.sharing .share-state.on')?.textContent === 'Connected'`));
+  await until(() => ui(`!!document.querySelector('.session-row[aria-current="page"] .shared-mark')`), 'the row shows it is shared');
+  console.log('PASS sharing status: the open agent shows who it is shared with, in the panel and on its row');
+
+  // the / menu: Codex built-ins, and $ for its skills
+  const type = (text) => ui(`(() => { const i = document.querySelector('#message-input'); i.focus(); i.value = ${JSON.stringify(text)}; i.setSelectionRange(i.value.length, i.value.length); i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await type('/');
+  await until(() => ui(`!document.querySelector('#slash-pop').hidden && [...document.querySelectorAll('#slash-pop .slash-name')].some((n) => n.textContent === '/approvals')`), '/ lists Codex commands');
+  await type('/appr');
+  await until(() => ui(`document.querySelector('#slash-pop .slash-option[aria-selected="true"] .slash-name').textContent === '/approvals'`), 'typing filters');
+  await ui(`document.querySelector('#message-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))`);
+  assert.equal(await ui(`document.querySelector('#message-input').value`), '/approvals ', 'Enter inserts the command, it does not send');
+  await type('$dep');
+  await until(() => ui(`!document.querySelector('#slash-pop').hidden && document.querySelector('#slash-pop').textContent.includes('Check a deploy before it ships')`), '$ lists skills with what they do');
+  await type('');
+  console.log('PASS / menu: commands and skills with descriptions, filtered, inserted with Enter');
+
+  assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);
+})().catch(async (e) => {
+  failed = true; console.error(e);
+  if (win) fs.writeFileSync('/tmp/gui-people.failed.png', (await win.webContents.capturePage()).toPNG());
+}).finally(() => { app.once('will-quit', () => app.exit(failed ? 1 : 0)); app.quit(); });

@@ -63,6 +63,7 @@ const chips = () => js(`[...document.querySelectorAll('#agentbar .agent-chip')].
   await js(`document.querySelector('#agentbar .agentbar-toggle').click()`);
   assert.equal(await js(`document.querySelectorAll('#agentbar .agent-chip .label').length`), 2, 'expanded again');
   assert.equal(await js(`document.querySelector('#agentbar').parentElement.className`), 'desktop-toolbar', 'GUI mode: in the window toolbar');
+  if (process.platform === 'darwin') assert.equal(await js(`getComputedStyle(document.querySelector('.desktop-toolbar')).display`), 'none', 'macOS GUI: no toolbar, the GUI sidebar lists agents and their state');
   if (process.env.AGENTBAR_SHOT) fs.writeFileSync(`${process.env.AGENTBAR_SHOT}-gui.png`, (await win.webContents.capturePage()).toPNG());
   // terminal mode: no bar, the sidebar lists the same agents instead
   await js(`document.querySelector('#mode-terminal').click()`);

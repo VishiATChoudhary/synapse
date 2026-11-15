@@ -24,7 +24,7 @@
     "install.mjs",
     "demo.mjs",
     "server.mjs",
-    "discovery.mjs",
+    "discovery.mjs", "commands.mjs",
     "tokens.css",
     "skill/**",
     "public/**",

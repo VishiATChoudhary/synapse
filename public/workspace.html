@@ -29,27 +29,26 @@
         </a>
         <button class="icon-button sidebar-close" id="sidebar-close" aria-label="Close navigation"><span data-icon="panel-left"></span></button>
       </div>
-      <nav class="primary-nav" aria-label="Workspace">
-        <button class="nav-item nav-new" id="connect-agent"><span data-icon="compose"></span><span>Connect an agent</span></button>
-        <button class="nav-item" id="open-search"><span data-icon="search"></span><span>Search</span><kbd>⌘K</kbd></button>
-        <button class="nav-item" data-view="overview"><span data-icon="grid"></span><span>Overview</span></button>
-        <button class="nav-item" data-view="connections"><span data-icon="network"></span><span>Connections</span><span class="nav-count" id="connection-count">0</span></button>
-        <button class="nav-item desktop-only" id="desktop-activity" data-view="activity"><span data-icon="activity"></span><span>Activity</span></button>
-      </nav>
-      <div class="projects-heading"><span>Projects</span><span class="count" id="project-count"></span><button class="icon-button desktop-only" id="add-project" aria-label="Add project" title="Add project"><span data-icon="folder-plus"></span></button></div>
+      <div class="side-tools">
+        <div class="side-search"><span data-icon="search"></span><input id="sidebar-filter" type="search" placeholder="Search" autocomplete="off" spellcheck="false" aria-label="Filter sessions"><button type="button" class="side-search-key" id="open-search" title="Search everything" aria-label="Open search"><kbd>⌘K</kbd></button></div>
+        <button class="icon-button" id="group-by" aria-label="Group and sort sessions" title="Group and sort"><span data-icon="sort"></span></button>
+        <button class="icon-button desktop-only" id="add-project" aria-label="Add project" title="Add project"><span data-icon="folder-plus"></span></button>
+        <button class="icon-button" id="connect-agent" aria-label="Connect an agent" title="Connect an agent"><span data-icon="compose"></span></button>
+      </div>
+      <span class="sr-only"><span id="project-count"></span></span>
       <p class="sr-only" id="sidebar-order-status" role="status" aria-live="polite"></p>
       <div class="project-list" id="project-list"><p class="sidebar-placeholder">Finding your sessions…</p></div>
       <div class="sidebar-bottom">
-        <a href="/canvas" class="nav-item canvas-link"><span data-icon="canvas"></span><span>Canvas</span></a>
-        <button class="nav-item desktop-only" id="desktop-account"><span data-icon="user"></span><span>Account &amp; sharing</span></button>
-        <div class="sidebar-footer">
-          <div class="local-workspace" title="Synapse runs on this machine">
-            <span class="connection-dot" id="connection-dot" aria-hidden="true"></span>
-            <span class="local-label" id="local-status">Connecting…</span>
-          </div>
-          <button class="icon-button" id="theme-toggle" aria-label="Switch color theme" title="Switch color theme"><span data-icon="sun"></span></button>
-          <button class="icon-button" id="help-button" aria-label="Help and keyboard shortcuts" title="Help and shortcuts"><span data-icon="help"></span></button>
-        </div>
+        <button class="icon-button" data-view="overview" aria-label="Overview" title="Overview"><span data-icon="grid"></span></button>
+        <button class="icon-button" data-view="connections" aria-label="Connections" title="Connections"><span data-icon="network"></span><span class="nav-count" id="connection-count">0</span></button>
+        <button class="icon-button desktop-only" id="desktop-activity" data-view="activity" aria-label="Activity" title="Activity"><span data-icon="activity"></span></button>
+        <a href="/canvas" class="icon-button canvas-link web-only" aria-label="Canvas" title="Canvas"><span data-icon="canvas"></span></a>
+        <button class="icon-button desktop-only" id="desktop-account" aria-label="Account and sharing" title="Account &amp; sharing"><span data-icon="user"></span></button>
+        <button class="icon-button desktop-only" id="desktop-settings" aria-label="Settings" title="Settings  ⌘,"><span data-icon="settings"></span></button>
+        <span class="side-spacer"></span>
+        <span class="local-workspace" title="Synapse runs on this machine"><span class="connection-dot" id="connection-dot" aria-hidden="true"></span><span class="sr-only" id="local-status">Connecting…</span></span>
+        <button class="icon-button" id="theme-toggle" aria-label="Switch color theme" title="Switch color theme"><span data-icon="sun"></span></button>
+        <button class="icon-button" id="help-button" aria-label="Help and keyboard shortcuts" title="Help and shortcuts"><span data-icon="help"></span></button>
       </div>
     </aside>
     <main class="main" id="main" tabindex="-1">
@@ -58,10 +57,10 @@
         <div class="breadcrumbs" id="breadcrumbs"><span>Your workspace</span></div>
         <div class="topbar-actions" id="session-actions" hidden>
           <span class="session-status" id="session-status"></span>
-          <button class="icon-button" id="rename-agent" aria-label="Rename session" title="Rename session"><span data-icon="edit"></span></button>
+          <button class="icon-button" hidden id="rename-agent" aria-label="Rename session" title="Rename session"><span data-icon="edit"></span></button>
           <button class="icon-button desktop-only" id="open-terminal" aria-label="Open session in Terminal mode" title="Open in Terminal mode"><span data-icon="terminal"></span></button>
-          <button class="icon-button desktop-only" id="fork-session" aria-label="Fork conversation" title="Fork conversation"><span data-icon="branch"></span></button>
-          <button class="icon-button desktop-only" id="session-menu" aria-label="Session actions" title="Session actions"><span data-icon="chevron-down"></span></button>
+          <button class="icon-button desktop-only" hidden id="fork-session" aria-label="Fork conversation" title="Fork conversation"><span data-icon="branch"></span></button>
+          <button class="icon-button" id="session-menu" aria-label="Session actions" aria-expanded="false" title="Session actions"><span data-icon="more"></span></button>
                     <button class="icon-button" id="context-toggle" aria-label="Toggle session details" aria-controls="inspector" aria-expanded="false" title="Session details"><span data-icon="panel-right"></span></button>
         </div>
       </header>
@@ -75,10 +74,11 @@
           </div>
           <div class="composer-region">
             <button class="jump-button" id="jump-latest" hidden><span data-icon="arrow-down"></span>Jump to latest</button>
+            <div class="approval-card" id="approval-card" role="region" aria-label="Waiting for your answer" hidden></div>
             <form class="composer" id="composer">
               <label class="sr-only" for="message-input">Message this agent</label>
               <textarea id="message-input" rows="1" maxlength="12000" placeholder="Message your agent…" aria-describedby="delivery-note" required></textarea>
-              <div class="composer-toolbar"><span class="provider-label" id="provider-label"></span><span class="composer-channel"><span data-icon="network"></span>Via Synapse</span><span class="composer-shortcut">Enter to send</span><button class="send-button" id="send-message" type="submit" aria-label="Send message" title="Send message" disabled><span data-icon="arrow-up"></span></button></div>
+              <div class="composer-toolbar"><span class="provider-label" id="provider-label"></span><button type="button" class="icon-button desktop-only attach-button" id="attach-files" aria-label="Attach files" title="Attach files"><span data-icon="paperclip"></span></button><button type="button" class="changes-chip desktop-only" id="changes-chip" hidden title="Changes in this checkout"></button><span class="composer-channel"><span data-icon="network"></span>Via Synapse</span><span class="composer-shortcut">Enter to send</span><button class="send-button" id="send-message" type="submit" aria-label="Send message" title="Send message" disabled><span data-icon="arrow-up"></span></button></div>
             </form>
             <p class="delivery-note" id="delivery-note">Delivered on the agent’s next prompt or inbox check.</p>
             <p class="form-error" id="send-error" role="alert" hidden></p>

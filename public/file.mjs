@@ -16,6 +16,7 @@ addEventListener('message', (ev) => {
   if (ev.data?.type === 'synapse:file-wide') { wide = !!ev.data.wide; drawBar(); }
 });
 
+const FINDER = /Windows/.test(navigator.userAgent) ? 'Explorer' : /Mac/.test(navigator.userAgent) ? 'Finder' : 'the file manager';
 const size = (b) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
 const ago = (t) => { const s = (Date.now() - t) / 1000; return s < 60 ? 'just now' : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : `${Math.floor(s / 86400)}d ago`; };
 const here = (path) => `/file?${new URLSearchParams({ path, cwd, theme: document.documentElement.dataset.theme, ...(wide ? { wide: '1' } : {}) })}`;
@@ -47,7 +48,7 @@ function drawBar() {
     + (conflict ? '<button data-act="reload" title="Load the version on disk, dropping your edits">Reload</button><button data-act="overwrite" title="Save your version over it">Keep mine</button>' : '')
     + (isMd() ? `<button data-act="mode">${mode === 'edit' ? 'Preview' : 'Edit'}</button>` : '')
     + (pdf.tools ? Object.keys(PDF_TOOLS).map((t) => `<button data-tool="${t}" aria-pressed="${pdf.tool === t}" title="${PDF_TOOLS[t].title}">${t}</button>`).join('') : '')
-    + (f.error ? '' : '<button data-act="open" title="Open in its own app">Open ↗</button>')
+    + (f.error ? '' : `<button data-act="reveal" title="Show it in ${FINDER}">${FINDER === 'Finder' ? 'Finder' : 'Folder'}</button><button data-act="open" title="Open in its own app">Open ↗</button>`)
     + `<button data-act="wide" title="${wide ? 'Back beside the terminal' : 'Fill the window'}">${wide ? '⇥' : '⇤'}</button>`
     + '<button data-act="close" title="Close  esc">✕</button>';
 }
@@ -292,6 +293,7 @@ document.addEventListener('click', async (ev) => {
   else if (act === 'wide') { wide = !wide; parent.postMessage({ type: 'synapse:file-wide', wide }, '*'); drawBar(); }
   else if (act === 'reload') reload();
   else if (act === 'overwrite') save(true);
+  else if (act === 'reveal') api('/api/file/open', { method: 'POST', body: JSON.stringify({ path: f.path, reveal: true }) }).then(() => { state = `shown in ${FINDER}`; drawBar(); }, (e) => { state = e.message; warn = true; drawBar(); });
   else if (act === 'open') api('/api/file/open', { method: 'POST', body: JSON.stringify({ path: f.path }) }).catch(() => {});
 });
 

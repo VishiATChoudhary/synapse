@@ -7,9 +7,10 @@ import os from 'node:os';
 import { pipeline } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { exec, execFile } from 'node:child_process';
-import { FILES, readJSON, writeJSON, readAgentMessages, renameAgent, renameProject, listAgents, postMessage } from './lib.mjs';
+import { FILES, readJSON, writeJSON, readAgentMessages, renameAgent, renameProject, listAgents, postMessage, ownerFromRemote } from './lib.mjs';
 import { createEdge, removeEdge, setMode, endTalk, allowTalkRequest, dismissTalkRequest } from './ops.mjs';
 import { createDiscovery } from './discovery.mjs';
+import { slashItems } from './commands.mjs';
 import * as remote from './remote.mjs';
 import * as talk from './talk.mjs';
 
@@ -29,6 +30,16 @@ if (process.env.SYNAPSE_DEMO && !fs.existsSync(FILES.edges)) {
   writeJSON(FILES.layout, Object.fromEntries(Object.entries(DEMO_LAYOUT).map(([n, [x, y]]) => [by(n).id, { x, y }])));
 }
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
+// the GitHub user or org that owns a checkout's origin (https or ssh remote); cached, null when not on GitHub
+const owners = new Map();
+function githubOwner(dir) {
+  if (!dir || !path.isAbsolute(dir)) return Promise.resolve(null);
+  const hit = owners.get(dir);
+  if (hit && Date.now() - hit.at < 600_000) return hit.owner;
+  const owner = new Promise((resolve) => execFile('git', ['-C', dir, 'config', '--get', 'remote.origin.url'], { timeout: 3000 }, (err, out) => resolve(err ? null : ownerFromRemote(out))));
+  owners.set(dir, { at: Date.now(), owner });
+  return owner;
+}
 const STATIC = new Map([
   ['/', ['public/workspace.html', 'text/html']],
   ['/index.html', ['public/workspace.html', 'text/html']],
@@ -208,6 +219,23 @@ async function handleRequest(req, res) {
     if (!fs.existsSync(file)) { res.writeHead(404); return res.end(); }
     res.writeHead(200, { 'content-type': 'font/woff2', 'cache-control': 'max-age=31536000' });
     return fs.createReadStream(file).pipe(res);
+  }
+  const logo = p.match(/^\/logos\/([a-z-]+\.svg)$/); // agent logos, shared with the desktop renderer
+  if (logo) {
+    const file = path.join(ROOT, 'app', 'renderer', 'logos', logo[1]);
+    if (!fs.existsSync(file)) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'content-type': 'image/svg+xml', 'cache-control': 'max-age=86400' });
+    return fs.createReadStream(file).pipe(res);
+  }
+  if (p === '/api/avatar' && req.method === 'GET') { // a project's GitHub owner picture, like T3 shows; 404 if none
+    const owner = await githubOwner(url.searchParams.get('dir') || '');
+    if (!owner) { res.writeHead(404, { 'cache-control': 'max-age=600' }); return res.end(); }
+    res.writeHead(302, { location: `https://avatars.githubusercontent.com/${encodeURIComponent(owner)}?s=96`, 'cache-control': 'max-age=86400' });
+    return res.end();
+  }
+  if (p === '/api/commands' && req.method === 'GET') { // the / menu: built-in commands, your commands, skills
+    const kind = url.searchParams.get('kind') === 'codex' ? 'codex' : 'claude', cwd = url.searchParams.get('cwd') || '';
+    return json(res, 200, { items: slashItems(kind, cwd && path.isAbsolute(cwd) && fs.existsSync(cwd) ? cwd : '') });
   }
   if (p === '/api/events') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
@@ -393,7 +421,8 @@ async function files(req, res, p, q) {
   if (!st) return json(res, 404, { error: 'not found', path: file });
   if (p === '/api/file/open' && req.method === 'POST') {
     if (process.platform === 'win32') execFile('explorer.exe', q.reveal ? [`/select,${file}`] : [file], () => {});
-    else execFile('open', q.reveal ? ['-R', file] : [file], () => {});
+    else if (process.platform === 'darwin') execFile('open', q.reveal ? ['-R', file] : [file], () => {});
+    else execFile('xdg-open', [q.reveal ? path.dirname(file) : file], () => {}); // Linux file managers cannot select a file
     return json(res, 200, { ok: true });
   }
   // the viewer's editor writes text files it opened; mtime says which version it edited, so an agent's

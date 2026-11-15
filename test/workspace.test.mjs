@@ -5,7 +5,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { renderMarkdown, searchSessions, sessionTree } from '../public/workspace.mjs';
+import { renderMarkdown, searchSessions, sessionTree, parseApproval } from '../public/workspace.mjs';
+import { transcriptTitle } from '../discovery.mjs';
+import { writeFileSync } from 'node:fs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 let child, home, base;
@@ -166,4 +168,53 @@ test('agents hidden from the canvas stay hidden until shown again', async () => 
   assert.deepEqual((await (await fetch(base + '/api/state')).json()).hidden, [a.id, b.id]);
   assert.deepEqual((await (await request('/api/canvas/hidden', { ids: [a.id], hidden: false })).json()).hidden, [b.id]);
   assert.deepEqual((await (await request('/api/canvas/hidden', { all: true, hidden: false })).json()).hidden, []);
+});
+
+test('search finds sessions by title and worktree, fuzzily, but not by the main checkout label', () => {
+  const agents = [
+    { id: 'a', name: 'claude-2', title: 'Short-lived JWTs with refresh rotation', project: 'acme-api', worktreeName: 'Main checkout', worktreeHome: true, kind: 'claude', cwd: '/dev/acme-api' },
+    { id: 'b', name: 'web-checkout', title: 'Checkout on the new design system', project: 'acme-web', worktreeName: 'Main checkout', worktreeHome: true, kind: 'claude', cwd: '/dev/acme-web' },
+    { id: 'c', name: 'codex', title: '', project: 'acme-api', worktreeName: 'rate-limit', worktreeHome: false, kind: 'codex', cwd: '/dev/wt/rate' },
+  ];
+  assert.deepEqual(searchSessions(agents, 'jwt').map((a) => a.id), ['a']);
+  assert.deepEqual(searchSessions(agents, 'chkout').map((a) => a.id), ['b']);
+  assert.deepEqual(searchSessions(agents, 'ratelim').map((a) => a.id), ['c']);
+  assert.deepEqual(searchSessions(agents, 'conn').map((a) => a.id), [], 'scattered letters are not a match');
+});
+
+test('approval prompts are read off the terminal screen as a question and numbered choices', () => {
+  const claude = parseApproval(['╭────╮', '│ Bash command │', '│   rm -rf build │', '│ Do you want to proceed? │', '│ ❯ 1. Yes │', "│   2. Yes, and don't ask again │", '│   3. No, and tell Claude what to do differently (esc) │', '╰────╯']);
+  assert.match(claude.question, /rm -rf build\nDo you want to proceed\?/);
+  assert.deepEqual(claude.options.map((o) => [o.key, o.selected]), [['1', true], ['2', false], ['3', false]]);
+  const codex = parseApproval(['Allow command?', '  rm x', '› 1. Yes, proceed (y)', '  2. No (esc)']);
+  assert.equal(codex.question, 'Allow command?\nrm x');
+  assert.equal(codex.options.length, 2);
+  assert.deepEqual(parseApproval(['Press Enter to continue']).options, []);
+});
+
+test('a transcript title is Claude Code\'s newest aiTitle, else the first thing you asked', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'synapse-title-'));
+  const claude = path.join(dir, 'c.jsonl'), codex = path.join(dir, 'x.jsonl'), plain = path.join(dir, 'p.jsonl');
+  writeFileSync(claude, [{ type: 'user', message: { content: 'fix it' } }, { type: 'ai-title', aiTitle: 'Old name' }, { type: 'ai-title', aiTitle: 'Fix the login redirect loop' }].map((o) => JSON.stringify(o)).join('\n'));
+  writeFileSync(codex, [{ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '# AGENTS.md instructions\n...' }] } }, { type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: 'Add rate limits to the public API, per tenant, stored in Redis with a token bucket and tests' }] } }].map((o) => JSON.stringify(o)).join('\n'));
+  writeFileSync(plain, JSON.stringify({ type: 'user', message: { content: '<command-name>/clear</command-name>' } }));
+  assert.equal(transcriptTitle(claude), 'Fix the login redirect loop');
+  assert.equal(transcriptTitle(codex), 'Add rate limits to the public API, per tenant, stored in Redis…');
+  assert.equal(transcriptTitle(plain), '');
+  await rm(dir, { recursive: true, force: true });
+});
+
+test('a project shows its GitHub owner picture; checkouts not on GitHub get none', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { ownerFromRemote } = await import('../lib.mjs');
+  assert.deepEqual(['git@github.com:pingdotgg/t3code.git', 'https://github.com/acme-inc/api', 'ssh://git@github.com/acme/x.git', 'https://gitlab.com/a/b.git', ''].map(ownerFromRemote), ['pingdotgg', 'acme-inc', 'acme', null, null]);
+  const repo = await mkdtemp(path.join(tmpdir(), 'synapse-avatar-')), plain = await mkdtemp(path.join(tmpdir(), 'synapse-avatar-'));
+  for (const dir of [repo, plain]) execFileSync('git', ['init', '-q', dir]);
+  execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'git@github.com:acme-inc/api.git']);
+  const on = await fetch(`${base}/api/avatar?dir=${encodeURIComponent(repo)}`, { redirect: 'manual' });
+  assert.equal(on.status, 302);
+  assert.equal(on.headers.get('location'), 'https://avatars.githubusercontent.com/acme-inc?s=96');
+  assert.equal((await fetch(`${base}/api/avatar?dir=${encodeURIComponent(plain)}`, { redirect: 'manual' })).status, 404);
+  assert.equal((await fetch(`${base}/api/avatar?dir=relative/path`, { redirect: 'manual' })).status, 404);
+  await rm(repo, { recursive: true, force: true }); await rm(plain, { recursive: true, force: true });
 });

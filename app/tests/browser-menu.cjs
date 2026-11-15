@@ -50,6 +50,7 @@ const subLabels = () => js(`[...${browserItem}.querySelectorAll('.menu-sub .menu
 
   await open();
   assert.equal(await js(`${browserItem}.firstChild.textContent`), 'Browser');
+  if (process.platform === 'darwin') assert.ok(await js(`[...document.querySelectorAll('.menu-item')].some((m) => m.textContent === 'Open in Finder')`), 'the worktree opens in Finder');
   const labels = await subLabels();
   assert.equal(labels[0], '✓ Agents choose');
   assert.ok(labels.some((l) => l === 'acme.dev  (me@acme.dev · no Codex extension)'), labels.join(' | '));

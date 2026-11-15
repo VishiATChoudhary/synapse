@@ -33,6 +33,10 @@ fs.writeFileSync(path.join(fixture, 'src', 'app.js'), 'console.log(1);\n');
 const say = "printf '⏺ Update(src/app.js)\\n• Edited notes.md:2 (+1 -0), not v1.2.3 or src/missing.js\\nWrote doc.pdf\\n'; exec sleep 600";
 fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], skipLogin: true, profiles: { shell: { command: say, label: 'Shell' } } }));
 fs.writeFileSync(path.join(state, 'seen.json'), JSON.stringify({ intro: true, onboarding: true }));
+// Finder: a stand-in `open` records what it was asked to show instead of opening a window
+const bin = path.join(fixture, 'bin'), opened = path.join(fixture, 'opened.txt');
+fs.mkdirSync(bin); fs.writeFileSync(path.join(bin, 'open'), `#!/bin/sh\nprintf '%s\\n' "$@" >> ${JSON.stringify(opened)}\n`, { mode: 0o755 });
+process.env.PATH = `${bin}:${process.env.PATH}`;
 Object.assign(process.env, { SYNAPSE_HOME: state, SYNAPSE_CLOUD: 'http://127.0.0.1:9', SYNAPSE_DESKTOP_VIEW: 'terminal', SHELL: '/bin/zsh' });
 for (const key of Object.keys(process.env)) if (key.startsWith('SYNAPSE_SHOT') || key === 'SYNAPSE_DEBUG' || key === 'SYNAPSE_DEMO' || key === 'SYNAPSE_FAKE_REQUESTS') delete process.env[key];
 process.chdir(fixture);
@@ -153,6 +157,15 @@ const hovered = () => js(`!!document.querySelector('.term.visible .xterm-screen'
   await shot('wide');
   await fx(`document.querySelector('[data-act="wide"]').click()`);
   await until(async () => (await paneWidth()) < (await js(`Math.round(document.querySelector('.work').getBoundingClientRect().width)`)), 'pane back beside');
+
+  // Finder: the file is shown selected in its folder; a missing workspace folder says so instead of opening anything
+  if (process.platform === 'darwin') {
+    assert.equal(await fx(`document.querySelector('[data-act="reveal"]').textContent`), 'Finder');
+    await fx(`document.querySelector('[data-act="reveal"]').click()`);
+    await until(() => fs.existsSync(opened) && fs.readFileSync(opened, 'utf8').split('\n').join(' ').includes(`-R ${notes}`), 'notes.md shown in Finder');
+    await until(() => fx(`document.querySelector('.state').textContent === 'shown in Finder'`), 'the pane says so');
+  }
+  assert.match(await js(`synapse.files.reveal(${JSON.stringify(path.join(fixture, 'gone'))}).then(() => 'opened', (e) => e.message)`), /no longer exists/);
 
   // a pdf shows just its pages (pdf.js, no viewer toolbar), and drawing on one saves into the file
   const doc = path.join(fixture, 'doc.pdf'), pdfBefore = fs.readFileSync(doc);

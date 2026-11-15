@@ -95,7 +95,7 @@ const choose = (id) => tap(`[data-agent="${id}"]`);
   process.kill(added.pid, 0);
   console.log('PASS GUI launches a session in the selected project');
 
-  await tap('#fork-session');
+  await tap('#session-menu'); await tap('[data-session-action="fork"]');
   await page(`document.querySelector('#fork-question').value = 'Explore the child branch'; document.querySelector('#action-form').requestSubmit();`);
   await until(async () => (await rpc('state')).sessions.length === 7, 'GUI fork');
   snapshot = await rpc('state');
@@ -138,7 +138,7 @@ const choose = (id) => tap(`[data-agent="${id}"]`);
   await choose(first.id);
   await choose('demo-api-auth');
   await sleep(300);
-  assert.ok(await page(`document.querySelector('#breadcrumbs').textContent.includes('api-auth')`), 'a delayed terminal selection cannot replace a newer GUI selection');
+  assert.ok(await page(`document.querySelector('[data-agent="demo-api-auth"]').getAttribute('aria-current') === 'page'`), 'a delayed terminal selection cannot replace a newer GUI selection');
   if (process.env.SYNAPSE_DESKTOP_SCREENSHOT) {
     await page(`if (document.documentElement.dataset.theme === 'night') document.querySelector('#theme-toggle').click(); document.querySelector('#message-input').value = ''; document.querySelector('#message-input').dispatchEvent(new Event('input', { bubbles: true }));`);
     await sleep(3000);

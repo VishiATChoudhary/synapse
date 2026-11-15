@@ -13,6 +13,12 @@ body:not(.gui-mode) .desktop-toolbar { display: none; }
 .desktop-modes button[aria-pressed='true'] { background: var(--color-paper); color: var(--color-ink); box-shadow: 0 1px 3px var(--color-shadow); }
 .desktop-title { flex: 1; color: var(--color-muted); font-size: 12px; }
 #desktop-workspace { position: fixed; inset: calc(48px + var(--notch, 0px)) 0 0; z-index: 24; background: var(--color-paper); }
+/* macOS: no toolbar, the page's own header is the title bar (see dragRegions in app.js) */
+body.gui-mode:not(.win) .desktop-toolbar { display: none; } /* the GUI sidebar shows every agent and its state */
+body.gui-mode:not(.win) #desktop-workspace { top: var(--notch, 0px); }
+#gui-drag { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+#gui-drag > div { position: absolute; pointer-events: none; }
+body:not(.gui-mode) #gui-drag, body.win #gui-drag { display: none; }
 #workspace-frame { width: 100%; height: 100%; border: 0; display: block; }
 #workspace-error { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: var(--color-paper); color: var(--color-ink); font: var(--text-base)/1.5 var(--font-body); }
 #workspace-error button { padding: 8px 16px; border-radius: var(--radius-sm); background: var(--color-button); color: var(--color-button-ink); }

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
-import { git, listChoices, listWorktrees, createWorktree, openWorktree, deleteWorktree, safeDeleteWorktree, fetchBranches, pullRequests, choicePullRequest } from './worktrees.mjs';
+import { git, listChoices, listWorktrees, createWorktree, openWorktree, deleteWorktree, safeDeleteWorktree, fetchBranches, pullRequests, choicePullRequest, changes, commitAll, pushBranch, pullRequest } from './worktrees.mjs';
 import * as saved from '../saved.mjs';
 import { DATA, FILES, WIN, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, readAgentMessages, takeInbox } from '../lib.mjs';
 import { createEdge, allowTalkRequest, dismissTalkRequest, setMode, removeEdge } from '../ops.mjs';
@@ -948,7 +948,7 @@ handle('pty:restore', ({ cwd, kind, resume, cols, rows }) => {
 handle('sessions:load', () => readJSON(SESSIONS, null));
 handle('sessions:save', (data) => writeJSON(SESSIONS, data));
 const UI_STATE = path.join(DATA, 'workspace-ui.json');
-const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed']);
+const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done']);
 handle('workspace:load', () => readJSON(UI_STATE, {}));
 handle('workspace:save', ({ key, value }) => {
   if (!UI_KEYS.has(key) || typeof value !== 'string' || value.length > 768 * 1024) throw new Error('Invalid workspace preference.');
@@ -1144,6 +1144,22 @@ handle('worktree:order', ({ paths }) => {
 });
 handle('project:remove', ({ path: p }) => { const c = config(); c.workspaces = c.workspaces.filter((w) => w !== p); writeJSON(FILES.app, c); });
 // how many uncommitted changes a folder has (0 when it is not a repo); the renderer asks before anything destructive
+// a workspace or worktree folder in Finder (Explorer on Windows): the folder itself opens
+// files to attach to a prompt: their paths go into the message, which Claude Code and Codex both read
+handle('git:changes', async ({ dir }) => changes(String(dir)));
+handle('git:commit', async ({ dir, message }) => commitAll(String(dir), message));
+handle('git:push', async ({ dir }) => pushBranch(String(dir)));
+handle('git:pr', async ({ dir }) => { const r = await pullRequest(String(dir)); if (/^https:\/\/github\.com\//.test(r.url)) shell.openExternal(r.url); return r; });
+handle('files:pick', async ({ cwd } = {}) => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], buttonLabel: 'Attach',
+    defaultPath: typeof cwd === 'string' && fs.existsSync(cwd) ? cwd : undefined });
+  return r.canceled ? [] : r.filePaths;
+});
+handle('folder:reveal', async ({ dir }) => {
+  if (typeof dir !== 'string' || !fs.existsSync(dir)) throw new Error('That folder no longer exists.');
+  const err = await shell.openPath(dir);
+  if (err) throw new Error(err);
+});
 handle('git:dirty', ({ cwd }) => { try { return git(cwd, ['status', '--porcelain']).split('\n').filter(Boolean).length; } catch { return 0; } });
 // which of the paths a terminal shows exist ("src/x.ts:12", "~/notes.md", "/abs/dir"), resolved against the session's folder
 handle('files:exists', ({ cwd, paths }) => Object.fromEntries((Array.isArray(paths) ? paths : []).slice(0, 200).map((raw) => {

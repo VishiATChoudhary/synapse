@@ -12,6 +12,8 @@ const $ = (s) => document.querySelector(s);
 // Windows has no ⌘: the app's shortcuts are Ctrl+Shift+key there (Alt adds what ⇧ adds on a Mac), and every
 // title and hint written with Mac glyphs is rewritten to say so (winKeys below)
 const WIN = navigator.userAgent.includes('Windows');
+const FINDER = WIN ? 'Explorer' : navigator.userAgent.includes('Mac') ? 'Finder' : 'file manager';
+const revealItem = (dir) => ({ label: `Open in ${FINDER}`, run: () => synapse.files.reveal(dir).catch((e) => toast(e.message, true)) });
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
 // Small inline SVGs inherit the current theme and need no image dependency.
@@ -175,6 +177,9 @@ function dropPaths(wrap, term) {
   });
 }
 let fileBase = null;
+// GitHub owner pictures for projects come from the local server (it reads each checkout's origin)
+let avatarBase = null; const avatarMiss = new Set();
+synapse.canvas().then((url) => { avatarBase = url; try { render(); } catch {} }).catch(() => {});
 const ownerOf = (term) => { for (const s of M.slots) for (const x of s.sessions) if (x.term === term) return x; return null; };
 async function openFile(target, cwd, term) {
   const x = ownerOf(term);
@@ -893,6 +898,14 @@ function renderTree() {
     const box = el('div', 'proj' + (M.open.has(p.key) ? '' : ' closed')); box.dataset.key = p.key;
     const head = el('div', 'proj-head');
     const sw = el('span', 'swatch'); sw.style.background = p.color;
+    const home = (p.worktrees.find((w) => w.home) || p.worktrees[0])?.path;
+    if (avatarBase && home && !avatarMiss.has(home)) { // the project's GitHub owner picture, square like the rest
+      const img = el('img', 'swatch-img'); img.alt = ''; img.referrerPolicy = 'no-referrer';
+      img.onload = () => sw.classList.add('has-img');
+      img.onerror = () => { avatarMiss.add(home); img.remove(); };
+      img.src = new URL(`api/avatar?${new URLSearchParams({ dir: home })}`, avatarBase).href;
+      sw.append(img);
+    }
     const live = M.slots.filter((s) => p.worktrees.some((w) => w.path === s.worktree)).length;
     const pn = el('span', 'proj-name', p.label);
     const toggleProject = () => foldProject(p.key);
@@ -1882,7 +1895,7 @@ $('.side').addEventListener('contextmenu', async (e) => {
     if (top(s)) items.push(...sessionActions(s, top(s)));
     items.push('-', { label: 'Close session', danger: true, run: () => closeSlotAsk(s) });
   } else if (w) {
-    items.push({ label: 'New agent', sub: agentMenu(w.path) }, { label: 'New worktree', run: () => promptWorktree(p) });
+    items.push({ label: 'New agent', sub: agentMenu(w.path) }, { label: 'New worktree', run: () => promptWorktree(p) }, revealItem(w.path));
     const b = await browserItem(p);
     items.push(...(b ? [b] : []), '-');
     items.push(w.protected
@@ -1894,7 +1907,7 @@ $('.side').addEventListener('contextmenu', async (e) => {
     const first = p.worktrees[0]?.path;
     if (first) items.push({ label: 'New agent', sub: agentMenu(first) });
     const b = await browserItem(p);
-    items.push({ label: 'New worktree', run: () => promptWorktree(p) }, ...(b ? [b] : []), '-', { label: 'Remove from sidebar', run: () => removeFromSidebar(p.worktrees.map((x) => x.path), p.label) });
+    items.push({ label: 'New worktree', run: () => promptWorktree(p) }, revealItem(p.path), ...(b ? [b] : []), '-', { label: 'Remove from sidebar', run: () => removeFromSidebar(p.worktrees.map((x) => x.path), p.label) });
   } else {
     items.push({ label: 'New workspace', run: () => promptProject() });
   }
@@ -3747,8 +3760,36 @@ async function desktopAction(action, args) {
       return { id: `desktop-${made.sessions[0].key}` };
     }
     case 'select': { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); render(); return; }
+    case 'git': {
+      const { s } = ownSession(args.id), dir = s.worktree;
+      if (args.op === 'changes') return synapse.git.changes(dir);
+      if (args.op === 'commit') return synapse.git.commit(dir, String(args.message || '').slice(0, 4000));
+      if (args.op === 'push') return synapse.git.push(dir);
+      if (args.op === 'pr') return synapse.git.pr(dir);
+      throw new Error('Unknown git action.');
+    }
+    case 'attach': { const { s } = ownSession(args.id); return synapse.files.pick(s.worktree); }
     case 'terminal': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } showWorkspace(false); return; }
+    case 'model': {
+      const { x } = ownSession(args.id); if (x.exited) throw new Error('This session has ended.');
+      if (!['opus', 'sonnet', 'haiku', 'fable'].includes(args.model)) throw new Error('Choose Opus, Sonnet, Haiku or Fable.');
+      return synapse.pty.submit(x.pty, `/model ${args.model}`);
+    }
     case 'submit': { const { x } = ownSession(args.id); if (x.exited) throw new Error('This session has ended.'); return synapse.pty.submit(x.pty, args.text); }
+    // approvals from the GUI: what the terminal shows now, and a few safe keys (a menu choice, Enter, Escape, arrows)
+    case 'screen': {
+      const { x } = ownSession(args.id), buffer = x.term.buffer.active, lines = [];
+      for (let i = buffer.viewportY; i < buffer.viewportY + x.term.rows; i++) lines.push(buffer.getLine(i)?.translateToString(true) || '');
+      return { lines: lines.join('\n').trimEnd().split('\n').slice(-24) };
+    }
+    case 'keys': {
+      const { x } = ownSession(args.id); if (x.exited) throw new Error('This session has ended.');
+      const KEYS = { enter: '\r', escape: '\x1b', up: '\x1b[A', down: '\x1b[B', tab: '\t' };
+      const key = String(args.key || '');
+      const data = KEYS[key] ?? (/^[1-9yna]$/.test(key) ? key : null);
+      if (data == null) throw new Error('That key is not allowed here.');
+      return synapse.pty.write(x.pty, data);
+    }
     case 'output': {
       const { x } = ownSession(args.id), buffer = x.term.buffer.active, lines = [];
       for (let i = Math.max(0, buffer.length - 500); i < buffer.length; i++) lines.push(buffer.getLine(i)?.translateToString(true) || '');
@@ -3784,6 +3825,7 @@ async function desktopAction(action, args) {
       const worktrees = p.worktrees.map((w) => ({ label: w.name, sub: [
         { label: 'New session', sub: agentMenu(w.path) },
         { label: 'Rename', run: () => rename('Rename worktree', w.name, (name) => synapse.worktree.rename(w.path, name)) },
+        revealItem(w.path),
         ...(!w.home ? [{ label: 'Delete worktree', danger: true, run: () => removeWorktreeAsk(p, w) }] : []),
       ] }));
       contextMenu([
@@ -3792,7 +3834,7 @@ async function desktopAction(action, args) {
         { label: 'Rename project', run: () => rename('Rename project', p.label, (name) => synapse.project.rename(p.key, name)) },
         ...(await browserItem(p).then((b) => (b ? [b] : []))),
         '-', { label: 'Remove from sidebar', danger: true, run: () => removeFromSidebar(p.worktrees.map((w) => w.path), p.label) },
-      ], Math.max(0, Number(args.x) || 0), Math.max(48, (Number(args.y) || 0) + 48));
+      ], Math.max(0, Number(args.x) || 0), Math.max(guiTop(), (Number(args.y) || 0) + guiTop()));
       return;
     }
     case 'settings': return openSettings();
@@ -3800,6 +3842,7 @@ async function desktopAction(action, args) {
     // answers (share, ask, accept, deny). Agents are named by their Synapse id.
     case 'friends': return friendsSnapshot();
     case 'sign-in': return showLogin();
+    case 'people-add': { const who = String(args.who || '').trim().slice(0, 120); if (!who) throw new Error('Enter an email or @handle.'); const r = await synapse.people.add(who); await loadPeople(true); return { ok: true, person: r?.person?.handle || who }; }
     case 'friend-offer': return synapse.requests.offer(String(args.to || ''), String(args.agent || ''), args.mode === 'sync' ? 'sync' : 'talk');
     case 'friend-ask': return synapse.requests.ask(String(args.to || ''), String(args.agent || ''), String(args.target || '').slice(0, 120));
     case 'friend-accept': {
@@ -3813,7 +3856,8 @@ async function desktopAction(action, args) {
     case 'account': return openAccount();
     case 'canvas': return openCanvas();
     case 'canvas-ready': syncCanvasBranches(); return;
-    case 'canvas-menu': return canvasMenu(args, { left: 0, top: 48 });
+    case 'canvas-menu': return canvasMenu(args, { left: 0, top: guiTop() });
+    case 'drag-regions': return dragRegions(args);
     case 'switch-session': if (/^[1-9\[\]]$/.test(args.key)) switchSession(args.key); return;
     case 'activity': workspacePost({ type: 'synapse:desktop-navigate', view: 'activity' }); return;
     case 'activity:get': return synapse.activity.get();
@@ -3833,18 +3877,35 @@ addEventListener('message', async (event) => {
     event.source.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, event.origin);
     return;
   }
-  if (event.data?.type === 'synapse:desktop-ready') { workspaceLive = true; syncWorkspace(true); return; }
+  if (event.data?.type === 'synapse:desktop-ready') { workspaceLive = true; syncWorkspace(true); sendChrome(); return; }
   const { type, request, action, args = {} } = event.data || {};
   if (type !== 'synapse:desktop-call' || typeof request !== 'string' || request.length > 80) return;
   try {
     const value = await desktopAction(action, args);
     workspacePost({ type: 'synapse:desktop-reply', request, value });
-    if (action !== 'preference') syncWorkspace(true);
+    if (action !== 'preference' && action !== 'drag-regions') syncWorkspace(true);
   } catch (e) { workspacePost({ type: 'synapse:desktop-reply', request, error: e.message }); }
 });
 $('#mode-gui').onclick = openWorkspace;
 $('#mode-terminal').onclick = () => showWorkspace(false);
 $('#desktop-settings').onclick = openSettings;
+// On macOS the GUI has no toolbar of its own (unless the agent bar is on): its header is the window's title bar.
+// The page reports where its header strips and their controls are; the strips become drag regions here,
+// pointer-events none, so clicks still reach the page, and the controls stay clickable.
+function guiTop() { return Math.round($('#desktop-workspace').getBoundingClientRect().top); }
+const dragLayer = document.createElement('div'); dragLayer.id = 'gui-drag'; $('#desktop-workspace').append(dragLayer);
+function dragRegions({ areas = [], holes = [] } = {}) {
+  const box = (r, drag) => {
+    const d = document.createElement('div');
+    const n = (v) => Math.max(0, Math.min(4000, Number(v) || 0));
+    d.style.cssText = `left:${n(r.x)}px;top:${n(r.y)}px;width:${n(r.w)}px;height:${n(r.h)}px;-webkit-app-region:${drag ? 'drag' : 'no-drag'}`;
+    return d;
+  };
+  if (!Array.isArray(areas) || !Array.isArray(holes)) return;
+  dragLayer.replaceChildren(...areas.slice(0, 8).map((r) => box(r, true)), ...holes.slice(0, 80).map((r) => box(r, false)));
+}
+const sendChrome = () => workspacePost({ type: 'synapse:desktop-chrome', inset: WIN || getComputedStyle($('.desktop-toolbar')).display !== 'none' ? 0 : 76 });
+new ResizeObserver(sendChrome).observe($('#desktop-workspace'));
 
 // ---------------------------------------------------------------- boot
 
