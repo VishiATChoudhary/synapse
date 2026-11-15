@@ -948,7 +948,7 @@ handle('pty:restore', ({ cwd, kind, resume, cols, rows }) => {
 handle('sessions:load', () => readJSON(SESSIONS, null));
 handle('sessions:save', (data) => writeJSON(SESSIONS, data));
 const UI_STATE = path.join(DATA, 'workspace-ui.json');
-const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived']);
+const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept']);
 handle('workspace:load', () => readJSON(UI_STATE, {}));
 handle('workspace:save', ({ key, value }) => {
   if (!UI_KEYS.has(key) || typeof value !== 'string' || value.length > 768 * 1024) throw new Error('Invalid workspace preference.');
@@ -1150,27 +1150,34 @@ handle('project:remove', ({ path: p }) => { const c = config(); c.workspaces = c
 // clipboard itself. Copied files give their paths; an image (a screenshot) is saved and gives the saved file's path.
 const PASTES = path.join(DATA, 'pastes');
 const stampName = (ext) => `paste-${new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
-export function clipboardFiles() {
+// Electron 44's clipboard is the async W3C one: read() gives items, each with MIME types and raw OS formats.
+const RAW = (format) => `electron application/osclipboard;format="${format}"`;
+const blobOf = async (item, type) => item.types.includes(type) ? Buffer.from(await (await item.getType(type)).arrayBuffer()) : null;
+export async function clipboardFiles(items) {
   const out = [];
-  if (process.platform === 'darwin') {
-    const plist = clipboard.read('NSFilenamesPboardType');
-    for (const m of plist.matchAll(/<string>([^<]+)<\/string>/g)) out.push(m[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&apos;/g, "'").replace(/&quot;/g, '"'));
-    if (!out.length) { const url = clipboard.read('public.file-url'); if (url.startsWith('file://')) try { out.push(fileURLToPath(url)); } catch {} }
-  } else if (WIN) {
-    const raw = clipboard.readBuffer('FileNameW');
-    if (raw.length) out.push(...raw.toString('ucs2').split('\0').filter(Boolean));
+  for (const item of items) {
+    const names = await blobOf(item, RAW('NSFilenamesPboardType')); // every file copied in Finder
+    if (names) for (const m of names.toString('utf8').matchAll(/<string>([^<]+)<\/string>/g)) out.push(m[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&apos;/g, "'").replace(/&quot;/g, '"'));
+    const wide = !names && await blobOf(item, RAW('FileNameW')); // Explorer
+    if (wide) out.push(...wide.toString('ucs2').split('\0').filter(Boolean));
+    const uris = !out.length && await blobOf(item, 'text/uri-list');
+    if (uris) for (const line of uris.toString('utf8').split(/\r?\n/)) if (line.startsWith('file://')) try { out.push(fileURLToPath(line.trim())); } catch {}
   }
-  return out.filter((p) => path.isAbsolute(p) && fs.existsSync(p));
+  return [...new Set(out)].filter((p) => path.isAbsolute(p) && fs.existsSync(p));
 }
-handle('clipboard:files', () => {
-  const files = clipboardFiles();
+handle('clipboard:files', async () => {
+  const items = await clipboard.read();
+  const files = await clipboardFiles(items);
   if (files.length) return { paths: files };
-  const image = clipboard.readImage();
-  if (image.isEmpty()) return { paths: [] };
-  fs.mkdirSync(PASTES, { recursive: true });
-  const file = path.join(PASTES, stampName('png'));
-  fs.writeFileSync(file, image.toPNG());
-  return { paths: [file], saved: true };
+  for (const item of items) {
+    const png = await blobOf(item, 'image/png');
+    if (!png?.length) continue;
+    fs.mkdirSync(PASTES, { recursive: true });
+    const file = path.join(PASTES, stampName('png'));
+    fs.writeFileSync(file, png);
+    return { paths: [file], saved: true };
+  }
+  return { paths: [] };
 });
 // a file dropped on the GUI composer arrives as bytes; keep a copy where the agent can read it
 handle('files:save', ({ name, data }) => {

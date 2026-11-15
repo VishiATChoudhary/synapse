@@ -318,7 +318,7 @@ function initialize() {
     if (!desktop) return next;
     const existing = new Map(next.agents.map((a) => [a.id, a]));
     const aliases = new Map(desktop.sessions.filter((s) => s.backendId).map((s) => [s.backendId, s.id]));
-    const owned = desktop.sessions.map((s) => {
+    const owned = desktop.sessions.filter((s) => !s.drawer).map((s) => {
       const original = existing.get(s.backendId);
       return { ...original, ...s, owned: true, lastActivity: Math.max(s.lastActivity || 0, original?.lastActivity || 0), preview: original?.preview || (s.exited ? 'Session ended' : 'Ready for your next prompt') };
     });
@@ -331,7 +331,7 @@ function initialize() {
       const message = event.data;
       const owns = (id) => desktop?.sessions.some((s) => s.id === id && s.pane === pane.dataset.paneKey);
       if (message?.type === 'synapse:desktop-bootstrap') {
-        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived'].map((key) => [key, getStorage(key, null)]));
+        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept'].map((key) => [key, getStorage(key, null)]));
         pane.contentWindow.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, location.origin);
       }
       if (message?.type === 'synapse:desktop-ready') sendPaneState(pane);
@@ -380,7 +380,7 @@ function initialize() {
     }
     if (paneKey && message?.type === 'synapse:pane-state') {
       const changed = selectedId !== message.id;
-      if (changed) { persistDraft(); recentController?.abort(); recentTarget = null; recentRequest++; tab = 'conversation'; limit = 60; }
+      if (changed) { persistDraft(); recentController?.abort(); recentTarget = null; recentRequest++; tab = defaultTab(state.agents.find((a) => a.id === message.id)); limit = 60; }
       desktop = message.desktop; selectedId = message.id; view = 'session';
       drafts = { ...drafts, ...message.drafts };
       if (changed) { $('message-input').value = drafts[selectedId] || ''; resizeComposer(); }
@@ -417,6 +417,11 @@ function initialize() {
     }
     if (message?.type === 'synapse:desktop-navigate') navigate(message.view === 'back' || (message.toggle && view === message.view) ? byId.has(selectedId) ? 'session' : 'overview' : message.view, message.id || selectedId);
     if (message?.type === 'synapse:activity-progress') activityView.progress(message.progress);
+    if (message?.type === 'synapse:desktop-key') {
+      if (message.key === 'j') toggleDrawer();
+      else if (message.key === 'k') openSearch();
+      else if (message.key === 'n' && !message.shift) connectAgent();
+    }
     if (message?.type === 'synapse:canvas-action') sendCanvas(message.action);
   });
   const $ = (id) => document.getElementById(id);
@@ -465,6 +470,7 @@ function initialize() {
   function readRoute() {
     const route = location.hash.slice(1);
     if (['overview', 'connections', 'activity', 'canvas'].includes(route)) view = route;
+    else if (route === 'new' && embedded) view = 'new';
     else if (route.startsWith('agent=')) { view = 'session'; selectedId = new URLSearchParams(route).get('agent'); }
   }
   readRoute();
@@ -568,29 +574,105 @@ function initialize() {
   const readJSON = (key, fallback) => { try { return JSON.parse(getStorage(key, '')) ?? fallback; } catch { return fallback; } };
   // Every agent has a state, like a thread in T3: it needs you, it is working, it finished while you were away
   // (done, until you open it), or it rests. Snoozed agents step aside until their time or until they need you.
-  let snoozed = readJSON('synapse-snoozed', {}), doneSet = new Set(readJSON('synapse-done', [])), archived = readJSON('synapse-archived', {});
-  const lastStatus = new Map();
-  const saveMarks = () => { setStorage('synapse-snoozed', JSON.stringify(snoozed)); setStorage('synapse-done', JSON.stringify([...doneSet])); setStorage('synapse-archived', JSON.stringify(archived)); };
+  // done keeps the time it finished (older saves kept a list: those count from now)
+  const doneSaved = readJSON('synapse-done', {});
+  let snoozed = readJSON('synapse-snoozed', {}), archived = readJSON('synapse-archived', {});
+  const doneSet = new Map(Array.isArray(doneSaved) ? doneSaved.map((id) => [id, Date.now()]) : Object.entries(doneSaved).filter(([, t]) => Number.isFinite(t)));
+  const lastStatus = new Map(), missingSince = new Map();
+  const saveMarks = () => { setStorage('synapse-snoozed', JSON.stringify(snoozed)); setStorage('synapse-done', JSON.stringify(Object.fromEntries(doneSet))); setStorage('synapse-archived', JSON.stringify(archived)); setStorage('synapse-kept', JSON.stringify(unarchivedAt)); };
+  // Tidying up on its own, each step configurable (sidebar filter menu → Tidy up): a finished agent shows Done
+  // until it is a day old, then Idle; unused for 3 days it moves to Archived; a week unused, a session this app
+  // started is closed and its marks are dropped. 0 turns a step off.
+  const HOUR = 3_600_000, DAY = 24 * HOUR;
+  const TIDY_DEFAULT = { idle: DAY, archive: 3 * DAY, close: 7 * DAY };
+  let tidy = { ...TIDY_DEFAULT, ...readJSON('synapse-tidy', {}) };
+  const unarchivedAt = readJSON('synapse-kept', {}); // unarchived by hand: left alone for another full period
+  const usedAt = (a) => a.lastActivity || 0;
+  const expiring = new Set();
   const needsYou = (a) => ['waiting', 'needs_input'].includes(a.status);
   function trackStates() {
     let changed = false;
     for (const a of state.agents) {
       const was = lastStatus.get(a.id);
       lastStatus.set(a.id, a.status);
-      const open = view === 'session' && selectedId === a.id && document.visibilityState === 'visible';
-      if (was === 'busy' && a.status !== 'busy' && !needsYou(a) && !open && !doneSet.has(a.id)) { doneSet.add(a.id); changed = true; }
-      if ((a.status === 'busy' || open) && doneSet.delete(a.id)) changed = true;
+      if (was === 'busy' && a.status !== 'busy' && !needsYou(a)) { doneSet.set(a.id, Date.now()); changed = true; }
+      if (a.status === 'busy' && doneSet.delete(a.id)) changed = true;
+      const finished = doneSet.get(a.id);
+      if (finished && tidy.idle && Date.now() - finished > tidy.idle) { doneSet.delete(a.id); changed = true; }
+      const busy = a.status === 'busy' || needsYou(a), idleFor = Date.now() - Math.max(usedAt(a), finished || 0, unarchivedAt[a.id] || 0);
+      if (!busy && tidy.archive && idleFor > tidy.archive && archived[a.id] === undefined && a.id !== selectedId && usedAt(a)) { archived[a.id] = Date.now(); delete snoozed[a.id]; doneSet.delete(a.id); changed = true; }
+      if (!busy && embedded && a.owned && !a.exited && tidy.close && idleFor > tidy.close && usedAt(a) && !expiring.has(a.id) && a.id !== selectedId) {
+        expiring.add(a.id);
+        desktopCall('expire', { id: a.id }).then((r) => { if (r?.closed) forget(a.id); }).catch(() => {}).finally(() => expiring.delete(a.id));
+      }
       const until = snoozed[a.id];
       if (until !== undefined && (needsYou(a) || (until && Date.now() >= until) || (!until && doneSet.has(a.id)))) { delete snoozed[a.id]; changed = true; }
     }
     const live = new Set(state.agents.map((a) => a.id));
-    for (const id of [...doneSet]) if (!live.has(id)) { doneSet.delete(id); changed = true; }
+    // gone for 10 minutes (not just between two refreshes, or before the app has sent its sessions): forget it
+    for (const id of live) missingSince.delete(id);
+    for (const id of doneSet.keys()) if (!live.has(id)) {
+      if (!missingSince.has(id)) missingSince.set(id, Date.now());
+      else if (Date.now() - missingSince.get(id) > 10 * 60_000) { doneSet.delete(id); missingSince.delete(id); changed = true; }
+    }
     for (const id of Object.keys(snoozed)) if (!live.has(id) && !String(id).startsWith('desktop-')) { delete snoozed[id]; changed = true; }
     for (const id of Object.keys(archived)) if (!live.has(id) && Date.now() - archived[id] > 7 * 86_400_000) { delete archived[id]; changed = true; }
+    for (const id of Object.keys(unarchivedAt)) if (!live.has(id) && Date.now() - unarchivedAt[id] > 30 * DAY) { delete unarchivedAt[id]; changed = true; }
     if (changed) saveMarks();
+  }
+  // a session closed for being unused: its marks, draft and cached conversation go too
+  function forget(id) {
+    doneSet.delete(id); delete snoozed[id]; delete archived[id]; delete unarchivedAt[id]; recentCache.delete(id);
+    if (drafts[id] !== undefined) { delete drafts[id]; setStorage('synapse-drafts', JSON.stringify(drafts)); }
+    saveMarks();
+  }
+  function tidyDialog() {
+    const opt = (value, current, label) => `<option value="${value}"${value === current ? ' selected' : ''}>${label}</option>`;
+    const select = (id, current, choices) => `<select class="field" id="${id}">${choices.map(([v, l]) => opt(v, current, l)).join('')}</select>`;
+    const never = [0, 'Never'];
+    openModal('Tidy up', `<p class="dialog-copy">How long agents stay where they are before Synapse moves them along. Agents that are working or waiting for you are never touched.</p>
+      <label class="field-label" for="tidy-idle">Done turns to Idle after</label>${select('tidy-idle', tidy.idle, [[HOUR, '1 hour'], [6 * HOUR, '6 hours'], [DAY, '1 day'], [3 * DAY, '3 days'], never])}
+      <label class="field-label" for="tidy-archive">Unused agents go to Archived after</label>${select('tidy-archive', tidy.archive, [[DAY, '1 day'], [3 * DAY, '3 days'], [7 * DAY, '1 week'], [14 * DAY, '2 weeks'], never])}
+      <label class="field-label" for="tidy-close">Sessions this app started close after</label>${select('tidy-close', tidy.close, [[3 * DAY, '3 days'], [7 * DAY, '1 week'], [14 * DAY, '2 weeks'], [30 * DAY, '30 days'], never])}
+      <p class="field-hint">Closing ends the agent's process and clears its marks and draft here. Its conversation stays on disk and can be resumed from Past chats. Sessions running in your own terminals are only archived, never closed.</p>`, 'Save', async () => {
+      tidy = { idle: Number($('tidy-idle').value), archive: Number($('tidy-archive').value), close: Number($('tidy-close').value) };
+      setStorage('synapse-tidy', JSON.stringify(tidy)); renderSidebar(); toast('Saved.');
+    });
   }
   const stateOf = (a) => (needsYou(a) ? 'needs' : a.status === 'busy' ? 'working' : doneSet.has(a.id) ? 'done' : a.exited ? 'ended' : 'idle');
   const isSnoozed = (a) => snoozed[a.id] !== undefined && a.id !== selectedId;
+  // Status view sorts by trigger: when each agent entered its current state. Output from a working agent does not
+  // reorder anything; a row moves only when its agent starts, stops, finishes or needs you, and then it goes on top.
+  const triggered = new Map();
+  const statusKey = (a) => (stateOf(a) === 'ended' ? 'idle' : stateOf(a));
+  function triggerAt(a) {
+    const key = statusKey(a), seen = triggered.get(a.id);
+    if (seen?.key === key) return seen.at;
+    const at = seen ? Date.now() : (a.lastActivity || 0); // first sighting keeps the order agents had
+    triggered.set(a.id, { key, at });
+    return at;
+  }
+  const byTrigger = (x, y) => triggerAt(y.a) - triggerAt(x.a) || String(x.a.id).localeCompare(String(y.a.id));
+  // rows slide from where they were to where they are (FLIP); one that moved up glows once
+  function flipStart() {
+    if (groupBy !== 'status' || matchMedia('(prefers-reduced-motion: reduce)').matches) return null;
+    const at = new Map();
+    for (const [id, node] of sessionElements) if (node.isConnected) at.set(id, node.getBoundingClientRect().top);
+    return at;
+  }
+  function flipEnd(before) {
+    if (!before?.size) return;
+    for (const [id, node] of sessionElements) {
+      if (!node.isConnected) continue;
+      if (!before.has(id)) { node.animate([{ opacity: 0, transform: 'translateY(-6px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'ease-out' }); continue; }
+      const dy = before.get(id) - node.getBoundingClientRect().top;
+      if (Math.abs(dy) < 2) continue;
+      if (dy > 0) node.classList.add('moving-up');
+      node.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 480, easing: 'cubic-bezier(.2,.8,.2,1)' })
+        .finished.catch(() => {}).then(() => node.classList.remove('moving-up'));
+      if (dy > 0) node.firstElementChild?.animate([{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 24%, transparent)' }, { backgroundColor: 'transparent' }], { duration: 1400, easing: 'ease-out' });
+    }
+  }
   const isArchived = (a) => archived[a.id] !== undefined && a.id !== selectedId;
   function snooze(id, until) {
     if (until === null) delete snoozed[id]; else snoozed[id] = until;
@@ -627,11 +709,11 @@ function initialize() {
       ]),
       ...(doneSet.has(agent.id) ? [{ label: 'Mark as seen', icon: 'check', run: () => { doneSet.delete(agent.id); saveMarks(); renderSidebar(); } }] : []),
       arch ? { label: 'Unarchive', icon: 'archive', run: () => archive(agent.id, false) } : { label: 'Archive', icon: 'archive', run: () => archive(agent.id, true) },
-      ...(agent.owned ? ['-', { label: 'Open in Terminal', icon: 'terminal', run: () => runDesktop('terminal', { id: agent.id }) }, { label: 'Close session', danger: true, run: () => runDesktop('close', { id: agent.id }) }] : []),
+      ...(agent.owned ? ['-', { label: 'Open in Terminal mode', icon: 'terminal', run: () => runDesktop('terminal', { id: agent.id }) }, { label: 'Close session', danger: true, run: () => runDesktop('close', { id: agent.id }) }] : []),
     ];
   }
   function archive(id, on) {
-    if (on) { archived[id] = Date.now(); delete snoozed[id]; doneSet.delete(id); } else delete archived[id];
+    if (on) { archived[id] = Date.now(); delete snoozed[id]; doneSet.delete(id); } else { delete archived[id]; unarchivedAt[id] = Date.now(); }
     saveMarks();
     if (on && selectedId === id) { const next = state.agents.find((a) => a.id !== id && !archived[a.id]); navigate(next ? 'session' : 'overview', next?.id || null); }
     renderSidebar();
@@ -704,6 +786,9 @@ function initialize() {
   function renderSidebar() {
     if (sidebarDrag || paneKey) return;
     trackStates();
+    for (const a of state.agents) triggerAt(a); // note every state change, even in a group of one
+    for (const id of triggered.keys()) if (!byId.has(id)) triggered.delete(id);
+    const flip = flipStart();
     const groups = projectGroups(true), desired = [], live = new Set(), liveWorktrees = new Set(), settledRoots = [], snoozedRoots = [];
     // the search box filters the list as you type (fuzzy, like ⌘K); a fork stays under its parent
     const query = sidebarQuery.trim();
@@ -840,7 +925,7 @@ function initialize() {
       const recent = (x, y) => (y.a.lastActivity || 0) - (x.a.lastActivity || 0);
       if (groupBy === 'status') {
         for (const [key, label] of [['needs', 'Needs you'], ['working', 'Working'], ['done', 'Done'], ['idle', 'Idle']]) {
-          const these = rows.filter((r) => (stateOf(r.a) === 'ended' ? 'idle' : stateOf(r.a)) === key).sort(recent);
+          const these = rows.filter((r) => statusKey(r.a) === key).sort(byTrigger);
           if (these.length) desired.push(flatSection(key, label, these.map((r) => sessionNode(r.entry, 0, r.place))));
         }
       } else desired.push(flatSection('recent', 'Recent', rows.sort(recent).map((r) => sessionNode(r.entry, 0, r.place))));
@@ -863,6 +948,7 @@ function initialize() {
       const empty = document.createElement('p'); empty.className = 'sidebar-placeholder'; empty.textContent = `Nothing matches “${query}”.`; desired.push(empty);
     }
     syncChildren($('project-list'), desired);
+    flipEnd(flip);
     $('project-list').dataset.group = groupBy;
     $('project-count').textContent = groups.length || '';
     const linkCount = state.edges.filter((edge) => byId.has(edge.from) && byId.has(edge.to)).length;
@@ -924,6 +1010,8 @@ function initialize() {
       { label: 'Group by project', icon: mark('project'), run: set('project') },
       { label: 'Group by status', icon: mark('status'), run: set('status') },
       { label: 'Most recent first', icon: mark('recent'), run: set('recent') },
+      '-',
+      { label: 'Tidy up…', icon: 'clock', run: tidyDialog },
     ]);
   }
   function personMenu(button) {
@@ -1057,7 +1145,7 @@ function initialize() {
     persistDraft();
     recentController?.abort(); recentTarget = null; recentRequest++;
     view = nextView; selectedId = nextView === 'session' ? id : selectedId;
-    tab = 'conversation'; limit = 60;
+    tab = defaultTab(byId.get(selectedId)); limit = 60;
     if (nextView === 'session') {
       setStorage('synapse-selected', id);
       $('message-input').value = drafts[id] || '';
@@ -1128,6 +1216,7 @@ function initialize() {
     const split = splitActive = renderSplits(isSession && agent.owned);
     if (embedded && !paneKey && reportedView !== view) { reportedView = view; desktopCall('view', { view }).catch((e) => toast(e.message)); }
     $('thread-view').hidden = !isSession || split;
+    $('new-view').hidden = view !== 'new';
     $('overview-view').hidden = view !== 'overview';
     $('connections-view').hidden = view !== 'connections';
     $('activity-view').hidden = view !== 'activity';
@@ -1145,23 +1234,32 @@ function initialize() {
         $('fork-session').disabled = !['claude', 'codex'].includes(agent.kind) && !state.demo;
       }
       $('delivery-note').textContent = agent.owned ? 'Sent directly to this session. When it asks you something, the choices show up here.' : 'Delivered on the agent’s next prompt or inbox check.';
-      $('conversation-tab').setAttribute('aria-selected', String(tab === 'conversation'));
-      $('messages-tab').setAttribute('aria-selected', String(tab === 'messages'));
-      $('conversation-tab').tabIndex = tab === 'conversation' ? 0 : -1;
-      $('messages-tab').tabIndex = tab === 'messages' ? 0 : -1;
+      if (tab === 'terminal' && !(embedded && agent.owned)) tab = 'conversation';
+      const shell = embedded && agent.owned && agent.kind === 'shell'; // a shell has no conversation: its terminal is the view
+      if (shell) tab = 'terminal';
+      $('terminal-tab').hidden = !(embedded && agent.owned);
+      $('conversation-tab').hidden = $('messages-tab').hidden = shell;
+      for (const name of ['conversation', 'messages', 'terminal']) { $(`${name}-tab`).setAttribute('aria-selected', String(tab === name)); $(`${name}-tab`).tabIndex = tab === name ? 0 : -1; }
       $('thread-scroll').setAttribute('aria-labelledby', tab === 'messages' ? 'messages-tab' : 'conversation-tab');
+      $('thread-scroll').hidden = tab === 'terminal';
+      $('term-host').hidden = tab !== 'terminal';
+      $('thread-view').querySelector('.composer-region').hidden = tab === 'terminal';
+      if (embedded) { $('open-terminal').hidden = !agent.cwd; $('open-terminal').setAttribute('aria-expanded', String(!$('term-drawer').hidden)); }
+      if (drawerCwd && agent.cwd && drawerCwd !== agent.cwd && !$('term-drawer').hidden) openDrawer(true);
       if (reset) { $('message-input').value = drafts[selectedId] || ''; $('send-error').hidden = true; }
-      if (!split) { updateComposer(); renderTimeline(reset); loadRecent(); }
+      if (!split && tab !== 'terminal') { updateComposer(); renderTimeline(reset); loadRecent(); }
       document.title = `${titleOf(agent)} · Synapse`;
     } else {
-      const title = view === 'activity' ? 'Activity' : view === 'canvas' ? 'Canvas' : view === 'connections' ? 'Connections' : 'Your workspace';
+      const title = view === 'new' ? 'New session' : view === 'activity' ? 'Activity' : view === 'canvas' ? 'Canvas' : view === 'connections' ? 'Connections' : 'Your workspace';
       $('breadcrumbs').textContent = title;
+      if (view === 'new') renderNew();
       document.title = `${title} · Synapse`;
       if (view === 'canvas') { if (!$('gui-canvas').src) $('gui-canvas').src = '/canvas'; }
       else if (view === 'activity') activityView.refresh();
-      else if (view === 'connections') renderConnections(); else renderOverview();
+      else if (view === 'connections') renderConnections(); else if (view !== 'new') renderOverview();
     }
     syncInspector();
+    syncDocks();
   }
 
   function renderOverview() {
@@ -1344,7 +1442,7 @@ function initialize() {
     const choices = options.length
       ? options.map((o) => `<button type="button" class="button ${o.selected ? 'primary' : 'secondary'}" data-approval-key="${o.key}"><kbd>${o.key}</kbd>${escapeHtml(o.label)}</button>`).join('')
       : `<button type="button" class="button primary" data-approval-key="enter">Continue</button>`;
-    card.innerHTML = `<div class="approval-head">${head}</div>${question ? `<pre class="approval-question">${escapeHtml(question)}</pre>` : ''}<div class="approval-choices">${choices}<button type="button" class="button secondary" data-approval-key="escape">Cancel <kbd>Esc</kbd></button><button type="button" class="text-button" data-action="desktop-terminal">Open Terminal ${icon('external')}</button></div>`;
+    card.innerHTML = `<div class="approval-head">${head}</div>${question ? `<pre class="approval-question">${escapeHtml(question)}</pre>` : ''}<div class="approval-choices">${choices}<button type="button" class="button secondary" data-approval-key="escape">Cancel <kbd>Esc</kbd></button><button type="button" class="text-button" data-action="show-terminal">Show terminal ${icon('terminal')}</button></div>`;
     card.hidden = false; approvalFor = agent.id;
     approvalTimer = setTimeout(paintApproval, 1500);
   }
@@ -1462,7 +1560,7 @@ function initialize() {
       if (list.dataset.signature !== signature || reset) {
         const bottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 90;
         list.dataset.signature = signature;
-        list.innerHTML = `<div class="terminal-transcript-heading"><span>Live terminal output</span><button class="text-button" data-action="desktop-terminal">Open Terminal ${icon('external')}</button></div><pre class="terminal-transcript">${escapeHtml(data.terminal || 'Session starting…')}</pre>`;
+        list.innerHTML = `<div class="terminal-transcript-heading"><span>Live terminal output</span><button class="text-button" data-action="show-terminal">Show terminal ${icon('terminal')}</button></div><pre class="terminal-transcript">${escapeHtml(data.terminal || 'Session starting…')}</pre>`;
         if (bottom || reset) scroller.scrollTop = scroller.scrollHeight;
       }
       $('message-count').textContent = '0';
@@ -1522,8 +1620,9 @@ function initialize() {
     else { scroller.scrollTop = previousTop; $('jump-latest').hidden = false; }
   }
 
-  // Like a chat app's "Worked for 2m": in each finished turn, the tool calls and notes before the final answer
-  // fold into one row. The turn still running stays open, so you can watch it work.
+  // Like a chat app's "Worked for 2m": in each finished turn, the tool calls and the agent's notes between them
+  // (its running commentary) fold into one row above the final answer. The turn still running is a single live
+  // line instead: a shimmer with the step it is on and the time so far; open it to watch every step.
   const openFolds = new Set();
   const duration = (ms) => { const sec = Math.round(ms / 1000); return sec < 60 ? `${sec}s` : sec < 3600 ? `${Math.floor(sec / 60)}m ${sec % 60}s` : `${Math.floor(sec / 3600)}h ${Math.floor(sec % 3600 / 60)}m`; };
   function foldWork(items, existing, agent) {
@@ -1540,9 +1639,26 @@ function initialize() {
     const result = [], byAt = new Map(turns.map((t) => [t.at, t]));
     const emit = (t, last) => {
       const answerAt = t.items.findLastIndex((item) => !item.message.tool && item.message.type === 'transcript' && item.message.role !== 'user');
-      const live = last && working;
-      const fold = live || answerAt < 1 ? [] : t.items.slice(0, answerAt);
-      if (!fold.some((item) => item.message.tool) || fold.length < 2) { result.push(...t.items.map((item) => item.element)); return; }
+      if (last && working) {
+        const key = `live:${t.at}`;
+        let el = existing.get(key);
+        if (!el) {
+          el = document.createElement('section'); el.className = 'work-fold live'; el.dataset.messageKey = key;
+          el.innerHTML = `<button type="button" class="work-summary" data-work-toggle="${escapeHtml(key)}"><span class="work-spinner" aria-hidden="true"></span><span class="work-label"></span><span class="work-time"></span>${icon('chevron-right')}</button><div class="work-body"></div>`;
+        }
+        const step = t.items.findLast((item) => item.message.tool);
+        const s = step && (toolSummary(step.message.text) || { verb: 'Using a tool', what: '' });
+        const label = ['waiting', 'needs_input'].includes(agent.status) ? 'Waiting for you' : s ? `${s.verb} ${s.what || ''}`.trim() : 'Thinking';
+        el.querySelector('.work-label').textContent = label;
+        el.querySelector('.work-time').dataset.since = String(t.start || '');
+        const open = openFolds.has(key);
+        el.querySelector('.work-summary').setAttribute('aria-expanded', String(open));
+        el.lastElementChild.hidden = !open;
+        syncChildren(el.lastElementChild, t.items.map((item) => item.element));
+        result.push(el); return;
+      }
+      const fold = answerAt < 1 ? [] : t.items.slice(0, answerAt);
+      if (!fold.length) { result.push(...t.items.map((item) => item.element)); return; }
       const key = `work:${fold[0].message.key}`;
       let el = existing.get(key);
       if (!el) {
@@ -1653,7 +1769,125 @@ function initialize() {
     if (field) field.focus();
   }
 
+  // ---- New session, like T3: "What should we do in <project>?" with the project and agent as pickers,
+  // and the first message typed right there. Enter starts the agent with that message.
+  const newDraft = { cwd: null, kind: getStorage('synapse-new-kind') || null };
+  const worktreeList = () => (desktop?.projects || []).flatMap((p) => p.worktrees.map((w) => ({ ...w, project: p.label, projectKey: p.key, home: w.path === p.worktrees[0]?.path })));
+  function showNew(cwd) {
+    const list = worktreeList();
+    if (!list.length) { desktopCall('add-project').catch((e) => toast(e.message)); return; }
+    const current = byId.get(selectedId);
+    const want = cwd || current?.cwd;
+    newDraft.cwd = list.find((w) => w.path === want)?.path || list.find((w) => want?.startsWith(`${w.path}/`))?.path || (list.some((w) => w.path === newDraft.cwd) ? newDraft.cwd : list[0].path);
+    if (!Object.hasOwn(desktop.profiles, newDraft.kind)) newDraft.kind = ['claude', 'codex'].find((k) => Object.hasOwn(desktop.profiles, k)) || Object.keys(desktop.profiles)[0];
+    navigate('new');
+    requestAnimationFrame(() => $('new-input').focus());
+  }
+  function renderNew() {
+    const list = worktreeList(), w = list.find((x) => x.path === newDraft.cwd) || list[0];
+    if (!w) return;
+    newDraft.cwd = w.path;
+    const group = { key: w.projectKey, worktrees: [w], agents: [] };
+    const label = `<span class="new-badge" aria-hidden="true" style="--badge:${projectColor(group)}">${escapeHtml(w.project.slice(0, 1).toUpperCase())}</span><span class="new-name">${escapeHtml(w.project)}</span>${icon('chevron-down')}`;
+    if ($('new-project').dataset.sig !== w.path) {
+      $('new-project').dataset.sig = w.path; $('new-project').innerHTML = label;
+      const img = avatarImg(groupDir(group), 'new-logo'); if (img) $('new-project').querySelector('.new-badge').append(img);
+    }
+    const siblings = list.filter((x) => x.projectKey === w.projectKey);
+    $('new-branch').hidden = siblings.length < 2;
+    $('new-branch').innerHTML = `${icon('branch')}<span>${escapeHtml(w.home ? 'Main checkout' : w.branch || w.name)}</span>${icon('chevron-down')}`;
+    const profile = desktop.profiles[newDraft.kind] || {};
+    $('new-agent').innerHTML = `${avatar({ kind: newDraft.kind, name: profile.label || newDraft.kind })}<span>${escapeHtml(profile.label || newDraft.kind)}</span>${icon('chevron-down')}`;
+    $('new-input').placeholder = newDraft.kind === 'shell' ? 'Opens a shell in this folder. Type a command to run, or leave empty.' : 'Describe the task. Leave empty to just start the agent.';
+    const command = String(profile.command || (newDraft.kind === 'shell' ? 'your shell' : newDraft.kind)).replace(/^exec\s+/, '').replace(/^\S*\//, '');
+    $('new-hint').textContent = `Runs ${command} in ${w.path.replace(/^\/Users\/[^/]+/, '~')}`;
+  }
+  $('new-project').onclick = () => {
+    const seen = new Set();
+    const items = worktreeList().filter((w) => w.home && !seen.has(w.projectKey) && seen.add(w.projectKey)).map((w) => ({ label: w.project, icon: w.path === newDraft.cwd || newDraft.cwd?.startsWith(`${w.path}`) ? 'check' : null, run: () => { newDraft.cwd = w.path; renderNew(); $('new-input').focus(); } }));
+    dropdown($('new-project'), [...items, '-', { label: 'Add a project…', icon: 'plus', run: () => desktopCall('add-project').catch((e) => toast(e.message)) }], (() => { const r = $('new-project').getBoundingClientRect(); return { x: r.left, y: r.bottom + 6 }; })());
+  };
+  $('new-branch').onclick = () => {
+    const w = worktreeList().find((x) => x.path === newDraft.cwd); if (!w) return;
+    const items = worktreeList().filter((x) => x.projectKey === w.projectKey).map((x) => ({ label: x.home ? 'Main checkout' : x.branch || x.name, icon: x.path === w.path ? 'check' : 'branch', run: () => { newDraft.cwd = x.path; renderNew(); $('new-input').focus(); } }));
+    dropdown($('new-branch'), [...items, '-', { label: 'New worktree…', icon: 'plus', run: () => runDesktop('worktree', { key: w.projectKey }) }], (() => { const r = $('new-branch').getBoundingClientRect(); return { x: r.left, y: r.bottom + 6 }; })());
+  };
+  $('new-agent').onclick = () => {
+    const items = Object.entries(desktop.profiles).map(([k, p]) => ({ label: p.label || k, icon: k === newDraft.kind ? 'check' : k === 'shell' ? 'terminal' : null, run: () => { newDraft.kind = k; setStorage('synapse-new-kind', k); renderNew(); $('new-input').focus(); } }));
+    dropdown($('new-agent'), items, (() => { const r = $('new-agent').getBoundingClientRect(); return { x: r.left, y: r.bottom + 6 }; })());
+  };
+  let starting = false;
+  async function startNew(event) {
+    event?.preventDefault();
+    if (starting) return;
+    const prompt = $('new-input').value.trim();
+    starting = true; $('new-start').disabled = true; $('new-start').innerHTML = '<span class="spinner" aria-hidden="true"></span>';
+    try {
+      const shell = newDraft.kind === 'shell';
+      const result = await desktopCall('new-session', { cwd: newDraft.cwd, kind: newDraft.kind, prompt: shell ? '' : prompt });
+      desktop = await desktopCall('state'); applyState(rawState);
+      $('new-input').value = '';
+      navigate('session', result.id);
+      if (shell && prompt) desktopCall('submit', { id: result.id, text: prompt }).catch(() => {});
+    } catch (e) { toast(e.message); }
+    finally { starting = false; $('new-start').disabled = false; $('new-start').innerHTML = icon('arrow-up'); }
+  }
+  $('new-composer').addEventListener('submit', startNew);
+  $('new-input').addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) startNew(event); });
+
+  // ---- Terminals in the GUI. Terminal mode's real terminals are shown in place: the page leaves an empty box
+  // (#term-host for a session's Terminal tab, #drawer-host for the ⌘J drawer) and the app lays the terminal over it.
+  const defaultTab = (agent) => (embedded && agent?.owned && agent.kind === 'shell' ? 'terminal' : 'conversation');
+  let drawerId = null, drawerCwd = null;
+  const drawerShells = new Map(); // folder -> the drawer shell there, kept while it runs
+  async function openDrawer(quiet = false) {
+    const agent = byId.get(selectedId); if (!embedded || !agent?.cwd) return;
+    const cwd = agent.cwd;
+    drawerCwd = cwd; $('term-drawer').hidden = false; $('open-terminal').setAttribute('aria-expanded', 'true');
+    $('term-drawer-folder').textContent = cwd.replace(/^\/Users\/[^/]+/, '~');
+    $('drawer-host').style.height = `${Math.max(120, Math.min(innerHeight - 220, Number(getStorage('synapse-drawer-h')) || 260))}px`;
+    let id = drawerShells.get(cwd);
+    if (!id || !desktop?.sessions.some((s) => s.id === id && !s.exited)) {
+      try { id = (await desktopCall('new-session', { cwd, kind: 'shell', drawer: true })).id; drawerShells.set(cwd, id); desktop = await desktopCall('state'); }
+      catch (e) { if (!quiet) toast(e.message); toggleDrawer(false); return; }
+    }
+    if (drawerCwd !== cwd) return; // the selection moved on while it started
+    drawerId = id; syncDocks(quiet ? false : 'drawer');
+  }
+  function toggleDrawer(open = $('term-drawer').hidden) {
+    if (open) return openDrawer();
+    $('term-drawer').hidden = true; drawerId = drawerCwd = null; $('open-terminal').setAttribute('aria-expanded', 'false'); syncDocks();
+    if (tab !== 'terminal') $('message-input').focus();
+  }
+  $('term-drawer-grip').addEventListener('pointerdown', (event) => {
+    const host = $('drawer-host'), y0 = event.clientY, h0 = host.offsetHeight;
+    const move = (e) => { host.style.height = `${Math.max(120, Math.min(innerHeight - 220, h0 + y0 - e.clientY))}px`; syncDocks(); };
+    const up = () => { removeEventListener('pointermove', move); setStorage('synapse-drawer-h', String(host.offsetHeight)); };
+    addEventListener('pointermove', move); addEventListener('pointerup', up, { once: true });
+  });
+  const docked = { main: '', drawer: '' };
+  function dockRect(el) {
+    if (!el || !el.getClientRects().length || document.querySelector('dialog[open]') || openMenu) return null;
+    const r = el.getBoundingClientRect();
+    return r.width < 60 || r.height < 40 ? null : { x: r.left, y: r.top, width: r.width, height: r.height };
+  }
+  function syncDocks(focus = false) {
+    if (!embedded || paneKey || !desktop) return;
+    const agent = byId.get(selectedId), session = desktopActive && view === 'session' && agent && !splitActive && !$('thread-view').hidden;
+    const want = {
+      main: session && agent.owned && tab === 'terminal' ? { id: agent.id, rect: dockRect($('term-host')) } : null,
+      drawer: session && drawerId && !$('term-drawer').hidden ? { id: drawerId, rect: dockRect($('drawer-host')) } : null,
+    };
+    for (const place of ['main', 'drawer']) {
+      const w = want[place]?.rect ? want[place] : null, sig = w ? JSON.stringify(w) : '';
+      if (sig === docked[place] && focus !== place) continue;
+      docked[place] = sig;
+      desktopCall('dock', { place, id: w?.id || null, rect: w?.rect || null, focus: focus === place }).catch(() => { docked[place] = ''; });
+    }
+  }
+
   function connectAgent(cwd) {
+    if (embedded && desktop && !paneKey) return showNew(typeof cwd === 'string' ? cwd : null);
     if (embedded && desktop) {
       const worktrees = desktop.projects.flatMap((p) => p.worktrees.map((w) => ({ ...w, project: p.label })));
       if (!worktrees.length) { desktopCall('add-project').catch((e) => toast(e.message)); return; }
@@ -2137,7 +2371,8 @@ function initialize() {
   }).catch((e) => toast(e.message));
   $('add-project').onclick = () => runDesktop('add-project');
   $('desktop-account').onclick = () => runDesktop('account');
-  $('open-terminal').onclick = () => runDesktop('terminal', { id: selectedId });
+  $('open-terminal').onclick = () => toggleDrawer();
+  $('term-drawer-close').onclick = () => toggleDrawer(false);
   function forkSession() {
     const agent = byId.get(selectedId); if (!agent?.owned) return;
     openModal('Fork conversation', `<p class="dialog-copy">Create a child session with this agent’s context. The parent keeps running.</p><label class="field-label" for="fork-question">Explore in the fork</label><textarea class="field" id="fork-question" rows="4" maxlength="12000" required placeholder="What should the fork work on?"></textarea>`, 'Create fork', async () => {
@@ -2189,7 +2424,7 @@ function initialize() {
       ...sessionActions(agent).filter((item) => item !== '-' && !item.heading && /^(Snooze|Wake|Mark|Archive|Unarchive|Link|Send a message|Start a plan)/.test(item.label)),
       ...(agent.owned ? [
         ...(forkable ? [{ label: 'Fork conversation', icon: 'branch', run: forkSession, action: 'fork' }] : []),
-        { label: 'Open in Terminal', icon: 'terminal', run: desk('terminal') },
+        { label: 'Open in Terminal mode', icon: 'terminal', run: desk('terminal') },
         '-',
         { label: 'View fork tree', action: 'fork-tree', run: desk('fork-tree') },
         { label: 'Split side by side', action: 'split', keys: '⌘D', run: desk('split', { direction: 'right' }) },
@@ -2359,7 +2594,7 @@ function initialize() {
       setStorage('synapse-collapsed', JSON.stringify([...collapsed])); renderSidebar(); return;
     }
     if (button.dataset.filter) { filter = button.dataset.filter; renderOverview(); return; }
-    if (button.dataset.tab) { persistDraft(); tab = button.dataset.tab; renderMain(true); return; }
+    if (button.dataset.tab) { persistDraft(); tab = button.dataset.tab; renderMain(true); if (tab === 'terminal') syncDocks('main'); return; }
     if (button.dataset.removeLinks) return removeLinks(button.dataset.removeLinks.split(','), button);
     if (button.dataset.connTab) { connectionMode = button.dataset.connTab; return addConnection(); }
     if (button.dataset.friendAccept) return answerFriend(button, 'accept');
@@ -2370,6 +2605,7 @@ function initialize() {
     const action = button.dataset.action;
     if (action === 'connect') connectAgent();
     if (action === 'desktop-terminal') runDesktop('terminal', { id: selectedId });
+    if (action === 'show-terminal') { persistDraft(); tab = 'terminal'; renderMain(true); syncDocks('main'); }
     if (action === 'add-connection') addConnection();
     if (action === 'friend-connection') addConnection('share');
     if (action === 'friends-sign-in') { if ($('action-dialog').open) $('action-dialog').close(); desktopCall('sign-in').catch((e) => toast(e.message)); }
@@ -2399,6 +2635,7 @@ function initialize() {
       if (key === 'n') { event.preventDefault(); if (event.shiftKey) runDesktop('worktree', { key: byId.get(selectedId)?.projectKey || desktop?.projects[0]?.key }); else connectAgent(); return; }
       if (key === 't') { event.preventDefault(); const cwd = byId.get(selectedId)?.cwd || desktop?.projects[0]?.worktrees[0]?.path; if (cwd) runDesktop('new-session', { cwd, kind: 'shell' }); return; }
       if (key === ',') { event.preventDefault(); runDesktop('settings'); return; }
+      if (key === 'j') { event.preventDefault(); toggleDrawer(); return; }
       if (key === 'b') { event.preventDefault(); setSidebar(!sidebarOpen); return; }
       if (key === 'd') { event.preventDefault(); runDesktop('split', { id: selectedId, direction: event.shiftKey ? 'down' : 'right' }); return; }
       if (key === 'e') { event.preventDefault(); runDesktop('fork-tree', { id: selectedId }); return; }
@@ -2414,7 +2651,9 @@ function initialize() {
       else if (inspectorOpen) { inspectorOpen = false; syncInspector(); $('context-toggle').focus(); }
     }
     if (event.target.matches('[role="tab"]') && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
-      event.preventDefault(); persistDraft(); tab = tab === 'conversation' ? 'messages' : 'conversation'; renderMain(true); $(tab === 'conversation' ? 'conversation-tab' : 'messages-tab').focus();
+      event.preventDefault(); persistDraft();
+      const tabs = ['conversation', 'messages', 'terminal'].filter((name) => !$(`${name}-tab`).hidden);
+      tab = tabs[(tabs.indexOf(tab) + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]; renderMain(true); $(`${tab}-tab`).focus();
     }
     if (event.key === 'Tab' && narrow.matches && sidebarOpen) {
       const items = [...$('sidebar').querySelectorAll('button, a')].filter((element) => !element.disabled && element.getClientRects().length);
@@ -2437,6 +2676,9 @@ function initialize() {
   setInterval(() => { if (!document.hidden && ready) { renderSidebar(); if (view === 'overview') renderOverview(); if (inspectorOpen) renderInspector(); } }, 30000);
   updateThemeButton(); setSidebar(paneKey ? false : sidebarOpen, false); connectEvents();
   if (embedded) parent.postMessage({ type: 'synapse:desktop-ready' }, '*');
+  // the live work line's clock
+  setInterval(() => { for (const el of document.querySelectorAll('.work-fold.live .work-time[data-since]')) { const since = Number(el.dataset.since); el.textContent = since ? duration(Math.max(0, Date.now() - since)) : ''; } }, 1000);
+  if (embedded && !paneKey) { setInterval(() => syncDocks(), 200); addEventListener('resize', () => syncDocks()); }
 }
 
 // other pages (the file viewer) import the helpers above without starting a workspace
@@ -2450,7 +2692,7 @@ if (typeof document !== 'undefined' && document.getElementById('workspace')) {
         const origin = new URLSearchParams(location.search).has('pane') ? location.origin : 'null';
         if (event.source !== parent || event.origin !== origin || event.data?.type !== 'synapse:desktop-bootstrap') return;
         clearTimeout(timer); removeEventListener('message', receive);
-        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived'];
+        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept'];
         for (const key of keys) {
           try {
             const value = event.data.preferences?.[key];

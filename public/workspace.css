@@ -841,3 +841,48 @@ textarea.field { line-height: 1.5; resize: vertical; }
 .plan-pick small { color: var(--color-muted); font-size: var(--text-xs); }
 
 .composer.dropping { border-color: var(--color-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 25%, transparent); }
+
+/* Terminals in the GUI: empty boxes the desktop app lays the real terminal over */
+.term-host { flex: 1; min-height: 0; margin: 4px 16px 14px; border: 1px solid var(--color-border); border-radius: 10px; background: #0b0b0c; }
+.term-host[hidden] { display: none; }
+.term-drawer { flex: none; display: flex; flex-direction: column; border-top: 1px solid var(--color-border); position: relative; }
+.term-drawer[hidden] { display: none; }
+.term-drawer .term-host { flex: none; margin: 0 12px 10px; }
+.term-drawer-grip { position: absolute; left: 0; right: 0; top: -3px; height: 6px; cursor: row-resize; z-index: 1; }
+.term-drawer-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 16px; font-size: var(--text-sm); color: var(--color-secondary); }
+.term-drawer-head > span:nth-child(2) { color: var(--color-ink); font-weight: 600; }
+.term-drawer-head small { color: var(--color-muted); font-family: var(--font-mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-drawer-head kbd { color: var(--color-muted); font-size: 11px; }
+.term-drawer-head .icon-button { width: 26px; height: 26px; }
+
+/* New session: "What should we do in <project>?" */
+.new-view { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; min-width: 0; }
+.new-view[hidden] { display: none; }
+.new-inner { width: 100%; max-width: calc(var(--column) + 48px); margin-top: -8vh; }
+.new-inner h1 { font: 600 26px/1.3 var(--font-body); letter-spacing: -0.01em; text-align: center; margin: 0 0 22px; color: var(--color-ink); }
+.new-project { display: inline-flex; align-items: center; gap: 8px; padding: 2px 4px 2px 6px; margin: 0 0 0 4px; border-radius: 10px; font: inherit; color: inherit; background: transparent; border: 1px solid transparent; cursor: pointer; vertical-align: baseline; }
+.new-project:hover, .new-project[aria-expanded='true'] { background: var(--color-hover); border-color: var(--color-border); }
+.new-project svg { width: 18px; height: 18px; color: var(--color-muted); }
+.new-badge { position: relative; display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: var(--badge); color: #fff; font-size: 14px; font-weight: 700; overflow: hidden; }
+.new-badge img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.new-composer textarea { min-height: 72px; }
+.new-composer .composer-toolbar { gap: 6px; }
+.new-agent { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 8px; font-size: var(--text-sm); color: var(--color-secondary); background: transparent; border: 1px solid var(--color-border); cursor: pointer; }
+.new-agent:hover, .new-agent[aria-expanded='true'] { background: var(--color-hover); color: var(--color-ink); }
+.new-agent[hidden] { display: none; }
+.new-agent svg { width: 14px; height: 14px; }
+.new-agent .agent-avatar { width: 18px; height: 18px; font-size: 9px; }
+.new-hint { margin: 10px 4px 0; text-align: center; color: var(--color-muted); font-size: var(--text-xs); font-family: var(--font-mono); }
+.term-drawer-head .side-spacer, .new-composer .side-spacer { flex: 1; }
+
+/* the turn still running: one line, the step it is on with a shimmer, and the time so far */
+.work-fold.live .work-summary { gap: 8px; max-width: 100%; }
+.work-fold.live .work-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(560px, 60vw); background: linear-gradient(90deg, var(--color-muted) 0%, var(--color-muted) 40%, var(--color-ink) 50%, var(--color-muted) 60%, var(--color-muted) 100%); background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: work-shimmer 2.2s linear infinite; }
+.work-fold.live .work-time { color: var(--color-faint); font-variant-numeric: tabular-nums; font-size: var(--text-sm); }
+.work-spinner { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--color-border-strong); border-top-color: var(--color-accent); animation: work-spin 0.8s linear infinite; flex: none; }
+@keyframes work-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@keyframes work-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .work-fold.live .work-label, .work-spinner { animation: none; } .work-fold.live .work-label { color: var(--color-muted); background: none; } }
+
+/* Status view: a row moving up the queue passes over the rows it overtakes */
+.moving-up { position: relative; z-index: 2; }

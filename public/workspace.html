@@ -58,7 +58,7 @@
         <div class="topbar-actions" id="session-actions" hidden>
           <span class="session-status" id="session-status"></span>
           <button class="icon-button" hidden id="rename-agent" aria-label="Rename session" title="Rename session"><span data-icon="edit"></span></button>
-          <button class="icon-button desktop-only" id="open-terminal" aria-label="Open session in Terminal mode" title="Open in Terminal mode"><span data-icon="terminal"></span></button>
+          <button class="icon-button desktop-only" id="open-terminal" aria-label="Toggle terminal" aria-controls="term-drawer" aria-expanded="false" title="Terminal  ⌘J"><span data-icon="terminal"></span></button>
           <button class="icon-button desktop-only" hidden id="fork-session" aria-label="Fork conversation" title="Fork conversation"><span data-icon="branch"></span></button>
           <button class="icon-button" id="session-menu" aria-label="Session actions" aria-expanded="false" title="Session actions"><span data-icon="more"></span></button>
                     <button class="icon-button" id="context-toggle" aria-label="Toggle session details" aria-controls="inspector" aria-expanded="false" title="Session details"><span data-icon="panel-right"></span></button>
@@ -68,10 +68,11 @@
       <div class="demo-banner" id="demo-banner" hidden><span class="demo-dot"></span><span>Demo workspace <span class="demo-description">with sample agents and conversations</span></span><button id="demo-help" class="text-button">How it works <span data-icon="arrow-right"></span></button></div>
       <div class="content-area">
         <section class="thread-view" id="thread-view" aria-label="Session conversation" hidden>
-          <div class="thread-topline"><div class="thread-tabs" role="tablist" aria-label="Conversation type"><button id="conversation-tab" role="tab" aria-selected="true" aria-controls="thread-scroll" data-tab="conversation">Conversation</button><button id="messages-tab" role="tab" aria-selected="false" aria-controls="thread-scroll" data-tab="messages">Messages<span class="count" id="message-count">0</span></button></div></div>
+          <div class="thread-topline"><div class="thread-tabs" role="tablist" aria-label="Conversation type"><button id="conversation-tab" role="tab" aria-selected="true" aria-controls="thread-scroll" data-tab="conversation">Conversation</button><button id="messages-tab" role="tab" aria-selected="false" aria-controls="thread-scroll" data-tab="messages">Messages<span class="count" id="message-count">0</span></button><button id="terminal-tab" class="desktop-only" role="tab" aria-selected="false" aria-controls="term-host" data-tab="terminal" hidden>Terminal</button></div></div>
           <div class="thread-scroll" id="thread-scroll" tabindex="0" role="tabpanel" aria-labelledby="conversation-tab" aria-busy="true">
             <div class="message-list" id="message-list"></div>
           </div>
+          <div class="term-host" id="term-host" role="tabpanel" aria-labelledby="terminal-tab" hidden></div>
           <div class="composer-region">
             <button class="jump-button" id="jump-latest" hidden><span data-icon="arrow-down"></span>Jump to latest</button>
             <div class="approval-card" id="approval-card" role="region" aria-label="Waiting for your answer" hidden></div>
@@ -82,6 +83,22 @@
             </form>
             <p class="delivery-note" id="delivery-note">Delivered on the agent’s next prompt or inbox check.</p>
             <p class="form-error" id="send-error" role="alert" hidden></p>
+          </div>
+          <div class="term-drawer" id="term-drawer" hidden>
+            <div class="term-drawer-grip" id="term-drawer-grip" aria-hidden="true"></div>
+            <div class="term-drawer-head"><span data-icon="terminal"></span><span>Terminal</span><small id="term-drawer-folder"></small><span class="side-spacer"></span><kbd>⌘J</kbd><button class="icon-button" id="term-drawer-close" aria-label="Close terminal" title="Close terminal  ⌘J"><span data-icon="x"></span></button></div>
+            <div class="term-host" id="drawer-host"></div>
+          </div>
+        </section>
+        <section class="new-view" id="new-view" aria-labelledby="new-title" hidden>
+          <div class="new-inner">
+            <h1 id="new-title">What should we do in <button type="button" class="new-project" id="new-project" aria-haspopup="menu" aria-expanded="false"></button>?</h1>
+            <form class="composer new-composer" id="new-composer">
+              <label class="sr-only" for="new-input">First message</label>
+              <textarea id="new-input" rows="3" maxlength="12000" placeholder="Describe the task. Leave empty to just start the agent."></textarea>
+              <div class="composer-toolbar"><button type="button" class="new-agent" id="new-agent" aria-haspopup="menu" aria-expanded="false"></button><button type="button" class="new-agent" id="new-branch" aria-haspopup="menu" aria-expanded="false" hidden></button><span class="side-spacer"></span><span class="composer-shortcut">Enter to start</span><button class="send-button" id="new-start" type="submit" aria-label="Start session" title="Start session"><span data-icon="arrow-up"></span></button></div>
+            </form>
+            <p class="new-hint" id="new-hint"></p>
           </div>
         </section>
         <section class="overview-view page-view" id="overview-view" aria-labelledby="overview-title" hidden>

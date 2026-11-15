@@ -290,8 +290,9 @@ async function makeSession(s, { kind, title, question = null, parent = null, key
   synapse.pty.resize(pty, term.cols, term.rows); // whatever the spawner defaulted to, the pty and the view agree from the first frame
   const x = { id: nextId++, key: /^[\w-]{1,80}$/.test(key || '') ? key : crypto.randomUUID(), pty, pid, updatedAt: Date.now(), activeAt: Date.now(), kind, title, question, parent, exited: false, term, fit, search, el: wrap };
   search.onDidChangeResults((r) => { if (finder?.x === x) finder.count(r); });
-  wrap.addEventListener('pointerdown', () => { if (M.focused !== s.id) selectSession(s, x.id); });
-  wrap.addEventListener('focusin', () => { if (M.focused !== s.id) selectSession(s, x.id); });
+  // a terminal shown inside the GUI (docked) is already the one the page shows: clicking it selects nothing
+  wrap.addEventListener('pointerdown', () => { if (M.focused !== s.id && !x.docked) selectSession(s, x.id); });
+  wrap.addEventListener('focusin', () => { if (M.focused !== s.id && !x.docked) selectSession(s, x.id); });
   term.onData(sforkFilter(() => x));
   term.onResize(({ cols, rows }) => synapse.pty.resize(pty, cols, rows));
   s.sessions.push(x);
@@ -348,13 +349,13 @@ function sforkFilter(get) {
   };
 }
 
-async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resume = null, cwd = worktreePath, title = kind, prompt = null, liaisonFor = null } = {}) {
+async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resume = null, cwd = worktreePath, title = kind, prompt = null, liaisonFor = null, drawer = false } = {}) {
   closeCanvas();
   const prof = M.profiles[kind] || { command: kind };
   const s = { id: nextId++, worktree: worktreePath, sessions: [], path: [] };
   const previous = M.focused;
   M.slots.push(s);
-  M.focused = s.id;
+  if (!drawer) M.focused = s.id; // a GUI drawer terminal opens beside the session in view, not instead of it
   const home = worktreeOf(worktreePath); if (home) M.open.add(home.project.key); // a new session unfolds its project, once
   try {
     const made = await makeSession(s, {
@@ -362,6 +363,7 @@ async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resu
       spawn: (cols, rows) => (resume ? synapse.pty.restore({ cwd, kind, resume, cols, rows }) : synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows, phoneReq, ...(prompt ? { prompt } : {}), ...(liaisonFor ? { liaisonFor } : {}) })),
     });
     if (resume) made.resume = resume;
+    if (drawer) { made.drawer = true; made.title = 'terminal'; }
     if (split && slot(split.target)) {
       const insert = (node) => typeof node === 'number'
         ? node === split.target ? { direction: split.direction, first: node, second: s.id } : node
@@ -1107,13 +1109,14 @@ function renderStage() {
   $('#stage').classList.toggle('exited', !!t?.exited);
   $('#stage').classList.toggle('split', layout != null && typeof layout !== 'number');
   for (const sl of M.slots) for (const x of sl.sessions) {
+    if (x.docked) continue;
     x.el.classList.remove('visible');
     x.el.classList.toggle('active', x === t);
   }
   const place = (node, left = 0, upper = 0, width = 100, height = 100) => {
     if (typeof node === 'number') {
       const x = top(slot(node));
-      if (!x) return;
+      if (!x || x.docked) return;
       Object.assign(x.el.style, { left: `${left}%`, top: `${upper}%`, width: `${width}%`, height: `${height}%` });
       x.el.classList.add('visible'); visible.push(x);
     } else if (node.direction === 'right') {
@@ -2331,6 +2334,10 @@ window.addEventListener('keydown', (e) => {
 }, true);
 window.addEventListener('keydown', (e) => {
   if (!$('#modal').hidden || !$('#login').hidden) return;
+  // a terminal docked in the GUI has the focus: the GUI's own shortcuts still reach the page
+  if (workspaceOpen && appMod(e) && !e.altKey && ['j', 'k', 'n'].includes(e.key.toLowerCase()) && e.target.closest?.('.gui-dock')) {
+    e.preventDefault(); workspacePost({ type: 'synapse:desktop-key', key: e.key.toLowerCase(), shift: e.shiftKey }); return;
+  }
   const mine = !workspaceOpen && matchShortcut(e);
   if (mine) { e.preventDefault(); runShortcut(mine); return; }
   if (fanOpen && e.key === 'Escape') return closeFan();
@@ -3665,12 +3672,13 @@ function workspaceState() {
       project: worktreeOf(s.worktree)?.project.label || s.worktree.split('/').pop(),
       status: x.exited ? 'exited' : statusOf(x) === 'working' ? 'busy' : statusOf(x),
       lastActivity: x.updatedAt, parent: x.parent == null ? null : `desktop-${sess(s, x.parent)?.key}`,
-      exited: x.exited,
+      exited: x.exited, drawer: !!x.drawer,
     }))),
   };
 }
 function syncWorkspace(force = false) {
   if (!workspaceLive || !workspaceOpen) return;
+  for (const [place, d] of docks) if (!M.slots.some((s) => s.sessions.includes(d.x))) undock(place); // a closed session leaves no empty box
   const state = workspaceState(), signature = JSON.stringify(state);
   if (!force && signature === workspaceSignature) return;
   workspaceSignature = signature;
@@ -3689,7 +3697,7 @@ function showWorkspace(open) {
   $('#mode-terminal').setAttribute('aria-pressed', String(!open));
   localStorage.setItem('synapse-desktop-view', open ? 'gui' : 'terminal');
   if (open) { closeCanvas(); syncWorkspace(true); }
-  else { render(); if (activityOpen) $('#activity').focus(); else top(focusedSlot())?.term.focus(); }
+  else { for (const place of [...docks.keys()]) undock(place); render(); if (activityOpen) $('#activity').focus(); else top(focusedSlot())?.term.focus(); }
 }
 async function openWorkspace() {
   showWorkspace(true);
@@ -3700,6 +3708,34 @@ async function openWorkspace() {
   } catch (e) { $('#workspace-error p').textContent = e.message; $('#workspace-error').hidden = false; }
 }
 $('#workspace-retry').onclick = () => { workspaceReady = null; openWorkspace(); };
+// Terminals inside the GUI. The page keeps an empty box where a terminal belongs (a session's Terminal tab, the
+// drawer under the chat) and reports where it is; the session's own xterm moves over the page into that box, so
+// typing, colours, mouse and approvals work exactly as in Terminal mode. Nothing is streamed or copied.
+const dockLayer = document.createElement('div'); dockLayer.id = 'gui-docks'; $('#desktop-workspace').append(dockLayer);
+const docks = new Map(); // 'main' | 'drawer' -> { x, box }
+function undock(place) {
+  const d = docks.get(place); if (!d) return;
+  docks.delete(place); d.box.remove();
+  if (d.x.docked === place) { d.x.docked = null; d.x.el.classList.remove('visible'); if (M.slots.some((s) => s.sessions.includes(d.x))) $('#stage').appendChild(d.x.el); }
+}
+function dock({ place, id, rect, focus = false } = {}) {
+  if (!['main', 'drawer'].includes(place)) throw new Error('Unknown terminal place.');
+  for (const [p, d] of docks) if (!M.slots.some((s) => s.sessions.includes(d.x))) undock(p); // closed meanwhile
+  if (!id || !rect || !workspaceOpen) { undock(place); render(); return; }
+  const { x } = ownSession(id);
+  const n = (v) => Math.max(0, Math.min(10000, Math.round(Number(v) || 0)));
+  let d = docks.get(place);
+  if (d && d.x !== x) { undock(place); d = null; }
+  for (const [p, other] of docks) if (p !== place && other.x === x) undock(p);
+  if (!d) {
+    const box = el('div', 'gui-dock'); dockLayer.append(box);
+    box.append(x.el); x.docked = place; x.el.classList.add('visible'); x.el.style.cssText = '';
+    d = { x, box }; docks.set(place, d);
+  }
+  d.box.style.background = termTheme().background || '';
+  Object.assign(d.box.style, { left: `${n(rect.x)}px`, top: `${n(rect.y)}px`, width: `${n(rect.width)}px`, height: `${n(rect.height)}px` });
+  requestAnimationFrame(() => { if (x.el.isConnected) { x.fit.fit(); if (focus) x.term.focus(); } });
+}
 const ownSession = (id) => {
   for (const s of M.slots) {
     const x = s.sessions.find((x) => `desktop-${x.key}` === id);
@@ -3751,10 +3787,14 @@ async function desktopAction(action, args) {
     }
     case 'preference': return synapse.workspace.save(args.key, args.value);
     case 'new-session': {
-      if (!M.projects.some((p) => p.worktrees.some((w) => w.path === args.cwd))) throw new Error('Choose an open project.');
+      // a terminal under the chat (drawer) may open in any folder inside an open worktree; it stays out of the GUI's list
+      const worktrees = M.projects.flatMap((p) => p.worktrees.map((w) => w.path));
+      const cwd = worktrees.includes(args.cwd) ? args.cwd : args.drawer && worktrees.filter((w) => String(args.cwd || '').startsWith(`${w}/`)).sort((a, b) => b.length - a.length)[0];
+      if (!cwd) throw new Error('Choose an open project.');
       if (!Object.hasOwn(M.profiles, args.kind)) throw new Error('Choose an installed agent profile.');
+      const prompt = typeof args.prompt === 'string' && args.prompt.trim() && args.kind !== 'shell' ? args.prompt.slice(0, 12000) : null;
       const before = new Set(M.slots.map((s) => s.id));
-      await newSlot(args.cwd, args.kind);
+      await newSlot(cwd, args.kind, null, null, { prompt, drawer: !!args.drawer });
       const made = M.slots.find((s) => !before.has(s.id));
       if (!made?.sessions[0]) throw new Error('The session could not start. Check the agent command in Settings.');
       return { id: `desktop-${made.sessions[0].key}` };
@@ -3771,6 +3811,13 @@ async function desktopAction(action, args) {
     case 'paste': return synapse.files.fromClipboard();
     case 'save-file': return synapse.files.save(String(args.name || ''), String(args.data || ''));
     case 'attach': { const { s } = ownSession(args.id); return synapse.files.pick(s.worktree); }
+    case 'dock': return dock(args);
+    // the GUI closing a session unused for a long time (its Tidy up setting): never one that is working, never asks
+    case 'expire': {
+      const { s, x } = ownSession(args.id), branch = sessionBranch(s, x.id);
+      if (branch.some((id) => statusOf(sess(s, id)) === 'working')) return { closed: false };
+      closeSession(s, x.id); render(); return { closed: true };
+    }
     case 'terminal': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } showWorkspace(false); return; }
     case 'model': {
       const { x } = ownSession(args.id); if (x.exited) throw new Error('This session has ended.');

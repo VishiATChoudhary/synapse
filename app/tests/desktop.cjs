@@ -86,9 +86,11 @@ const choose = (id) => tap(`[data-agent="${id}"]`);
   console.log('PASS mode switching preserves PID, output, drafts, and session count');
 
   await tap('#connect-agent');
-  await page(`document.querySelector('#agent-kind').value = 'claude'; document.querySelector('#action-form').requestSubmit();`);
+  await until(() => page(`!document.querySelector('#new-view').hidden`), 'the new session screen');
+  await tap('#new-agent'); await page(`[...document.querySelectorAll('.pop-menu button')].find((b) => /Fixture agent/.test(b.textContent)).click()`);
+  await page(`document.querySelector('#new-composer').requestSubmit()`);
   await until(async () => (await rpc('state')).sessions.length === 6, 'GUI session launcher');
-  await until(() => page(`!document.querySelector('#action-dialog').open`), 'launcher completion');
+  await until(() => page(`document.querySelector('#new-view').hidden && !document.querySelector('#thread-view').hidden`), 'launcher completion');
   snapshot = await rpc('state');
   const added = snapshot.sessions.find((s) => !initial.sessions.some((old) => old.id === s.id));
   assert.equal(added.kind, 'claude');
