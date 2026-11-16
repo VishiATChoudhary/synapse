@@ -311,6 +311,11 @@ const ICONS = {
   terminal: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7.5 9.5 3 2.5-3 2.5M13 15h4"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/><path d="M14 3v5h5"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18"/>',
+  refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/>',
+  'pop-out': '<rect x="3" y="7" width="14" height="14" rx="2"/><path d="M10 3h11v11M21 3l-9 9"/>',
+  'dock-in': '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M14 3v18M9 9l-3 3 3 3"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9m-4 4 3 3m-6 0 2 2"/>',
+  hand: '<path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12m0-1.5v-6a1.5 1.5 0 0 1 3 0V12m0-5.5a1.5 1.5 0 0 1 3 0V14a7 7 0 0 1-7 7h-.6a6 6 0 0 1-4.6-2.2L3.5 16a1.6 1.6 0 0 1 2.4-2l2.1 1.8"/>',
 };
 const icon = (name) => `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ICONS.message}</svg>`;
 const KIND_NAMES = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', opencode: 'OpenCode', 'cursor-agent': 'Cursor', amp: 'Amp', copilot: 'Copilot CLI', superset: 'Superset', shell: 'Shell' };
@@ -400,7 +405,7 @@ function initialize() {
       const message = event.data;
       const owns = (id) => desktop?.sessions.some((s) => s.id === id && s.pane === pane.dataset.paneKey);
       if (message?.type === 'synapse:desktop-bootstrap') {
-        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-stacks'].map((key) => [key, getStorage(key, null)]));
+        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-stacks', 'synapse-inspector-tab'].map((key) => [key, getStorage(key, null)]));
         pane.contentWindow.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, location.origin);
       }
       if (message?.type === 'synapse:desktop-ready') sendPaneState(pane);
@@ -463,6 +468,8 @@ function initialize() {
       clearTimeout(pending.timer); requests.delete(message.request);
       message.error ? pending.reject(new Error(message.error)) : pending.resolve(message.value);
     }
+    if (message?.type === 'synapse:browser-state' && message.state) { if (!paneKey) onBrowserState(message.state, message.ask); return; }
+    if (message?.type === 'synapse:browser-cover') { browserCovered = !!message.covered; placeBrowser(); return; }
     if (message?.type === 'synapse:desktop-state') {
       const previous = desktop?.active;
       const followSelection = !selectedId || selectedId === previous;
@@ -526,6 +533,9 @@ function initialize() {
   let view = 'session', selectedId = getStorage('synapse-selected') || null, tab = 'conversation', filter = 'all';
   let sidebarOpen = !narrow.matches && getStorage('synapse-sidebar', 'open') === 'open';
   let inspectorOpen = wide.matches && getStorage('synapse-inspector', 'open') === 'open';
+  // the panel's tabs: Details (the session) or Browser (the agent browser, agent-browser.mjs in the app)
+  let inspectorTab = getStorage('synapse-inspector-tab', 'details') === 'browser' ? 'browser' : 'details';
+  let browserState = { agents: {}, asks: [] }, browserCovered = false, browserPlaced = '', browserSignature = '';
   // files pasted, dropped or attached in the composer, shown as chips (images as thumbnails) until sent (see insertPaths)
   const IMAGE = /\.(png|jpe?g|gif|webp|bmp|heic|tiff?)$/i;
   const attachments = new Map(); // session -> file paths waiting to be sent
@@ -600,13 +610,15 @@ function initialize() {
     pane.inert = !visible;
     $('workspace').dataset.inspector = visible ? 'open' : 'closed';
     $('context-toggle').setAttribute('aria-expanded', String(visible));
+    $('inspector').classList.toggle('browser-mode', visible && inspectorTab === 'browser' && !inspectorFile);
     if (visible) renderInspector();
+    placeBrowser();
   }
 
-  function toast(message, undo) {
+  function toast(message, undo, label = 'Undo') {
     clearTimeout(toastTimer);
     $('toast-text').textContent = message;
-    $('toast-action').hidden = !undo;
+    $('toast-action').hidden = !undo; $('toast-action').textContent = label;
     $('toast-action').onclick = undo ? async () => { $('toast').hidden = true; try { await undo(); } catch (error) { toast(error.message); } } : null;
     $('toast').hidden = false;
     toastTimer = setTimeout(() => { $('toast').hidden = true; }, undo ? 9000 : 4000);
@@ -1653,7 +1665,7 @@ function initialize() {
     const agent = byId.get(selectedId), card = $('approval-card');
     const waiting = embedded && agent?.owned && !agent.exited && ['waiting', 'needs_input'].includes(agent.status) && view === 'session';
     clearTimeout(approvalTimer);
-    if (!waiting) { card.hidden = true; approvalFor = null; return; }
+    if (!waiting) { if (!card.hidden && agent) $('message-input').placeholder = agent.owned ? 'Ask anything. @ agents, / commands' : `Message ${agent.name}…`; card.hidden = true; approvalFor = null; return; }
     let screen;
     try { screen = await desktopCall('screen', { id: agent.id }); } catch { card.hidden = true; return; }
     if (selectedId !== agent.id) return;
@@ -1661,23 +1673,29 @@ function initialize() {
     // the same prompt as before: leave the card (and anything typed into it) alone
     if (card.dataset.sig === sig && !card.hidden && approvalFor === agent.id) { approvalTimer = setTimeout(paintApproval, 1500); return; }
     card.dataset.sig = sig;
-    const tabs = p.tabs.length > 1 ? `<span class="approval-tabs">${p.tabs.map((t) => `<span class="approval-tab${t.done ? ' done' : ''}">${t.done ? icon('check') : ''}${escapeHtml(t.label)}</span>`).join('')}</span>` : '';
-    const head = `${avatar(agent)}<strong>${escapeHtml(kindName(agent))} ${p.options.length ? 'asks you' : 'needs you'}</strong>${tabs}`;
+    // the question sits on top of the box you type in, as its first half: who asks, the question, then the answers
+    // as a list you can also pick from the keyboard (1-9, or ↑↓ and Enter while the box is empty; Esc cancels)
     const pointer = p.options.findIndex((o) => o.selected);
-    const option = (o) => {
-      const n = /^\d+$/.test(o.key) ? `<kbd>${o.key}</kbd>` : '';
+    const step = p.tabs.length > 1 ? Math.min(p.tabs.length, p.tabs.filter((t) => t.done).length + 1) : 0;
+    const steps = step ? `<span class="ask-steps" aria-label="Question ${step} of ${p.tabs.length}">${step}/${p.tabs.length}</span>` : '';
+    const permission = !!p.detail || /^(Bash|Edit|Write|Read|Fetch|Web|MCP|Run)/i.test(p.title);
+    const option = (o, i) => {
       const key = o.key.startsWith('nav:') ? `data-approval-nav="${Number(o.key.slice(4))}"` : `data-approval-key="${o.key}"`;
-      if (o.input) return `<form class="approval-option approval-input" data-approval-input="${o.key}">${n}<input type="text" maxlength="2000" placeholder="${p.multi ? 'Something else' : 'Type your own answer'}" aria-label="Your own answer"><button type="submit" class="button primary">Send</button></form>`;
-      const check = o.checked !== undefined ? `<span class="approval-check${o.checked ? ' on' : ''}">${icon('check')}</span>` : '';
-      return `<button type="button" class="approval-option${o.selected && !p.multi ? ' pointed' : ''}" ${key} ${o.checked !== undefined ? `aria-pressed="${o.checked}"` : ''}>${check || n}<span class="approval-label"><strong>${escapeHtml(o.label)}</strong>${o.description ? `<small>${escapeHtml(o.description)}</small>` : ''}</span></button>`;
+      const [label, note] = !o.description && / · /.test(o.label) ? [o.label.split(' · ')[0], o.label.split(' · ').slice(1).join(' · ')] : [o.label, o.description];
+      const mark = o.checked !== undefined ? `<span class="ask-box${o.checked ? ' on' : ''}" aria-hidden="true">${icon('check')}</span>` : `<span class="ask-key">${/^\d+$/.test(o.key) ? o.key : i + 1}</span>`;
+      return `<button type="button" class="ask-option${i === Math.max(0, pointer) && !p.multi ? ' active' : ''}" ${key}${o.checked !== undefined ? ` aria-pressed="${o.checked}"` : ''} title="${escapeHtml(note ? `${label}: ${note}` : label)}">${mark}<span class="ask-label">${escapeHtml(label)}</span>${note ? `<span class="ask-desc">${escapeHtml(note)}</span>` : ''}</button>`;
     };
-    const main = p.options.filter((o) => !o.chat), chat = p.options.find((o) => o.chat);
-    card.innerHTML = `<div class="approval-head">${head}</div>`
-      + (p.title ? `<div class="approval-title">${escapeHtml(p.title)}</div>` : '')
-      + (p.text ? `<p class="approval-text">${escapeHtml(p.text)}</p>` : '')
-      + (p.detail ? `<pre class="approval-command">${escapeHtml(p.detail)}</pre>` : '')
-      + (main.length ? `<div class="approval-options" role="group">${main.map(option).join('')}</div>` : '')
-      + `<div class="approval-choices">${!p.options.length ? `<button type="button" class="button primary" data-approval-key="enter">Continue</button>` : ''}${p.multi ? `<button type="button" class="button primary" data-approval-key="right">${p.submit ? 'Submit' : 'Next'} ${icon('arrow-right')}</button>` : ''}${chat ? `<button type="button" class="button secondary" data-approval-key="${chat.key}">Chat about this</button>` : ''}<button type="button" class="button secondary" data-approval-key="escape">Cancel <kbd>Esc</kbd></button><button type="button" class="text-button" data-action="show-terminal">Show terminal ${icon('terminal')}</button></div>`;
+    const choices = p.options.filter((o) => !o.chat && !o.input), own = p.options.find((o) => o.input), chat = p.options.find((o) => o.chat);
+    const lines = (p.text || (permission ? 'Allow this?' : '')).split('\n').filter(Boolean);
+    const askAt = lines.findLastIndex((l) => /\?$/.test(l)), ask = askAt >= 0 ? lines.slice(askAt).join(' ') : lines.join(' '), lead = askAt > 0 ? lines.slice(0, askAt) : [];
+    card.classList.toggle('permission', permission);
+    const context = [permission && p.title ? `${p.title}:` : '', ...lead].filter(Boolean).join(' ');
+    card.innerHTML = (context ? `<p class="ask-context">${escapeHtml(context)}</p>` : '')
+      + (ask ? `<p class="ask-question">${escapeHtml(ask)}${steps}</p>` : '')
+      + (p.detail ? `<code class="ask-command" title="${escapeHtml(p.detail)}">${escapeHtml(p.detail)}</code>` : '')
+      + (choices.length || own ? `<div class="ask-options" role="listbox" aria-label="Answers">${choices.map(option).join('')}${own ? `<form class="ask-option ask-own" data-approval-input="${own.key}"><span class="ask-key">${own.key}</span><input type="text" maxlength="2000" placeholder="Something else…" aria-label="Your own answer"></form>` : ''}</div>` : '')
+      + `<div class="ask-foot">${!p.options.length ? `<button type="button" class="ask-link strong" data-approval-key="enter">Continue</button>` : ''}${p.multi ? `<button type="button" class="ask-link strong" data-approval-key="right">${p.submit ? 'Submit' : 'Next'}</button>` : ''}${chat ? `<button type="button" class="ask-link" data-approval-key="${chat.key}">Chat about it</button>` : ''}<button type="button" class="ask-link" data-action="show-terminal">Terminal</button><button type="button" class="ask-link" data-approval-key="escape">Cancel</button></div>`;
+    $('message-input').placeholder = 'Or write a message for after you answer…';
     card.dataset.pointer = String(Math.max(0, pointer));
     card.hidden = false; approvalFor = agent.id;
     approvalTimer = setTimeout(paintApproval, 1500);
@@ -1721,6 +1739,111 @@ function initialize() {
     return `<section class="inspector-section sharing">${head}${lines.join('') || '<p class="inspector-note">Not shared with anyone yet.</p>'}<div class="git-actions">${agent.owned || friends.agents.some((a) => ids.includes(a.id)) ? `<button type="button" class="button secondary" data-share-open="share">${icon('users')}Share…</button>` : ''}<button type="button" class="button secondary" data-share-open="ask">${icon('message')}Ask a friend…</button></div></section>`;
   }
 
+  // ---------------------------------------------------------------- the agent browser, in the panel
+  const browserKey = (agent) => agent?.backendId || agent?.id;
+  const browserOf = (agent) => browserState.agents?.[browserKey(agent)] || null;
+  const asksOf = (agent) => (browserState.asks || []).filter((q) => q.agent === browserKey(agent));
+  function inspectorTabs(agent) {
+    const b = browserOf(agent), live = b?.driving && !b.paused, asking = asksOf(agent).length;
+    return `<div class="inspector-heading inspector-tabbar"><div class="inspector-tabs" role="tablist" aria-label="Panel">
+      <button role="tab" data-inspector-tab="details" aria-selected="${inspectorTab === 'details'}">Details</button>
+      <button role="tab" data-inspector-tab="browser" aria-selected="${inspectorTab === 'browser'}">Browser${asking ? '<span class="tab-badge" title="Waiting for you">1</span>' : live ? '<span class="tab-live" title="The agent is using it"></span>' : ''}</button>
+    </div><button class="icon-button" data-action="close-inspector" aria-label="Close panel" title="Close">${icon('x')}</button></div>`;
+  }
+  function renderBrowser(agent) {
+    const b = browserOf(agent), asks = asksOf(agent);
+    const signature = JSON.stringify([agent.id, b, asks, inspectorTab]);
+    if (signature === browserSignature && $('inspector').querySelector('.browser-pane')) { placeBrowser(); return; }
+    browserSignature = signature; inspectorSignature = '';
+    const keep = $('browser-url') && document.activeElement === $('browser-url') ? $('browser-url').value : null;
+    const tab = b?.tabs.find((t) => t.id === b.active), url = tab?.url && tab.url !== 'about:blank' ? tab.url : '';
+    const tabs = (b?.tabs || []).map((t) => `<div class="browser-tab${t.id === b.active ? ' on' : ''}"><button data-browser="select-tab" data-tab="${escapeHtml(t.id)}" title="${escapeHtml(t.url)}">${t.loading ? `<span class="status-dot busy" style="${spinPhase()}"></span>` : ''}<span>${escapeHtml(t.title || 'New tab')}</span></button><button class="browser-tab-x" data-browser="close-tab" data-tab="${escapeHtml(t.id)}" aria-label="Close tab">${icon('x')}</button></div>`).join('');
+    const name = escapeHtml(agent.name);
+    const host = (q) => escapeHtml(q.origin.replace(/^https?:\/\//, ''));
+    const ask = asks.map((q) => `<div class="browser-ask${q.kind === 'login' ? ' login' : ''}" role="alertdialog" aria-label="${q.kind === 'login' ? 'Allow a sign-in' : 'Allow a site'}">${q.kind === 'login'
+      ? `<p>${icon('key')}<span><strong>${name}</strong> wants to sign in to <strong>${host(q)}</strong> as <strong>${escapeHtml(q.user || '')}</strong> with the login from your vault. Synapse fills it in; ${name} never sees the password.</span></p>`
+      : `<p><strong>${name}</strong> wants to open <strong>${host(q)}</strong> in your browser, where you may be signed in.</p>`}<div class="browser-ask-actions"><button class="button secondary" data-browser-answer="deny" data-ask="${escapeHtml(q.id)}">Deny</button><button class="button secondary" data-browser-answer="always" data-ask="${escapeHtml(q.id)}">${q.kind === 'login' ? 'Always on this site' : 'Always allow'}</button><button class="button" data-browser-answer="once" data-ask="${escapeHtml(q.id)}">${q.kind === 'login' ? 'Sign in' : 'Allow'}</button></div></div>`).join('');
+    const body = !embedded ? `<div class="browser-empty">${icon('globe')}<p>The browser runs in the Synapse app.</p></div>`
+      : b?.popped ? `<div class="browser-empty">${icon('pop-out')}<p>${name}'s browser is open in its own window.</p><button class="button secondary" data-browser="dock">${icon('dock-in')}Back to the panel</button></div>`
+      : `<div class="browser-slot" id="browser-slot">${b?.tabs.length ? '' : `<div class="browser-empty">${icon('globe')}<p>${name} opens pages here when it uses the browser (the synapse_browser tool). You can watch, or open a page yourself.</p><p class="browser-hint">Sign in to sites here once: agents use your sessions without seeing your passwords.</p></div>`}</div>`;
+    const driving = b?.paused ? `<div class="browser-status paused">${icon('hand')}<span>You have the browser. ${name} waits.</span><button class="button" data-browser="resume">Hand back</button></div>`
+      : b?.driving ? `<div class="browser-status live"><span class="live-dot"></span><span>${name} is using the browser</span><button class="button secondary" data-browser="pause">Take over</button></div>`
+      : b?.tabs.length ? `<div class="browser-status"><span>${name} can use this browser.</span><button class="text-button" data-browser="pause">Take over</button></div>` : '';
+    $('inspector').innerHTML = `${inspectorTabs(agent)}<div class="browser-pane">
+      ${tabs || b?.tabs?.length ? `<div class="browser-tabs">${tabs}<button class="icon-button" data-browser="new-tab" aria-label="New tab" title="New tab">${icon('plus')}</button></div>` : ''}
+      <div class="browser-bar"><button class="icon-button" data-browser="back" aria-label="Back" title="Back"${b?.canBack ? '' : ' disabled'}>${icon('arrow-left')}</button><button class="icon-button" data-browser="forward" aria-label="Forward" title="Forward"${b?.canForward ? '' : ' disabled'}>${icon('arrow-right')}</button><button class="icon-button" data-browser="reload" aria-label="Reload" title="Reload"${tab ? '' : ' disabled'}>${icon('refresh')}</button>
+        <form id="browser-go" class="browser-go"><input id="browser-url" class="field" spellcheck="false" autocomplete="off" placeholder="Search or enter address" aria-label="Address" value="${escapeHtml(keep ?? url)}"></form>
+        ${b?.logins?.length ? `<button class="icon-button" id="browser-vault" aria-label="Sign in with your vault" title="Sign in with your vault (${escapeHtml(b.logins.join(', '))})">${icon('key')}</button>` : ''}
+        <button class="icon-button" data-browser="${b?.popped ? 'dock' : 'pop'}" aria-label="${b?.popped ? 'Back to the panel' : 'Pop out'}" title="${b?.popped ? 'Back to the panel' : 'Pop out into its own window'}">${icon(b?.popped ? 'dock-in' : 'pop-out')}</button></div>
+      ${ask}${body}${driving}</div>`;
+    if (keep !== null) { $('browser-url').focus(); $('browser-url').setSelectionRange(keep.length, keep.length); }
+    placeBrowser();
+  }
+  // where the native browser view goes: over #browser-slot while it shows, nowhere otherwise (a dialog, a menu or
+  // another view of this page would sit under it)
+  function placeBrowser() {
+    if (!embedded || paneKey) return;
+    const agent = byId.get(selectedId), slot = $('browser-slot');
+    const visible = slot && agent && !$('inspector').hidden && inspectorTab === 'browser' && view === 'session' && !browserCovered && !document.querySelector('dialog[open], .pop-menu, .approval-card:not([hidden]) .ask-menu') && !asksOf(agent).length && document.visibilityState === 'visible';
+    const r = visible ? slot.getBoundingClientRect() : null;
+    const bounds = r && r.width > 40 && r.height > 40 ? { x: r.left, y: r.top, width: r.width, height: r.height } : null;
+    const key = browserKey(agent) || '';
+    if (document.body.dataset.browserAgent !== key) document.body.dataset.browserAgent = key; // which agent's browser the panel is for (tests read it)
+    const placed = JSON.stringify([key, bounds && Object.values(bounds).map(Math.round)]);
+    if (placed === browserPlaced) return;
+    const previous = browserPlaced && JSON.parse(browserPlaced)[0];
+    browserPlaced = placed;
+    if (previous && previous !== key) desktopCall('browser-bounds', { agent: previous, bounds: null }).catch(() => {});
+    if (key) desktopCall('browser-bounds', { agent: key, bounds }).catch(() => {});
+  }
+  function onBrowserState(next, asked) {
+    const before = new Set((browserState.asks || []).map((q) => q.id));
+    browserState = next;
+    const fresh = (next.asks || []).filter((q) => !before.has(q.id));
+    // a new question: the selected agent's opens its browser; another agent's gets a toast with a way there. A
+    // session the app has only just matched to its agent may not know its id yet, so look again a moment later.
+    const decide = (q, last) => {
+      if (!(browserState.asks || []).some((x) => x.id === q.id)) return;
+      const selected = byId.get(selectedId);
+      if (selected && browserKey(selected) === q.agent && view === 'session') { inspectorTab = 'browser'; setStorage('synapse-inspector-tab', 'browser'); inspectorOpen = true; syncInspector(); return; }
+      if (!last) return setTimeout(() => decide(q, true), 1500);
+      const agent = state.agents.find((a) => browserKey(a) === q.agent && a.id.startsWith('desktop-')) || state.agents.find((a) => browserKey(a) === q.agent);
+      toast(`${q.name} wants to ${q.kind === 'login' ? 'sign in to' : 'open'} ${q.origin.replace(/^https?:\/\//, '')} in the browser`, agent ? () => { navigate('session', agent.id); inspectorTab = 'browser'; inspectorOpen = true; syncInspector(); } : null, 'Show');
+    };
+    for (const q of fresh) decide(q, false);
+    if (!$('inspector').hidden && !inspectorFile) renderInspector();
+  }
+  if (embedded && !paneKey) {
+    desktopCall('browser-state').then((s) => s && onBrowserState(s)).catch(() => {});
+    new ResizeObserver(() => placeBrowser()).observe(document.body);
+    addEventListener('resize', placeBrowser);
+    document.addEventListener('visibilitychange', placeBrowser);
+    // menus and dialogs come and go without telling us: check now and then (cheap, and only sends on change)
+    setInterval(placeBrowser, 400);
+  }
+  const browserAct = (action, args = {}) => desktopCall('browser-user', { agent: browserKey(byId.get(selectedId)), action, args }).catch((e) => toast(e.message));
+  document.addEventListener('click', (event) => {
+    const t = event.target.closest('[data-inspector-tab]');
+    if (t) { inspectorTab = t.dataset.inspectorTab === 'browser' ? 'browser' : 'details'; setStorage('synapse-inspector-tab', inspectorTab); inspectorSignature = ''; browserSignature = ''; syncInspector(); return; }
+    const a = event.target.closest('[data-browser-answer]');
+    if (a) { desktopCall('browser-answer', { id: a.dataset.ask, choice: a.dataset.browserAnswer }).catch((e) => toast(e.message)); return; }
+    const v = event.target.closest('#browser-vault');
+    if (v) {
+      const users = browserOf(byId.get(selectedId))?.logins || [];
+      if (users.length === 1) browserAct('login', { user: users[0] });
+      else dropdown(v, [{ heading: 'Sign in with your vault' }, ...users.map((u) => ({ label: u, icon: 'key', run: () => browserAct('login', { user: u }) }))]);
+      return;
+    }
+    const b = event.target.closest('[data-browser]');
+    if (b) browserAct(b.dataset.browser, b.dataset.tab ? { tab: b.dataset.tab } : {});
+  });
+  document.addEventListener('submit', (event) => {
+    if (event.target.id !== 'browser-go') return;
+    event.preventDefault();
+    const url = $('browser-url').value.trim(); if (!url) return;
+    $('browser-url').blur(); browserAct('go', { url });
+  });
+
   function renderInspector() {
     const agent = byId.get(selectedId); if (!agent) return;
     if (inspectorFile?.agent === selectedId) {
@@ -1729,12 +1852,15 @@ function initialize() {
       return;
     }
     inspectorFile = null; $('inspector').classList.remove('file-mode'); delete $('inspector').dataset.filePath;
+    $('inspector').classList.toggle('browser-mode', inspectorTab === 'browser');
+    if (inspectorTab === 'browser') { renderBrowser(agent); return; }
+    browserSignature = '';
     const peers = relations(agent.id), chat = recentCache.get(agent.id)?.data.chat || [];
     loadChanges(agent);
     const signature = JSON.stringify([agent.id, agent.name, agent.status, agent.lastActivity, todosOf(agent), peers, chat.slice(-3), Math.floor(Date.now() / 60000), changeCache.get(agent.id)?.data, friends?.links?.length, friends?.outgoing?.length, friends?.incoming?.length]);
     if (signature === inspectorSignature) return;
     inspectorSignature = signature;
-    $('inspector').innerHTML = `<div class="inspector-heading"><h2>Session details</h2><button class="icon-button" data-action="close-inspector" aria-label="Close session details">${icon('x')}</button></div>
+    $('inspector').innerHTML = `${inspectorTabs(agent)}
       <section class="inspector-section"><div class="session-summary">${avatar(agent)}<div><strong>${escapeHtml(agent.name)}</strong><span class="session-provider">${escapeHtml(kindName(agent))}</span></div></div><div class="detail-row"><span>Status</span><span class="status-label">${status(agent)}${activityLabel(agent)}</span></div><div class="detail-row"><span>Last activity</span><span>${relativeTime(agent.lastActivity) === 'now' ? 'Just now' : `${relativeTime(agent.lastActivity)} ago`}</span></div><div class="folder-path">${icon('folder')}<span>${escapeHtml(agent.cwd)}</span></div></section>
       ${todoSection(agent)}
       ${changesSection(agent)}
@@ -2062,6 +2188,10 @@ function initialize() {
         : await api(`/api/agents/${encodeURIComponent(agent.backendId || id)}/recent?limit=${requestedLimit}`, { signal: recentController.signal })
           // a session of ours the server has just lost track of (restarted, re-registering): show its terminal meanwhile
           .catch((error) => { if (agent.owned && error.status === 404) return desktopCall('output', { id }); throw error; });
+      // a conversation already shown never gives way to the raw terminal: an empty or missing answer for a moment
+      // (the agent waiting on you, its session being matched again) keeps it, and the next load fills it in
+      const had = cached?.data?.messages?.length && cached.transcript === agent.transcript; // (a new transcript, after /clear, may be empty)
+      if (had && (typeof data.terminal === 'string' || !data.messages?.length)) return;
       if (agent.owned && !data.messages?.length && !data.chat?.length) Object.assign(data, await desktopCall('output', { id }));
       recentCache.delete(id); recentCache.set(id, { data, activity, revision, limit: requestedLimit, backend: agent.backendId, transcript: agent.transcript });
       if (paneKey) parent.postMessage({ type: 'synapse:pane-recent', id, cached: recentCache.get(id) }, location.origin);
@@ -2083,7 +2213,7 @@ function initialize() {
 
   function updateComposer() {
     const agent = byId.get(selectedId);
-    $('message-input').placeholder = agent ? (agent.owned ? 'Ask anything. @ agents, / commands' : `Message ${agent.name}…`) : 'Message your agent…';
+    $('message-input').placeholder = !$('approval-card').hidden && approvalFor === agent?.id ? 'Or write a message for after you answer…' : agent ? (agent.owned ? 'Ask anything. @ agents, / commands' : `Message ${agent.name}…`) : 'Message your agent…';
     $('attach-files').hidden = !agent?.owned;
     if (agent?.owned) loadChanges(agent).then(paintChangesChip); else $('changes-chip').hidden = true;
     const waitingNow = agent?.owned && ['waiting', 'needs_input'].includes(agent.status);
@@ -2288,6 +2418,26 @@ function initialize() {
     });
   }
 
+  // answering from the keyboard: while the box you type in is empty (or the card has focus), 1-9 picks, ↑↓ move,
+  // Enter takes the highlighted answer, Esc cancels
+  document.addEventListener('keydown', (event) => {
+    const card = $('approval-card');
+    if (card.hidden || !approvalFor || event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
+    const inCard = card.contains(document.activeElement), input = $('message-input');
+    if (document.activeElement?.closest('.ask-own')) return;
+    if (!inCard && !(document.activeElement === input && !input.value) && document.activeElement !== document.body) return;
+    const rows = [...card.querySelectorAll('.ask-option')];
+    const at = Math.max(0, rows.findIndex((r) => r.classList.contains('active')));
+    const move = (to) => { rows[at]?.classList.remove('active'); rows[to]?.classList.add('active'); rows[to]?.scrollIntoView({ block: 'nearest' }); };
+    if (/^[1-9]$/.test(event.key)) { const row = rows.find((r) => r.querySelector('.ask-key')?.textContent === event.key) || rows[Number(event.key) - 1]; if (row) { event.preventDefault(); event.stopPropagation(); row.click(); } return; }
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && rows.length) { event.preventDefault(); event.stopPropagation(); move((at + (event.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length); return; }
+    if (event.key === 'Enter' && !event.shiftKey && rows.length && !inCard) { event.preventDefault(); event.stopPropagation(); rows[at].click(); return; }
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); answerApproval('escape'); }
+  }, true); // before the box's own keys (Enter would send it; a digit would be typed into it)
+  $('approval-card').addEventListener('pointermove', (event) => {
+    const row = event.target.closest('.ask-option'); if (!row || row.classList.contains('active')) return;
+    $('approval-card').querySelector('.ask-option.active')?.classList.remove('active'); row.classList.add('active');
+  });
   $('approval-card').addEventListener('submit', (event) => {
     const form = event.target.closest('[data-approval-input]'); if (!form) return;
     event.preventDefault();
@@ -3059,7 +3209,11 @@ function initialize() {
   // the model, for Claude Code: /model sent to the session, as if typed
   $('provider-label').addEventListener('click', () => {
     const agent = byId.get(selectedId); if (!embedded || !agent?.owned || agent.kind !== 'claude') return;
-    const pick = (model) => () => desktopCall('model', { id: agent.id, model }).then(() => toast(`Switching to ${model[0].toUpperCase()}${model.slice(1)}`)).catch((e) => toast(e.message));
+    // the label shows the new model right away; the transcript confirms it (with its version) a moment later
+    const pick = (model) => () => desktopCall('model', { id: agent.id, model }).then(() => {
+      const name = `${model[0].toUpperCase()}${model.slice(1)}`;
+      if (!agent.modelName?.startsWith(name)) { agent.modelName = name; renderMain(); }
+    }).catch((e) => toast(e.message));
     dropdown($('provider-label'), [
       { label: 'Opus', icon: agent.modelName?.startsWith('Opus') ? 'check' : '', run: pick('opus') },
       { label: 'Sonnet', icon: agent.modelName?.startsWith('Sonnet') ? 'check' : '', run: pick('sonnet') },
@@ -3347,7 +3501,7 @@ if (typeof document !== 'undefined' && document.getElementById('workspace')) {
         const origin = new URLSearchParams(location.search).has('pane') ? location.origin : 'null';
         if (event.source !== parent || event.origin !== origin || event.data?.type !== 'synapse:desktop-bootstrap') return;
         clearTimeout(timer); removeEventListener('message', receive);
-        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-stacks'];
+        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-stacks', 'synapse-inspector-tab'];
         for (const key of keys) {
           try {
             const value = event.data.preferences?.[key];

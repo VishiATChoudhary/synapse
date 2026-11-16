@@ -2,7 +2,9 @@
 // Synapse MCP server (stdio, JSON-RPC 2.0, no dependencies). Works with any MCP-capable agent:
 // Claude Code, Codex, Amp, OpenCode, Copilot CLI, Gemini CLI.
 import readline from 'node:readline';
-import { agentForProcess } from './lib.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { agentForProcess, DATA } from './lib.mjs';
 import * as ops from './ops.mjs';
 import * as plan from './plan.mjs';
 import * as remote from './remote.mjs';
@@ -27,7 +29,10 @@ The user links agents on the Synapse canvas, or you can link yourself with synap
   (through a request), synapse_ask asks its owner to allow questions (status "requested", not an error: do not retry); a note arrives in synapse_inbox once they allow it.
 - The user keeps a todo list in Synapse, shared with their agents (synapse_todos). When the user asks you to note,
   track or do something later, add it with synapse_todo_add (linked to you by default). Tick a todo you finished with
-  synapse_todo_update done=true; synapse_todo_remove deletes one. Todos may come from Linear (they show its id).`;
+  synapse_todo_update done=true; synapse_todo_remove deletes one. Todos may come from Linear (they show its id).
+- synapse_browser drives a browser inside Synapse that the user watches and is signed in to. Use it for web tasks
+  (checking a page, a signed-in dashboard, testing a web app); the user allows each new site once. To sign in, use
+  action login: the user's vault fills it after they approve; never ask the user for a password.`;
 
 const agentArg = { type: 'string', description: 'Agent name or id (prefix is fine)' };
 const TOOLS = [
@@ -99,7 +104,32 @@ const TOOLS = [
   { name: 'synapse_todo_remove', description: 'Delete a todo from the list (for one that is finished, prefer synapse_todo_update done=true).',
     inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     run: (me, a) => ({ removed: todos.show(todos.remove(a.id)) }) },
+  { name: 'synapse_browser', description: `Use the browser inside the Synapse app. The user watches it next to your chat and is signed in to their sites there, so you can use their sessions (never ask for passwords). Each agent has its own tabs.
+Actions: open (url) opens a page; read gives the page's title, text and its numbered elements; click (ref) and type (ref, text, submit) act on an element by its number from the last read; press (key: Enter, Tab, Escape, ArrowDown...); scroll (direction up/down); back; forward; screenshot; login (user, optional) signs in with the user's saved login for the site, from their vault: Synapse fills it in after the user approves, and you never see the password (logins lists which users are saved for the site); new_tab (url); tabs; select_tab (tab); close_tab (tab); status.
+The first time you open a site, the user is asked to allow it: the call waits for their answer. If the user takes over the browser, actions fail until they hand it back. Only works while the Synapse app is open.`,
+    inputSchema: { type: 'object', properties: {
+      action: { type: 'string', enum: ['open', 'read', 'click', 'type', 'press', 'scroll', 'back', 'forward', 'screenshot', 'login', 'logins', 'new_tab', 'tabs', 'select_tab', 'close_tab', 'status'] },
+      url: { type: 'string' }, user: { type: 'string', description: 'For login: which saved user, when the vault has several for the site' }, ref: { type: 'number', description: 'Element number from the last read' }, text: { type: 'string' },
+      submit: { type: 'boolean', description: 'Press Enter after typing' }, key: { type: 'string' }, direction: { type: 'string', enum: ['up', 'down'] }, tab: { type: 'string' },
+    }, required: ['action'] },
+    run: (me, a) => browser(me, a) },
 ];
+
+// the agent browser lives in the Synapse app (app/agent-browser.mjs); it says where in ~/.synapse/agent-browser.json
+async function browser(me, { action, ...args }) {
+  let at;
+  try { at = JSON.parse(fs.readFileSync(path.join(DATA, 'agent-browser.json'), 'utf8')); } catch { throw new Error('The Synapse app is not running, so its browser is not available. Ask the user to open Synapse.'); }
+  let res;
+  try {
+    res = await fetch(`http://127.0.0.1:${at.port}/act`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${at.token}` }, body: JSON.stringify({ agent: me.id, action, args }), signal: AbortSignal.timeout(180_000) });
+  } catch { throw new Error('Could not reach the Synapse app\'s browser. Is Synapse open?'); }
+  const body = await res.json().catch(() => ({}));
+  if (body.error) throw new Error(body.error);
+  const v = body.value || {};
+  if (v.image) return { __content: [{ type: 'image', data: v.image, mimeType: v.mime || 'image/jpeg' }, { type: 'text', text: `Screenshot of ${v.url}` }] };
+  if (v.elements !== undefined || v.text !== undefined) return { __text: `# ${v.title || '(no title)'}\n${v.url}  (tab ${v.tab})\n\n## Elements\n${v.elements || '(none)'}\n\n## Text\n${v.text || '(empty)'}` };
+  return v;
+}
 
 async function people() {
   const online = new Map(remote.friends().friends.map((f) => [f.name.toLowerCase(), f]));
@@ -145,6 +175,8 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
         // a friend's agent: fetch what their machine sent since the last sync before reading it
         if (tool.name === 'synapse_read' && remote.isConnected()) await remote.sync({ timeout: 4000 }).catch(() => {});
         const out = await tool.run(me, params.arguments || {});
+        if (out?.__content) return write({ id, result: { content: out.__content } });
+        if (typeof out?.__text === 'string') return write({ id, result: { content: [{ type: 'text', text: out.__text }] } });
         const text = typeof out?.context === 'string'
           ? `# ${out.agent.name} (${out.agent.kind}, ${out.agent.cwd})\n\n${out.context}`
           : JSON.stringify(out, null, 2);

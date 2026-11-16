@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>Browser</title>
+<link rel="stylesheet" href="../../tokens.css">
+<style>
+  html, body { margin: 0; height: 100%; background: var(--color-paper); color: var(--color-ink); font: var(--text-base) var(--font-body); overflow: hidden; }
+  .bar { height: 44px; box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 84px; background: var(--color-sidebar); border-bottom: 1px solid var(--color-border); -webkit-app-region: drag; }
+  body.win .bar { padding-left: 10px; }
+  .bar > * { -webkit-app-region: no-drag; }
+  button { all: unset; box-sizing: border-box; height: 28px; min-width: 28px; padding: 0 8px; display: inline-grid; place-items: center; border-radius: var(--radius-xs); color: var(--color-secondary); cursor: default; white-space: nowrap; }
+  button:hover:not(:disabled) { background: var(--color-hover); color: var(--color-ink); }
+  button:disabled { opacity: .35; }
+  button:focus-visible { outline: 2px solid var(--color-focus); }
+  form { flex: 1; min-width: 0; }
+  input { width: 100%; box-sizing: border-box; height: 28px; padding: 0 10px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-paper); color: var(--color-ink); font: var(--text-sm) var(--font-body); outline: 0; }
+  input:focus { border-color: var(--color-focus); box-shadow: 0 0 0 3px var(--color-focus-soft); }
+  .who { font-weight: 500; color: var(--color-ink); padding: 0 6px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dock { border: 1px solid var(--color-border-strong); }
+  .driving { display: none; align-items: center; gap: 6px; padding: 0 8px; height: 26px; border-radius: 13px; background: var(--color-accent-soft); color: var(--color-accent-text); font-size: var(--text-sm); }
+  .driving.on { display: inline-flex; }
+  .driving i { width: 7px; height: 7px; border-radius: 50%; background: var(--color-accent); animation: pulse 1s infinite alternate; }
+  @keyframes pulse { to { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { .driving i { animation: none; } }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <span class="who" id="who"></span>
+    <button id="back" title="Back" aria-label="Back">←</button>
+    <button id="forward" title="Forward" aria-label="Forward">→</button>
+    <button id="reload" title="Reload" aria-label="Reload">↻</button>
+    <form id="go"><input id="url" spellcheck="false" aria-label="Address" placeholder="Search or enter address"></form>
+    <span class="driving" id="driving"><i></i><span id="driving-text">Agent is driving</span></span>
+    <button id="pause" title="Take over: the agent waits until you hand it back">Take over</button>
+    <button id="dock" class="dock" title="Put the browser back next to the agent">Back to agent</button>
+  </div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  if (!navigator.userAgent.includes('Mac')) document.body.classList.add('win');
+  const act = (a, args) => window.agentBrowser.user(a, args);
+  $('back').onclick = () => act('back'); $('forward').onclick = () => act('forward'); $('reload').onclick = () => act('reload');
+  $('dock').onclick = () => act('dock');
+  let paused = false;
+  $('pause').onclick = () => act(paused ? 'resume' : 'pause');
+  $('go').onsubmit = (e) => { e.preventDefault(); act('go', { url: $('url').value }); $('url').blur(); };
+  window.agentBrowser.onState((s) => {
+    if (!s) return;
+    $('who').textContent = s.name || '';
+    document.title = `${s.name || 'Agent'} · browser`;
+    const tab = s.tabs.find((t) => t.id === s.active);
+    if (document.activeElement !== $('url')) $('url').value = tab?.url && tab.url !== 'about:blank' ? tab.url : '';
+    $('back').disabled = !s.canBack; $('forward').disabled = !s.canForward;
+    paused = s.paused;
+    $('pause').textContent = paused ? 'Hand back' : 'Take over';
+    $('driving').classList.toggle('on', s.driving && !paused);
+    $('driving-text').textContent = `${s.name || 'Agent'} is driving`;
+  });
+</script>
+</body>
+</html>

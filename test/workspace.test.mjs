@@ -203,6 +203,22 @@ test('a prompt sent as a paste reads as what was typed: Claude Code\'s pasted_co
   await rm(dir, { recursive: true, force: true });
 });
 
+test('the model shows the switch at once: /model logs "Set model to" before the next reply does', async () => {
+  const { transcriptModel, modelName } = await import('../discovery.mjs');
+  const dir = await mkdtemp(path.join(tmpdir(), 'synapse-model-')), file = path.join(dir, 't.jsonl');
+  const reply = (model) => JSON.stringify({ type: 'assistant', message: { model, content: [{ type: 'text', text: 'hi' }] } });
+  const switched = (to) => JSON.stringify({ type: 'user', message: { content: `<local-command-stdout>Set model to \`${to}\` and saved as your default for new sessions</local-command-stdout>` } });
+  writeFileSync(file, [reply('claude-opus-5-5'), switched('Sonnet 5.5')].join('\n'));
+  assert.equal(modelName(transcriptModel(file)), 'Sonnet 5.5', 'switched, before any reply');
+  writeFileSync(file, [reply('claude-opus-5-5'), switched('Sonnet 5.5'), reply('claude-sonnet-5-5')].join('\n'));
+  assert.equal(modelName(transcriptModel(file)), 'Sonnet 5.5');
+  writeFileSync(file, [switched('Sonnet 5.5'), reply('claude-haiku-5-5')].join('\n'));
+  assert.equal(modelName(transcriptModel(file)), 'Haiku 5.5', 'a later reply wins');
+  writeFileSync(file, [reply('claude-haiku-5-5'), switched('Default (Opus 5.5)')].join('\n'));
+  assert.equal(modelName(transcriptModel(file)), 'Opus 5.5');
+  await rm(dir, { recursive: true, force: true });
+});
+
 test('agent prompts read from real Claude Code screens: questions, tabs, multi-select, permission, review, menus', () => {
   const screen = (name) => parseApproval(readFileSync(path.join(root, 'test/fixtures/prompts', `${name}.txt`), 'utf8').split('\n'));
   const short = (p) => p.options.map((o) => [o.key, o.label, ...(o.selected ? ['>'] : []), ...(o.checked !== undefined ? [o.checked ? 'x' : ' '] : []), ...(o.input ? ['input'] : []), ...(o.chat ? ['chat'] : [])]);

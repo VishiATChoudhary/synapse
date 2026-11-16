@@ -11,6 +11,14 @@ contextBridge.exposeInMainWorld('synapse', {
   pathForFile: (file) => webUtils.getPathForFile(file),
   onState: (fn) => on('state', fn),
   onNotch: (fn) => on('window:notch', fn),
+  agentBrowser: {
+    state: () => call('agent-browser:state'),
+    bounds: (agent, bounds) => call('agent-browser:bounds', { agent, bounds }),
+    user: (agent, action, args) => call('agent-browser:user', { agent, action, args }),
+    answer: (id, choice) => call('agent-browser:answer', { id, choice }),
+    onState: (fn) => on('agent-browser:state', fn),
+    onAsk: (fn) => on('agent-browser:ask', fn),
+  },
   notify: { done: (a) => call('notify:done', a), onOpen: (fn) => on('notify:open', fn) },
   history: {
     sources: () => call('history:sources'),

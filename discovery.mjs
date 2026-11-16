@@ -52,8 +52,11 @@ export function modelName(id) {
 export function transcriptModel(file) {
   const size = fs.statSync(file).size;
   const tail = readSlice(file, Math.max(0, size - 256_000), Math.min(size, 256_000));
-  const all = [...tail.matchAll(/"model":"((?:claude|gpt|o\d)[\w.-]{0,40})"/g)];
-  return all.length ? all.at(-1)[1] : '';
+  const said = [...tail.matchAll(/"model":"((?:claude|gpt|o\d)[\w.-]{0,40})"/g)].at(-1);
+  // /model in Claude Code logs "Set model to `Sonnet 5.5`" right away; its next reply would only say so later
+  const set = [...tail.matchAll(/Set model to (?:\\?["`])?([^`"\\<\n]{1,40}?)(?:\\?["`]|\s+and\b|<)/g)].at(-1);
+  if (set && (!said || set.index > said.index)) { const name = set[1].trim(); return name.match(/\(([^)]+)\)/)?.[1] || name; }
+  return said ? said[1] : '';
 }
 export function transcriptTitle(file) {
   const size = fs.statSync(file).size;
@@ -102,9 +105,10 @@ if (!isMainThread) {
               let title = previews.get(agent.id)?.title || '';
               if (agent.format !== 'demo' && (!title || Date.now() - (previews.get(agent.id)?.titledAt || 0) > 60_000)) {
                 try { title = transcriptTitle(file); } catch {}
-                let model = ''; try { model = transcriptModel(file); } catch {}
-                previews.set(agent.id, { mtime, preview, title, model, titledAt: Date.now() });
+                previews.set(agent.id, { mtime, preview, title, titledAt: Date.now() });
               } else previews.set(agent.id, { ...previews.get(agent.id), mtime, preview, title });
+              let model = ''; try { model = transcriptModel(file); } catch {}
+              previews.get(agent.id).model = model;
             }
             preview = previews.get(agent.id)?.preview || ''; title = agent.title || previews.get(agent.id)?.title || ''; model = previews.get(agent.id)?.model || '';
           }

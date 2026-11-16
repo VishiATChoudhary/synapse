@@ -3685,6 +3685,11 @@ const ageOf = (t) => { const m = Math.max(0, Math.round((Date.now() - (t || 0)) 
 // Only this packaged renderer owns native capabilities; the local page gets an allowlisted bridge.
 let workspaceOpen = false, workspaceReady = null, workspaceLive = false, workspaceSignature = '', workspaceView = 'session';
 const workspaceFrame = $('#workspace-frame');
+// the agent browser's tabs and questions, passed on to the GUI's panel
+synapse.agentBrowser.onState((state) => workspacePost({ type: 'synapse:browser-state', state }));
+synapse.agentBrowser.onAsk(() => synapse.agentBrowser.state().then((state) => workspacePost({ type: 'synapse:browser-state', state, ask: true }), () => {}));
+// a sheet over the GUI hides the browser (a native view would sit on top of it); the panel places it again after
+new MutationObserver(() => workspacePost({ type: 'synapse:browser-cover', covered: !$('#modal').hidden })).observe($('#modal'), { attributes: true, attributeFilter: ['hidden'] });
 const workspacePost = (data) => {
   if (workspaceLive && workspaceFrame.src) workspaceFrame.contentWindow.postMessage(data, new URL(workspaceFrame.src).origin);
 };
@@ -3942,6 +3947,14 @@ async function desktopAction(action, args) {
       ], Math.max(0, Number(args.x) || 0), Math.max(guiTop(), (Number(args.y) || 0) + guiTop()));
       return;
     }
+    // the agent browser: the panel's browser area, in the page's coordinates; the window's are the frame's plus these
+    case 'browser-bounds': {
+      const f = workspaceFrame.getBoundingClientRect(), b = args.bounds;
+      return synapse.agentBrowser.bounds(String(args.agent || ''), b && $('#modal').hidden ? { x: f.left + b.x, y: f.top + b.y, width: b.width, height: b.height } : null);
+    }
+    case 'browser-user': return synapse.agentBrowser.user(String(args.agent || ''), String(args.action || ''), args.args || {});
+    case 'browser-answer': return synapse.agentBrowser.answer(String(args.id || ''), String(args.choice || ''));
+    case 'browser-state': return synapse.agentBrowser.state();
     case 'settings': return openSettings();
     // friends, for the GUI's Add connection and Connections view: who you trust, what waits on you, and the four
     // answers (share, ask, accept, deny). Agents are named by their Synapse id.

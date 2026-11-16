@@ -53,7 +53,7 @@ const set = (slot, status) => fs.writeFileSync(path.join(ctl, `state-${slot}`), 
 const typed = () => { try { return fs.readFileSync(path.join(ctl, 'typed-0'), 'utf8'); } catch { return ''; } };
 const screenOf = (name) => fs.readFileSync(path.join(root, 'test/fixtures/prompts', `${name}.txt`), 'utf8');
 const show = (name) => fs.writeFileSync(path.join(ctl, 'screen-0'), screenOf(name));
-const card = () => ui(`(() => { const c = document.getElementById('approval-card'); if (c.hidden) return null; return { title: c.querySelector('.approval-title')?.textContent || '', text: c.querySelector('.approval-text')?.textContent || '', command: c.querySelector('.approval-command')?.textContent || '', tabs: [...c.querySelectorAll('.approval-tab')].map((t) => t.textContent), options: [...c.querySelectorAll('.approval-option')].map((o) => (o.querySelector('strong')?.textContent || (o.querySelector('input') ? 'INPUT' : '')) + (o.querySelector('small') ? ' | ' + o.querySelector('small').textContent : '')), buttons: [...c.querySelectorAll('.approval-choices .button')].map((b) => b.textContent.trim()) }; })()`);
+const card = () => ui(`(() => { const c = document.getElementById('approval-card'); if (c.hidden) return null; return { context: c.querySelector('.ask-context')?.textContent || '', text: c.querySelector('.ask-question')?.firstChild?.textContent || '', command: c.querySelector('.ask-command')?.textContent || '', steps: c.querySelector('.ask-steps')?.textContent || '', options: [...c.querySelectorAll('.ask-option:not(.ask-own)')].map((o) => o.querySelector('.ask-label').textContent + (o.querySelector('.ask-desc') ? ' | ' + o.querySelector('.ask-desc').textContent : '')).concat(c.querySelector('.ask-own') ? ['INPUT'] : []), buttons: [...c.querySelectorAll('.ask-foot button')].map((b) => b.textContent.trim()) }; })()`);
 const clearTyped = () => { try { fs.unlinkSync(path.join(ctl, 'typed-0')); } catch {} };
 
 (async () => {
@@ -72,41 +72,45 @@ const clearTyped = () => { try { fs.unlinkSync(path.join(ctl, 'typed-0')); } cat
   // a question: title, question, every option with its description, your own answer, Chat about this
   await until(async () => (await card())?.options.length === 4, 'the question card', 20000);
   let c = await card();
-  assert.equal(c.title, 'Color theme'); assert.equal(c.text, 'Which color theme do you prefer?');
+  assert.equal(c.text, 'Which color theme do you prefer?');
   assert.deepEqual(c.options, ['Light | Bright backgrounds with dark text. Clean and easy to read in daylight.', 'Dark | Dark backgrounds with light text. Easier on the eyes in low light.', 'High contrast | Maximum contrast between text and background. Best for readability and accessibility.', 'INPUT']);
-  assert.ok(c.buttons.includes('Chat about this'));
-  if (process.env.PROMPT_SHOT) fs.writeFileSync(process.env.PROMPT_SHOT, (await win.webContents.capturePage()).toPNG());
+  assert.ok(c.buttons.includes('Chat about it'));
+  if (process.env.PROMPT_SHOT) { await sleep(500); fs.writeFileSync(process.env.PROMPT_SHOT, (await win.webContents.capturePage()).toPNG()); }
   clearTyped();
-  await ui(`document.querySelector('#approval-card [data-approval-key="2"]').click()`);
-  await until(() => typed() === '2', 'a pick sends its number');
+  await ui(`(() => { const i = document.getElementById('message-input'); i.focus(); i.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true, cancelable: true })); })()`);
+  await until(() => typed() === '2', 'pressing 2 picks the second answer');
+  assert.equal(await ui(`document.getElementById('message-input').value`), '', 'and is not typed into the box');
   // your own answer: the number of "Type something", the text, then Enter
   clearTyped(); show('claude-questions-tabs');
-  await until(async () => (await card())?.tabs.join(',') === 'Color,Animal', 'two questions show as tabs');
+  await until(async () => (await card())?.steps === '1/2', 'two questions show as steps');
   await ui(`(() => { const f = document.querySelector('#approval-card [data-approval-input]'); f.querySelector('input').value = 'purple'; f.requestSubmit(); })()`);
   await until(() => typed() === '4purple\r', 'your own answer goes in as text');
   console.log('PASS question: title, question, options with descriptions and tabs; a pick sends its number, your own answer its text');
 
   // multi-select: ticks show, a tick sends its number, Submit moves on (→)
   clearTyped(); show('claude-multiselect');
-  await until(() => ui(`document.querySelectorAll('#approval-card .approval-check').length === 3`), 'tick boxes');
+  await until(() => ui(`document.querySelectorAll('#approval-card .ask-box').length === 3`), 'tick boxes');
+  await ui(`document.querySelector('#approval-card [data-approval-key="1"]').click()`); await until(() => typed() === '1', 'tick 1'); clearTyped();
+  if (process.env.PROMPT_SHOT) { await sleep(400); fs.writeFileSync(process.env.PROMPT_SHOT.replace(/\.png$/, '-multi.png'), (await win.webContents.capturePage()).toPNG()); }
   await ui(`document.querySelector('#approval-card [data-approval-key="3"]').click()`);
   await until(() => typed() === '3', 'a tick sends its number');
-  await ui(`[...document.querySelectorAll('#approval-card .approval-choices .button')].find((b) => /Submit/.test(b.textContent)).click()`);
+  await ui(`[...document.querySelectorAll('#approval-card .ask-foot button')].find((b) => /Submit/.test(b.textContent)).click()`);
   await until(() => typed() === '3\x1b[C', 'Submit moves to the review');
   show('claude-review');
-  await until(async () => (await card())?.title === 'Review your answers', 'the review');
+  await until(async () => (await card())?.text === 'Ready to submit your answers?', 'the review');
   console.log('PASS multi-select: ticks, Submit, then the review');
 
   // a permission prompt: what it is, the command apart, the choices
   clearTyped(); show('claude-permission');
-  await until(async () => (await card())?.title === 'Bash command', 'the permission prompt');
+  await until(async () => (await card())?.command === 'touch synapse-perm-test.txt', 'the permission prompt');
   c = await card();
-  assert.equal(c.command, 'touch synapse-perm-test.txt'); assert.match(c.text, /Do you want to proceed\?/);
+  assert.equal(c.text, 'Do you want to proceed?'); assert.equal(c.context, "Bash command: Create empty file synapse-perm-test.txt");
   assert.equal(c.options.length, 4);
+  if (process.env.PROMPT_SHOT) { await sleep(400); fs.writeFileSync(process.env.PROMPT_SHOT.replace(/\.png$/, '-perm.png'), (await win.webContents.capturePage()).toPNG()); }
   // a menu without numbers: walked with the arrow keys
   clearTyped(); show('claude-trust');
   await until(async () => (await card())?.options.includes('Yes, I trust this folder'), 'the trust menu');
-  await ui(`[...document.querySelectorAll('#approval-card .approval-option')].find((b) => /Yes, I trust/.test(b.textContent)).click()`);
+  await ui(`[...document.querySelectorAll('#approval-card .ask-option')].find((b) => /Yes, I trust/.test(b.textContent)).click()`);
   await until(() => typed() === '\x1b[B\r', 'down, then Enter');
   console.log('PASS permission prompt with its command apart; a menu without numbers is answered with the arrow keys');
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);

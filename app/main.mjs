@@ -21,6 +21,8 @@ import * as phone from './phone.mjs';
 import { collect as collectActivity, lastWeek } from './activity.mjs';
 import { createDiscovery } from '../discovery.mjs';
 import * as chats from './history.mjs';
+import { createAgentBrowser } from './agent-browser.mjs';
+import * as vault from './vault.mjs';
 import headless from '@xterm/headless';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -714,6 +716,7 @@ function noReload() {
 }
 
 app.whenReady().then(() => {
+  agentBrowser.start();
   integrationSetup = autoSetup(); // install guidance before a new or restored agent starts
   if (WIN) Menu.setApplicationMenu(null); // its accelerators (Ctrl+W closes the window, Ctrl+R reloads) belong to the terminals
   else noReload();
@@ -755,6 +758,7 @@ app.on('window-all-closed', () => app.quit());
 // only once node-pty has seen them all exit: its exit-watcher threads otherwise block or crash Node's shutdown.
 let quitting = false;
 app.on('before-quit', (e) => {
+  agentBrowser.stop();
   discovery.close();
   phone.stopShares(); // no tunnel outlives the app
   try { canvasProc?.kill(); } catch {}
@@ -897,6 +901,19 @@ const handle = (ch, fn) => ipcMain.handle(ch, async (event, a) => {
   try { return { ok: true, value: await fn(a || {}) }; } catch (e) { return { ok: false, error: e.message }; }
 });
 handle('state', async () => { await discovery.refresh(); return state(); });
+// the agent browser (agent-browser.mjs): the panel places it, you drive it from the panel or its own window
+const agentBrowser = createAgentBrowser({ dataDir: DATA, root: ROOT, vault, packaged: app.isPackaged, getWin: () => win, agentName: (id) => listAgents().find((a) => a.id === id)?.name || 'Agent' });
+const agentId = (v) => { const id = String(v || ''); if (!id || id.length > 200) throw new Error('Pick an agent.'); return id; };
+handle('agent-browser:state', () => agentBrowser.snapshot());
+handle('agent-browser:bounds', (a) => agentBrowser.setBounds(agentId(a.agent), a.bounds || null));
+handle('agent-browser:user', (a) => agentBrowser.user(agentId(a.agent), String(a.action || ''), a.args || {}));
+handle('agent-browser:answer', (a) => agentBrowser.answer(String(a.id || ''), ['once', 'always', 'deny'].includes(a.choice) ? a.choice : 'deny'));
+// a popped-out browser window's own bar: it can only act on its own agent
+ipcMain.handle('browser-window:user', async (event, a) => {
+  const w = BrowserWindow.fromWebContents(event.sender), id = w && new URL(event.sender.getURL()).searchParams.get('agent');
+  if (!id || event.senderFrame !== event.sender.mainFrame || !event.sender.getURL().startsWith('file:')) return { ok: false };
+  try { await agentBrowser.user(id, String(a?.action || ''), a?.args || {}); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+});
 handle('flags', () => ({ demo: DEMO, packaged: app.isPackaged, view: process.env.SYNAPSE_DESKTOP_VIEW || '', shot: process.env.SYNAPSE_SHOT_VIEW || '', steps: JSON.parse(process.env.SYNAPSE_SHOT_STEPS || '[]'), cwd: process.cwd(), home: os.homedir() }));
 handle('pty:spawn', async (a) => {
   // a liaison (⌘N, ask a friend): talks with friends' agents for the agent it names, see liaisonFor in ops.mjs
@@ -948,7 +965,7 @@ handle('pty:restore', ({ cwd, kind, resume, cols, rows }) => {
 handle('sessions:load', () => readJSON(SESSIONS, null));
 handle('sessions:save', (data) => writeJSON(SESSIONS, data));
 const UI_STATE = path.join(DATA, 'workspace-ui.json');
-const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-stacks']);
+const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-stacks', 'synapse-inspector-tab']);
 handle('workspace:load', () => readJSON(UI_STATE, {}));
 handle('workspace:save', ({ key, value }) => {
   if (!UI_KEYS.has(key) || typeof value !== 'string' || value.length > 768 * 1024) throw new Error('Invalid workspace preference.');
