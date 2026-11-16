@@ -334,7 +334,7 @@ function initialize() {
       const message = event.data;
       const owns = (id) => desktop?.sessions.some((s) => s.id === id && s.pane === pane.dataset.paneKey);
       if (message?.type === 'synapse:desktop-bootstrap') {
-        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept'].map((key) => [key, getStorage(key, null)]));
+        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later'].map((key) => [key, getStorage(key, null)]));
         pane.contentWindow.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, location.origin);
       }
       if (message?.type === 'synapse:desktop-ready') sendPaneState(pane);
@@ -420,6 +420,7 @@ function initialize() {
     }
     if (message?.type === 'synapse:desktop-navigate') navigate(message.view === 'back' || (message.toggle && view === message.view) ? byId.has(selectedId) ? 'session' : 'overview' : message.view, message.id || selectedId);
     if (message?.type === 'synapse:activity-progress') activityView.progress(message.progress);
+    if (message?.type === 'synapse:update' && !paneKey) { update = message.update || {}; renderUpdateCard(); return; }
     if (message?.type === 'synapse:desktop-key') {
       if (message.key === 'j') toggleDrawer();
       else if (message.key === 'k') openSearch();
@@ -585,7 +586,7 @@ function initialize() {
   const doneSaved = readJSON('synapse-done', {});
   let snoozed = readJSON('synapse-snoozed', {}), archived = readJSON('synapse-archived', {});
   const doneSet = new Map(Array.isArray(doneSaved) ? doneSaved.map((id) => [id, Date.now()]) : Object.entries(doneSaved).filter(([, t]) => Number.isFinite(t)));
-  const lastStatus = new Map(), missingSince = new Map();
+  const lastStatus = new Map(), missingSince = new Map(), busySince = new Map(); // busySince: when an agent last turned busy
   const saveMarks = () => { setStorage('synapse-snoozed', JSON.stringify(snoozed)); setStorage('synapse-done', JSON.stringify(Object.fromEntries(doneSet))); setStorage('synapse-archived', JSON.stringify(archived)); setStorage('synapse-kept', JSON.stringify(unarchivedAt)); };
   // Tidying up on its own, each step configurable (sidebar filter menu → Tidy up): a finished agent shows Done
   // until it is a day old, then Idle; unused for 3 days it moves to Archived; a week unused, a session this app
@@ -593,6 +594,11 @@ function initialize() {
   const HOUR = 3_600_000, DAY = 24 * HOUR;
   const TIDY_DEFAULT = { idle: DAY, archive: 3 * DAY, close: 7 * DAY };
   let tidy = { ...TIDY_DEFAULT, ...readJSON('synapse-tidy', {}) };
+  // Prompts sent to a session of ours while it works or waits on a question: held here and sent one at a time
+  // once it is free, never typed into a busy terminal (where it could land in a permission menu)
+  const queued = readJSON('synapse-queue', {}); // session -> [{ id, text, at }]
+  const flushing = new Map(); // session -> when its next queued prompt was sent, until it turns busy
+  const saveQueue = () => { for (const k of Object.keys(queued)) if (!queued[k]?.length) delete queued[k]; setStorage('synapse-queue', JSON.stringify(queued)); };
   const unarchivedAt = readJSON('synapse-kept', {}); // unarchived by hand: left alone for another full period
   const usedAt = (a) => a.lastActivity || 0;
   const expiring = new Set();
@@ -602,6 +608,9 @@ function initialize() {
     for (const a of state.agents) {
       const was = lastStatus.get(a.id);
       lastStatus.set(a.id, a.status);
+      if (a.status === 'busy' && was !== 'busy' && was !== undefined) busySince.set(a.id, Date.now());
+      if (a.status === 'busy' || needsYou(a)) flushing.delete(a.id);
+      if (queued[a.id]?.length && a.owned && !a.exited && a.status !== 'busy' && !needsYou(a) && (!flushing.has(a.id) || Date.now() - flushing.get(a.id) > 15_000)) sendQueued(a.id);
       if (was === 'busy' && a.status !== 'busy' && !needsYou(a)) { doneSet.set(a.id, Date.now()); changed = true; }
       if (a.status === 'busy' && doneSet.delete(a.id)) changed = true;
       const finished = doneSet.get(a.id);
@@ -627,9 +636,35 @@ function initialize() {
     for (const id of Object.keys(unarchivedAt)) if (!live.has(id) && Date.now() - unarchivedAt[id] > 30 * DAY) { delete unarchivedAt[id]; changed = true; }
     if (changed) saveMarks();
   }
+  async function sendQueued(id, item = queued[id]?.[0]) {
+    if (!item) return;
+    flushing.set(id, Date.now());
+    queued[id] = (queued[id] || []).filter((q) => q.id !== item.id); saveQueue(); renderQueue();
+    try {
+      await desktopCall('submit', { id, text: item.text });
+      const stale = recentCache.get(id); if (stale) stale.activity = -1;
+      if (selectedId === id) loadRecent(true);
+    } catch (e) { queued[id] = [item, ...(queued[id] || [])]; saveQueue(); renderQueue(); flushing.delete(id); toast(e.message); }
+  }
+  function renderQueue() {
+    const list = queued[selectedId] || [], box = $('prompt-queue');
+    box.hidden = !list.length || view !== 'session';
+    const sig = JSON.stringify([selectedId, list.map((q) => q.id)]);
+    if (box.dataset.sig === sig) return;
+    box.dataset.sig = sig;
+    box.innerHTML = list.map((q, i) => `<div class="queued-prompt" role="listitem"><span class="queued-tag">${icon('clock')}${i ? `Queued ${i + 1}` : 'Next'}</span><span class="queued-text">${escapeHtml(q.text.replace(/\s+/g, ' '))}</span><button type="button" class="text-button" data-queue-now="${escapeHtml(q.id)}" title="Send it to the session now">Send now</button><button type="button" class="icon-button" data-queue-edit="${escapeHtml(q.id)}" aria-label="Edit queued prompt" title="Edit">${icon('edit')}</button><button type="button" class="icon-button" data-queue-remove="${escapeHtml(q.id)}" aria-label="Remove queued prompt" title="Remove">${icon('x')}</button></div>`).join('');
+  }
+  $('prompt-queue').addEventListener('click', (event) => {
+    const b = event.target.closest('button'); if (!b) return;
+    const id = selectedId, list = queued[id] || [];
+    const item = list.find((q) => q.id === (b.dataset.queueNow || b.dataset.queueEdit || b.dataset.queueRemove)); if (!item) return;
+    if (b.dataset.queueNow) return sendQueued(id, item);
+    queued[id] = list.filter((q) => q !== item); saveQueue(); renderQueue();
+    if (b.dataset.queueEdit) { const input = $('message-input'); input.value = [item.text, input.value].filter((t) => t.trim()).join('\n'); resizeComposer(); updateComposer(); input.focus(); }
+  });
   // a session closed for being unused: its marks, draft and cached conversation go too
   function forget(id) {
-    doneSet.delete(id); delete snoozed[id]; delete archived[id]; delete unarchivedAt[id]; recentCache.delete(id);
+    doneSet.delete(id); delete snoozed[id]; delete archived[id]; delete unarchivedAt[id]; delete queued[id]; saveQueue(); recentCache.delete(id);
     if (drafts[id] !== undefined) { delete drafts[id]; setStorage('synapse-drafts', JSON.stringify(drafts)); }
     saveMarks();
   }
@@ -745,7 +780,7 @@ function initialize() {
       const text = $('agent-note').value.trim(); if (!text) throw new Error('Write a message first.');
       if (agent.owned) await desktopCall('submit', { id: agent.id, text });
       else await api(`/api/agents/${encodeURIComponent(agent.id)}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
-      recentCache.delete(agent.id); toast('Sent.');
+      { const stale = recentCache.get(agent.id); if (stale) stale.activity = -1; } toast('Sent.');
     });
   }
   function planWith(agent) {
@@ -1254,7 +1289,7 @@ function initialize() {
         for (const id of ['open-terminal']) $(id).hidden = !agent.owned;
         $('fork-session').disabled = !['claude', 'codex'].includes(agent.kind) && !state.demo;
       }
-      $('delivery-note').textContent = agent.owned ? 'Sent directly to this session. When it asks you something, the choices show up here.' : 'Delivered on the agent’s next prompt or inbox check.';
+      $('delivery-note').textContent = agent.owned ? 'Sent straight to this session; while it works, prompts wait in line and go in order. Its questions show up here.' : 'Delivered on the agent’s next prompt or inbox check.';
       if (tab === 'terminal' && !(embedded && agent.owned)) tab = 'conversation';
       const shell = embedded && agent.owned && agent.kind === 'shell'; // a shell has no conversation: its terminal is the view
       if (shell) tab = 'terminal';
@@ -1268,6 +1303,7 @@ function initialize() {
       if (embedded) { $('open-terminal').hidden = !agent.cwd; $('open-terminal').setAttribute('aria-expanded', String(!$('term-drawer').hidden)); }
       if (drawerCwd && agent.cwd && drawerCwd !== agent.cwd && !$('term-drawer').hidden) openDrawer(true);
       if (reset) { $('message-input').value = drafts[selectedId] || ''; $('send-error').hidden = true; renderAttachments(); }
+      renderQueue();
       if (!split && tab !== 'terminal') { updateComposer(); renderTimeline(reset); loadRecent(); }
       document.title = `${titleOf(agent)} · Synapse`;
     } else {
@@ -1660,24 +1696,31 @@ function initialize() {
     const result = [], byAt = new Map(turns.map((t) => [t.at, t]));
     const emit = (t, last) => {
       const answerAt = t.items.findLastIndex((item) => !item.message.tool && item.message.type === 'transcript' && item.message.role !== 'user');
-      if (last && working) {
-        const key = `live:${t.at}`;
-        let el = existing.get(key);
-        if (!el) {
-          el = document.createElement('section'); el.className = 'work-fold live'; el.dataset.messageKey = key;
-          el.innerHTML = `<button type="button" class="work-summary" data-work-toggle="${escapeHtml(key)}"><span class="work-spinner" aria-hidden="true"></span><span class="work-label"></span><span class="work-time"></span>${icon('chevron-right')}</button><div class="work-body"></div>`;
-        }
-        const step = t.items.findLast((item) => item.message.tool);
-        const s = step && (toolSummary(step.message.text) || { verb: 'Using a tool', what: '' });
-        const label = ['waiting', 'needs_input'].includes(agent.status) ? 'Waiting for you' : s ? `${s.verb} ${s.what || ''}`.trim() : 'Thinking';
-        el.querySelector('.work-label').textContent = label;
-        el.querySelector('.work-time').dataset.since = String(t.start || '');
-        const open = openFolds.has(key);
-        el.querySelector('.work-summary').setAttribute('aria-expanded', String(open));
-        el.lastElementChild.hidden = !open;
-        syncChildren(el.lastElementChild, t.items.map((item) => item.element));
-        result.push(el); return;
+      // the agent turned busy after this turn's last entry, and the turn has its answer: the work belongs to a
+      // message not in the transcript yet (just sent). This turn stays as it was and the live line follows it.
+      const since = busySince.get(agent.id) || 0, lastTime = t.items.at(-1)?.message.time || t.start || 0;
+      const pending = last && working && answerAt >= 0 && since && lastTime && since > lastTime + 1000;
+      if (last && working && !pending) { result.push(liveLine(`live:${t.at}`, t.items, t.start)); return; }
+      if (pending) { emitFinished(t, answerAt); result.push(liveLine('live:next', [], since)); return; }
+      emitFinished(t, answerAt);
+    };
+    const liveLine = (key, items, start) => {
+      let el = existing.get(key);
+      if (!el) {
+        el = document.createElement('section'); el.className = 'work-fold live'; el.dataset.messageKey = key;
+        el.innerHTML = `<button type="button" class="work-summary" data-work-toggle="${escapeHtml(key)}"><span class="work-spinner" aria-hidden="true"></span><span class="work-label"></span><span class="work-time"></span>${icon('chevron-right')}</button><div class="work-body"></div>`;
       }
+      const step = items.findLast((item) => item.message.tool);
+      const s = step && (toolSummary(step.message.text) || { verb: 'Using a tool', what: '' });
+      el.querySelector('.work-label').textContent = ['waiting', 'needs_input'].includes(agent.status) ? 'Waiting for you' : s ? `${s.verb} ${s.what || ''}`.trim() : 'Thinking';
+      el.querySelector('.work-time').dataset.since = String(start || '');
+      const open = openFolds.has(key);
+      el.querySelector('.work-summary').setAttribute('aria-expanded', String(open));
+      el.lastElementChild.hidden = !open;
+      syncChildren(el.lastElementChild, items.map((item) => item.element));
+      return el;
+    };
+    const emitFinished = (t, answerAt) => {
       const fold = answerAt < 1 ? [] : t.items.slice(0, answerAt);
       if (!fold.length) { result.push(...t.items.map((item) => item.element)); return; }
       const key = `work:${fold[0].message.key}`;
@@ -1767,12 +1810,16 @@ function initialize() {
         for (const other of tagged.filter((a) => !linked.has(a.id))) { await createEdge(other.id, id); await createEdge(id, other.id); }
         if (tagged.some((a) => !linked.has(a.id))) await reloadState();
       }
-      if (agent.owned) await desktopCall('submit', { id, text });
+      const holding = agent.owned && (agent.status === 'busy' || needsYou(agent) || queued[id]?.length || flushing.has(id));
+      if (holding) { queued[id] = [...(queued[id] || []), { id: `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, text, at: Date.now() }]; saveQueue(); renderQueue(); }
+      else if (agent.owned) await desktopCall('submit', { id, text });
       else await api(`/api/agents/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
       attachments.delete(id); if (selectedId === id) renderAttachments();
       if (selectedId === id && $('message-input').value === original) { $('message-input').value = ''; drafts[id] = ''; persistDraft(); resizeComposer(); }
       else { drafts[id] = drafts[id] === original ? '' : drafts[id]; }
-      recentCache.delete(id);
+      // keep showing the conversation while it reloads: dropping it would blank the list and jump to the top
+      if (holding) return; // queued: nothing new in the conversation yet
+      const stale = recentCache.get(id); if (stale) stale.activity = -1;
       if (selectedId === id) { await loadRecent(true); $('thread-scroll').scrollTop = $('thread-scroll').scrollHeight; }
       toast(byId.get(id)?.owned ? 'Prompt sent to your session.' : 'Message queued. The agent will pick it up on its next prompt or inbox check.');
     } catch (error) {
@@ -1791,6 +1838,26 @@ function initialize() {
     const field = $('dialog-content').querySelector('input, select') || $('dialog-content').querySelector('button[aria-pressed="true"], button');
     if (field) field.focus();
   }
+
+  // ---- A new version: a card in the top right while it downloads, then Restart (or Later, until the next version)
+  let update = {};
+  function renderUpdateCard() {
+    const card = $('update-card'), v = update.version ? ` ${update.version}` : '';
+    const shown = ['downloading', 'ready', 'manual', 'installing'].includes(update.state) && getStorage('synapse-update-later') !== `${update.state}:${update.version}`;
+    card.hidden = !shown;
+    if (!shown) return;
+    const pct = Math.round((update.progress || 0) * 100);
+    const [title, sub, action] = update.state === 'ready' ? [`Synapse${v} is ready`, 'Restart to update. It also installs when you quit.', 'Restart']
+      : update.state === 'manual' ? [`Synapse${v} is out`, 'Download it and drag it into Applications.', 'Download']
+      : update.state === 'installing' ? ['Updating…', 'Synapse restarts in a moment.', '']
+      : [`Downloading Synapse${v}`, `${pct}%`, ''];
+    card.innerHTML = `<span class="update-icon">${icon(update.state === 'ready' || update.state === 'manual' ? 'arrow-up' : 'clock')}</span><div class="update-text"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(sub)}</span>${update.state === 'downloading' ? `<span class="update-bar"><span style="width:${pct}%"></span></span>` : ''}</div>${action ? `<button type="button" class="button update-go" data-update-go="1">${action}</button><button type="button" class="icon-button" data-update-later="1" aria-label="Later" title="Later">${icon('x')}</button>` : ''}`;
+    if (update.notes) card.title = update.notes;
+  }
+  $('update-card').addEventListener('click', (event) => {
+    if (event.target.closest('[data-update-later]')) { setStorage('synapse-update-later', `${update.state}:${update.version}`); renderUpdateCard(); return; }
+    if (event.target.closest('[data-update-go]')) desktopCall('update').catch((e) => toast(e.message));
+  });
 
   // ---- New session, like T3: "What should we do in <project>?" with the project and agent as pickers,
   // and the first message typed right there. Enter starts the agent with that message.
@@ -1901,15 +1968,18 @@ function initialize() {
   function syncDocks(focus = false) {
     if (!embedded || paneKey || !desktop) return;
     const agent = byId.get(selectedId), session = desktopActive && view === 'session' && agent && !splitActive && !$('thread-view').hidden;
+    // what floats over the page (the update card, a toast): the docked terminals leave a hole there
+    const covers = ['update-card', 'toast'].map((id) => $(id)).filter((el) => el && !el.hidden && el.getClientRects().length)
+      .map((el) => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height }; });
     const want = {
-      main: session && agent.owned && tab === 'terminal' ? { id: agent.id, rect: dockRect($('term-host')) } : null,
-      drawer: session && drawerId && !$('term-drawer').hidden ? { id: drawerId, rect: dockRect($('drawer-host')) } : null,
+      main: session && agent.owned && tab === 'terminal' ? { id: agent.id, rect: dockRect($('term-host')), covers } : null,
+      drawer: session && drawerId && !$('term-drawer').hidden ? { id: drawerId, rect: dockRect($('drawer-host')), covers } : null,
     };
     for (const place of ['main', 'drawer']) {
       const w = want[place]?.rect ? want[place] : null, sig = w ? JSON.stringify(w) : '';
       if (sig === docked[place] && focus !== place) continue;
       docked[place] = sig;
-      desktopCall('dock', { place, id: w?.id || null, rect: w?.rect || null, focus: focus === place }).catch(() => { docked[place] = ''; });
+      desktopCall('dock', { place, id: w?.id || null, rect: w?.rect || null, covers: w?.covers || [], focus: focus === place }).catch(() => { docked[place] = ''; });
     }
   }
 
@@ -2130,6 +2200,13 @@ function initialize() {
     next = mergeDesktop(next);
     state = next; byId = new Map(next.agents.map((agent) => [agent.id, agent]));
     const first = !ready; ready = true;
+    // the open agent turned out to be a session of ours (it registered, and the two merged): keep it open
+    const merged = view === 'session' && !byId.has(selectedId) && next.agents.find((agent) => agent.owned && agent.backendId === selectedId);
+    if (merged) {
+      if (drafts[selectedId] && !drafts[merged.id]) drafts[merged.id] = drafts[selectedId];
+      selectedId = merged.id; setStorage('synapse-selected', selectedId);
+      history.replaceState({ ...(history.state || {}), view: 'session', id: selectedId }, '', `#agent=${encodeURIComponent(selectedId)}`);
+    }
     if (view === 'session' && !byId.has(selectedId)) {
       if (first && !selectedId && next.agents.length) {
         selectedId = next.agents.find((agent) => agent.transcript)?.id || next.agents[0].id;
@@ -2748,7 +2825,7 @@ if (typeof document !== 'undefined' && document.getElementById('workspace')) {
         const origin = new URLSearchParams(location.search).has('pane') ? location.origin : 'null';
         if (event.source !== parent || event.origin !== origin || event.data?.type !== 'synapse:desktop-bootstrap') return;
         clearTimeout(timer); removeEventListener('message', receive);
-        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept'];
+        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later'];
         for (const key of keys) {
           try {
             const value = event.data.preferences?.[key];

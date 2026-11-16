@@ -3397,7 +3397,10 @@ function renderUpdate(u) {
     : `downloading${v} ${Math.round((UPD.progress || 0) * 100)}%`;
   b.title = UPD.state === 'manual' ? 'This copy of Synapse cannot replace itself here. Download the new version and drag it into Applications.'
     : UPD.state === 'ready' ? `Synapse${v} is ready. It also installs the next time you quit.${UPD.notes ? '\n\n' + UPD.notes : ''}` : '';
+  postUpdate();
 }
+// the GUI shows the same thing as a card in its top right corner
+const postUpdate = () => workspacePost({ type: 'synapse:update', update: { state: UPD.state || null, version: UPD.version || null, progress: UPD.progress || 0, notes: String(UPD.notes || '').slice(0, 600) } });
 $('#btn-update').onclick = async () => {
   try {
     if (UPD.state === 'ready') await synapse.update.install();
@@ -3718,7 +3721,7 @@ function undock(place) {
   docks.delete(place); d.box.remove();
   if (d.x.docked === place) { d.x.docked = null; d.x.el.classList.remove('visible'); if (M.slots.some((s) => s.sessions.includes(d.x))) $('#stage').appendChild(d.x.el); }
 }
-function dock({ place, id, rect, focus = false } = {}) {
+function dock({ place, id, rect, covers = [], focus = false } = {}) {
   if (!['main', 'drawer'].includes(place)) throw new Error('Unknown terminal place.');
   for (const [p, d] of docks) if (!M.slots.some((s) => s.sessions.includes(d.x))) undock(p); // closed meanwhile
   if (!id || !rect || !workspaceOpen) { undock(place); render(); return; }
@@ -3734,6 +3737,11 @@ function dock({ place, id, rect, focus = false } = {}) {
   }
   d.box.style.background = termTheme().background || '';
   Object.assign(d.box.style, { left: `${n(rect.x)}px`, top: `${n(rect.y)}px`, width: `${n(rect.width)}px`, height: `${n(rect.height)}px` });
+  // cards the page shows over the terminal (an update, a toast) stay visible and clickable: cut them out of the box
+  const w = n(rect.width), h = n(rect.height), holes = (Array.isArray(covers) ? covers : []).slice(0, 4)
+    .map((c) => ({ x: n(c.x) - n(rect.x), y: n(c.y) - n(rect.y), w: n(c.width), h: n(c.height) }))
+    .filter((c) => c.x < w && c.y < h && c.x + c.w > 0 && c.y + c.h > 0);
+  d.box.style.clipPath = holes.length ? `path(evenodd, "M0 0H${w}V${h}H0Z${holes.map((c) => `M${c.x - 6} ${c.y - 6}h${c.w + 12}v${c.h + 12}h${-(c.w + 12)}Z`).join('')}")` : '';
   requestAnimationFrame(() => { if (x.el.isConnected) { x.fit.fit(); if (focus) x.term.focus(); } });
 }
 const ownSession = (id) => {
@@ -3812,6 +3820,11 @@ async function desktopAction(action, args) {
     case 'save-file': return synapse.files.save(String(args.name || ''), String(args.data || ''));
     case 'attach': { const { s } = ownSession(args.id); return synapse.files.pick(s.worktree); }
     case 'dock': return dock(args);
+    case 'update': {
+      if (UPD.state === 'ready') return synapse.update.install();
+      if (UPD.state === 'manual') return synapse.update.download();
+      throw new Error('No update is ready yet.');
+    }
     // the GUI closing a session unused for a long time (its Tidy up setting): never one that is working, never asks
     case 'expire': {
       const { s, x } = ownSession(args.id), branch = sessionBranch(s, x.id);
@@ -3926,7 +3939,7 @@ addEventListener('message', async (event) => {
     event.source.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, event.origin);
     return;
   }
-  if (event.data?.type === 'synapse:desktop-ready') { workspaceLive = true; syncWorkspace(true); sendChrome(); return; }
+  if (event.data?.type === 'synapse:desktop-ready') { workspaceLive = true; syncWorkspace(true); sendChrome(); postUpdate(); return; }
   const { type, request, action, args = {} } = event.data || {};
   if (type !== 'synapse:desktop-call' || typeof request !== 'string' || request.length > 80) return;
   try {

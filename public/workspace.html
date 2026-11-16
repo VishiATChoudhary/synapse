@@ -66,6 +66,7 @@
                     <button class="icon-button" id="context-toggle" aria-label="Toggle session details" aria-controls="inspector" aria-expanded="false" title="Session details"><span data-icon="panel-right"></span></button>
         </div>
       </header>
+      <div class="update-card" id="update-card" role="status" hidden></div>
       <div class="connection-banner" id="connection-banner" role="status" hidden>Reconnecting to your local server. Your draft is saved in this browser.</div>
       <div class="demo-banner" id="demo-banner" hidden><span class="demo-dot"></span><span>Demo workspace <span class="demo-description">with sample agents and conversations</span></span><button id="demo-help" class="text-button">How it works <span data-icon="arrow-right"></span></button></div>
       <div class="content-area">
@@ -77,6 +78,7 @@
           <div class="term-host" id="term-host" role="tabpanel" aria-labelledby="terminal-tab" hidden></div>
           <div class="composer-region">
             <button class="jump-button" id="jump-latest" hidden><span data-icon="arrow-down"></span>Jump to latest</button>
+            <div class="prompt-queue" id="prompt-queue" role="list" aria-label="Queued prompts" hidden></div>
             <div class="approval-card" id="approval-card" role="region" aria-label="Waiting for your answer" hidden></div>
             <form class="composer" id="composer">
               <label class="sr-only" for="message-input">Message this agent</label>

@@ -914,3 +914,26 @@ textarea.field { line-height: 1.5; resize: vertical; }
 .nav-arrow:disabled { opacity: 0.35; cursor: default; background: none; }
 .nav-arrow svg, .nav-arrow .icon { width: 16px; height: 16px; }
 body:not(.desktop) .nav-arrow { display: none; }
+
+/* prompts waiting for a busy session */
+.prompt-queue { display: flex; flex-direction: column; gap: 6px; margin: 0 4px 8px; }
+.prompt-queue[hidden] { display: none; }
+.queued-prompt { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; border: 1px dashed var(--color-border-strong); border-radius: 12px; background: var(--color-panel); font-size: var(--text-sm); }
+.queued-tag { display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--color-muted); font-size: var(--text-xs); font-weight: 600; }
+.queued-tag svg { width: 12px; height: 12px; }
+.queued-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-ink); }
+.queued-prompt .text-button { flex: none; font-size: var(--text-xs); }
+.queued-prompt .icon-button { width: 26px; height: 26px; flex: none; }
+
+/* a new version, top right */
+.update-card { position: fixed; top: 58px; right: 16px; z-index: 60; display: flex; align-items: center; gap: 12px; max-width: 380px; padding: 12px 10px 12px 14px; border: 1px solid var(--color-border-strong); border-radius: 14px; background: var(--color-raised); box-shadow: 0 12px 36px var(--color-shadow); animation: pop-in .18s var(--ease-out); }
+.update-card[hidden] { display: none; }
+.update-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: 50%; background: var(--color-accent); color: #fff; }
+.update-icon svg { width: 16px; height: 16px; }
+.update-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; font-size: var(--text-sm); }
+.update-text strong { color: var(--color-ink); font-weight: 600; }
+.update-text > span { color: var(--color-muted); font-size: var(--text-xs); }
+.update-bar { display: block; height: 3px; margin-top: 6px; border-radius: 2px; background: var(--color-border); overflow: hidden; }
+.update-bar > span { display: block; height: 100%; background: var(--color-accent); transition: width .3s; }
+.update-go { flex: none; }
+.update-card .icon-button { width: 26px; height: 26px; flex: none; }
