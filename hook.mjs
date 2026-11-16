@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import {
-  FILES, readJSON, writeJSON, listAgents, readAgentMessages, formatMessages, takeInbox, logEvent, agentForProcess, protectedRoot, protectRule,
+  DATA, FILES, readJSON, writeJSON, listAgents, readAgentMessages, formatMessages, takeInbox, logEvent, agentForProcess, protectedRoot, protectRule,
 } from './lib.mjs';
 import path from 'node:path';
 import { isConnected, sync } from './remote.mjs';
@@ -73,10 +73,17 @@ async function main() {
     }));
     return;
   }
+  // pages the user has open in this agent's browser inside Synapse (app/agent-browser.mjs writes them): the agent
+  // should use that browser, where the user watches and is signed in, not another one
+  let tabsNote = null;
+  if (event === 'UserPromptSubmit' && me) {
+    const tabs = readJSON(path.join(DATA, 'agent-browser-tabs.json'), {})[me] || [];
+    if (tabs.length) tabsNote = `The user has ${tabs.length === 1 ? 'this page' : 'these pages'} open in your browser inside Synapse, next to this chat:\n${tabs.map((t) => `- ${t.title || t.url} (${t.url})${t.active ? ' [showing]' : ''}`).join('\n')}\nWhen the user means "the browser" or these pages, use the synapse_browser tool (action read shows the page), not Claude in Chrome or any other browser. To sign in, use synapse_browser action login: Synapse fills the user's saved login from their vault after they approve; never ask for a password. If you have no synapse_browser tool, ask the user to restart this session in Synapse.`;
+  }
   // the workspace's rules, on every prompt: a protected folder, and which browser profile its agents use
   const rule = event !== 'UserPromptSubmit' ? null : [
     root ? `<protected-folder>\n${protectRule(root)}\n</protected-folder>` : null,
-    browser ? `<workspace-browser>\n${browser}\n</workspace-browser>` : null,
+    tabsNote ? `<synapse-browser>\n${tabsNote}\n</synapse-browser>` : browser ? `<workspace-browser>\n${browser}\n</workspace-browser>` : null,
   ].filter(Boolean).join('\n\n') || null;
   if (!me) {
     if (rule) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: rule } }));

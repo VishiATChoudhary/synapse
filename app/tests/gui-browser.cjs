@@ -134,6 +134,8 @@ const shot = async (w, name) => { if (process.env.SHOT_DIR) { await sleep(700); 
   const vb = win.contentView.children[0].getBounds();
   assert.ok(Math.abs(vb.width - slot.w) <= 2 && Math.abs(vb.height - slot.h) <= 2, `view ${JSON.stringify(vb)} on slot ${JSON.stringify(slot)}`);
   await until(() => ui(`/Test shop/.test(document.querySelector('.browser-tab.on')?.textContent || '')`), 'its tab in the panel');
+  // the prompt hook learns which pages the agent has open
+  await until(() => { try { return JSON.parse(fs.readFileSync(path.join(state, 'agent-browser-tabs.json'), 'utf8'))[agentKey]?.[0]?.url === url; } catch { return false; } }, 'open pages written for the hook');
 
   // click and type by number
   const clicked = await act('click', { ref: Number(buy.match(/\[(\d+)\]/)[1]) });

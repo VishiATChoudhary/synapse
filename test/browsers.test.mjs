@@ -84,3 +84,20 @@ test('a profile without the extension says what to do; off goes back to the agen
   assert.equal(b.browserFor(wt), null);
   assert.equal(hook(wt), '');
 });
+
+test('pages open in the agent\'s Synapse browser: its next prompt says so and points at synapse_browser', () => {
+  const cwd = fs.mkdtempSync(path.join(tmp, 'tabs-'));
+  fs.mkdirSync(home, { recursive: true });
+  const edges = path.join(home, 'edges.json'), before = fs.existsSync(edges) ? fs.readFileSync(edges, 'utf8') : null;
+  fs.writeFileSync(edges, JSON.stringify([...(before ? JSON.parse(before) : []), { id: 'e-tabs', from: 'sess-tabs-1', to: 'sess-tabs-2', fromName: 'a', toName: 'b' }])); // a known agent: the hook takes its session id as is
+  fs.writeFileSync(path.join(home, 'agent-browser-tabs.json'), JSON.stringify({ 'sess-tabs-1': [{ title: 'Staging', url: 'https://staging.example.com/ontology', active: true }] }));
+  const said = (session) => { const out = execFileSync(process.execPath, [path.join(ROOT, 'hook.mjs')], { input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', cwd, prompt: 'look at it', session_id: session }), env: { ...process.env } }).toString(); return out ? JSON.parse(out).hookSpecificOutput.additionalContext : ''; };
+  const ctx = said('sess-tabs-1');
+  assert.match(ctx, /<synapse-browser>/);
+  assert.match(ctx, /Staging \(https:\/\/staging\.example\.com\/ontology\) \[showing\]/);
+  assert.match(ctx, /synapse_browser/);
+  assert.match(ctx, /action login/);
+  assert.doesNotMatch(said('sess-other'), /synapse-browser/, 'another agent hears nothing');
+  fs.unlinkSync(path.join(home, 'agent-browser-tabs.json'));
+  if (before === null) fs.unlinkSync(edges); else fs.writeFileSync(edges, before);
+});

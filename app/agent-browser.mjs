@@ -17,7 +17,8 @@ const ASK_FOR = 120_000; // how long an agent waits for you to allow a site
 export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = null, packaged = true }) {
   const FILE = path.join(dataDir, 'agent-browser.json');
   const SITES = path.join(dataDir, 'agent-browser-sites.json');
-  const LOGINS = path.join(dataDir, 'agent-browser-logins.json'); // site -> vault logins agents may always use there
+  const LOGINS = path.join(dataDir, 'agent-browser-logins.json');
+  const TABS = path.join(dataDir, 'agent-browser-tabs.json'); // agent id -> its open pages, for the prompt hook // site -> vault logins agents may always use there
   const token = crypto.randomBytes(24).toString('hex');
   const agents = new Map(); // agent id -> { tabs: [{ id, view }], active, popped, paused, bounds, allowed:Set }
   const asks = new Map(); // ask id -> { agent, origin, resolve }
@@ -51,12 +52,16 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
     }
     return { agents: out, asks: [...asks.entries()].map(([id, q]) => ({ id, agent: q.agent, name: agentName(q.agent), origin: q.origin, kind: q.kind, user: q.user || null })) };
   }
-  let pushTimer = null;
+  let pushTimer = null, lastTabs = '';
   const push = () => {
     clearTimeout(pushTimer);
     pushTimer = setTimeout(() => {
       const s = snapshot();
       getWin()?.webContents.send('agent-browser:state', s);
+      // which pages each agent has open, so its next prompt can say so (hook.mjs)
+      const open = Object.fromEntries(Object.entries(s.agents).map(([id, b]) => [id, b.tabs.filter((t) => originOf(t.url)).map((t) => ({ title: t.title, url: t.url, active: t.id === b.active }))]).filter(([, tabs]) => tabs.length));
+      const text = JSON.stringify(open);
+      if (text !== lastTabs) { lastTabs = text; try { fs.writeFileSync(TABS, text, { mode: 0o600 }); } catch {} }
       for (const [id, a] of agents) if (a.popped && !a.popped.isDestroyed()) a.popped.webContents.send('agent-browser:state', { ...s.agents[id], name: agentName(id) });
     }, 60);
   };
@@ -412,7 +417,7 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
     });
     ses().setPermissionRequestHandler((_wc, permission, cb) => cb(['clipboard-sanitized-write', 'fullscreen'].includes(permission)));
   }
-  function stop() { try { server?.close(); } catch {} try { const f = JSON.parse(fs.readFileSync(FILE, 'utf8')); if (f.pid === process.pid) fs.unlinkSync(FILE); } catch {} }
+  function stop() { try { server?.close(); } catch {} try { fs.unlinkSync(TABS); } catch {} try { const f = JSON.parse(fs.readFileSync(FILE, 'utf8')); if (f.pid === process.pid) fs.unlinkSync(FILE); } catch {} }
 
   return { start, stop, setBounds, user, answer, snapshot, pop, dock, agentAct };
 }
