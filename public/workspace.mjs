@@ -478,6 +478,14 @@ function initialize() {
       message.error ? pending.reject(new Error(message.error)) : pending.resolve(message.value);
     }
     if (message?.type === 'synapse:browser-state' && message.state) { if (!paneKey) onBrowserState(message.state, message.ask); return; }
+    // the open agent opened a page: show its browser (Settings > Agents > Browser turns this off, in the app)
+    if (message?.type === 'synapse:browser-show') {
+      const selected = byId.get(selectedId);
+      if (!paneKey && selected && browserKey(selected) === message.agent && view === 'session' && (inspectorTab !== 'browser' || !inspectorOpen || $('inspector').hidden)) {
+        inspectorTab = 'browser'; setStorage('synapse-inspector-tab', 'browser'); inspectorOpen = true; inspectorFile = null; syncInspector();
+      }
+      return;
+    }
     if (message?.type === 'synapse:browser-cover') { browserCovered = !!message.covered; placeBrowser(); return; }
     if (message?.type === 'synapse:desktop-state') {
       const previous = desktop?.active;

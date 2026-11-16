@@ -14,7 +14,7 @@ const PARTITION = 'persist:synapse-browser';
 const TOOLBAR = 44; // the popped window's own bar above the page
 const ASK_FOR = 120_000; // how long an agent waits for you to allow a site
 
-export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = null, packaged = true }) {
+export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = null, packaged = true, onAgentOpened = () => {} }) {
   const FILE = path.join(dataDir, 'agent-browser.json');
   const SITES = path.join(dataDir, 'agent-browser-sites.json');
   const LOGINS = path.join(dataDir, 'agent-browser-logins.json');
@@ -329,6 +329,7 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
       if (!ok) throw new Error(`The user did not allow ${origin}.`);
       if (!t || action === 'new_tab') t = newTab(id, url);
       else await t.view.webContents.loadURL(url).catch(() => {});
+      onAgentOpened(id);
       await settle(t.view.webContents, 800);
       return read(t);
     }

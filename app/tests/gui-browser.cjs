@@ -110,9 +110,20 @@ const shot = async (w, name) => { if (process.env.SHOT_DIR) { await sleep(700); 
   const at = JSON.parse(fs.readFileSync(path.join(state, 'agent-browser.json'), 'utf8'));
   assert.equal((await fetch(`http://127.0.0.1:${at.port}/act`, { method: 'POST', headers: { authorization: 'Bearer nope' }, body: '{}' })).status, 403);
 
-  // open the Browser tab of the agent's panel
+  // the panel is on Details; an agent opening a page switches it to the Browser tab (on by default)
   await ui(`(() => { const b = document.getElementById('context-toggle'); if (b.getAttribute('aria-expanded') !== 'true') b.click(); })()`);
-  await until(() => ui(`!!document.querySelector('[data-inspector-tab="browser"]')`), 'panel tabs');
+  await tap('[data-inspector-tab="details"]');
+  await until(() => ui(`!!document.querySelector('.watch-section, .inspector-section') && !document.querySelector('.browser-pane')`), 'on Details');
+  await act('open', { url: `http://127.0.0.1:${site.address().port}/` }); // local: no question
+  await until(() => ui(`!!document.querySelector('.browser-pane')`), 'switched to the Browser tab by itself');
+  // turned off in Settings: it stays where it is
+  await native(`synapse.settings.set({ showBrowser: false })`);
+  await tap('[data-inspector-tab="details"]');
+  await until(() => ui(`!document.querySelector('.browser-pane')`), 'back on Details');
+  await act('open', { url: `http://127.0.0.1:${site.address().port}/` });
+  await sleep(1200);
+  assert.equal(await ui(`!!document.querySelector('.browser-pane')`), false, 'stays on Details when turned off');
+  await native(`synapse.settings.set({ showBrowser: true })`);
   await tap('[data-inspector-tab="browser"]');
   await until(() => ui(`!!document.querySelector('.browser-pane')`), 'browser tab');
 

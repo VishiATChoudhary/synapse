@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('synapse', {
     answer: (id, choice) => call('agent-browser:answer', { id, choice }),
     onState: (fn) => on('agent-browser:state', fn),
     onAsk: (fn) => on('agent-browser:ask', fn),
+    onShow: (fn) => on('agent-browser:show', fn),
   },
   notify: { done: (a) => call('notify:done', a), onOpen: (fn) => on('notify:open', fn) },
   history: {

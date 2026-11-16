@@ -902,7 +902,9 @@ const handle = (ch, fn) => ipcMain.handle(ch, async (event, a) => {
 });
 handle('state', async () => { await discovery.refresh(); return state(); });
 // the agent browser (agent-browser.mjs): the panel places it, you drive it from the panel or its own window
-const agentBrowser = createAgentBrowser({ dataDir: DATA, root: ROOT, vault, packaged: app.isPackaged, getWin: () => win, agentName: (id) => listAgents().find((a) => a.id === id)?.name || 'Agent' });
+// an agent opened a page: its panel shows the browser (Settings > Agents can turn that off)
+const agentBrowser = createAgentBrowser({ dataDir: DATA, root: ROOT, vault, packaged: app.isPackaged, getWin: () => win,
+  onAgentOpened: (id) => { if (config().showBrowser !== false) win?.webContents.send('agent-browser:show', { agent: id }); }, agentName: (id) => listAgents().find((a) => a.id === id)?.name || 'Agent' });
 const agentId = (v) => { const id = String(v || ''); if (!id || id.length > 200) throw new Error('Pick an agent.'); return id; };
 handle('agent-browser:state', () => agentBrowser.snapshot());
 handle('agent-browser:bounds', (a) => agentBrowser.setBounds(agentId(a.agent), a.bounds || null));
@@ -1059,7 +1061,7 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, safeWorktreeDelete: c.safeWorktreeDelete !== false, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [] });
+const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, safeWorktreeDelete: c.safeWorktreeDelete !== false, showBrowser: c.showBrowser !== false, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [] });
 handle('settings:get', () => settingsOut(config()));
 // an agent finished a turn while Synapse was in the background (the renderer decides when): say so, with the
 // start of its last reply; a click brings that session to the front
@@ -1137,6 +1139,7 @@ handle('settings:set', (patch) => {
   }
   if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink;
   if ('autoSendFork' in patch) c.autoSendFork = !!patch.autoSendFork;
+  if ('showBrowser' in patch) c.showBrowser = !!patch.showBrowser;
   if ('safeWorktreeDelete' in patch) c.safeWorktreeDelete = !!patch.safeWorktreeDelete;
   if ('notifyDone' in patch) c.notifyDone = !!patch.notifyDone;
   if ('doneSound' in patch) c.doneSound = DONE_SOUNDS.includes(patch.doneSound) ? patch.doneSound : 'bubbleTap';
