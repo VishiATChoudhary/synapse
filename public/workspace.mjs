@@ -614,6 +614,8 @@ function initialize() {
       const was = lastStatus.get(a.id);
       lastStatus.set(a.id, a.status);
       if (a.status === 'busy' && was !== 'busy' && was !== undefined) busySince.set(a.id, Date.now());
+      // working again: back out of Archived and Snoozed (they only stay visible while open, so it would vanish when you switch away)
+      if (a.status === 'busy' && was !== 'busy' && (archived[a.id] !== undefined || snoozed[a.id] !== undefined)) { delete archived[a.id]; delete snoozed[a.id]; unarchivedAt[a.id] = Date.now(); changed = true; }
       if (a.status === 'busy' || needsYou(a)) flushing.delete(a.id);
       if (queued[a.id]?.length && a.owned && !a.exited && a.status !== 'busy' && !needsYou(a) && !(Date.now() - (stoppedAt.get(a.id) || 0) < 4000) && (!flushing.has(a.id) || Date.now() - flushing.get(a.id) > 15_000)) sendQueued(a.id);
       if (was === 'busy' && a.status !== 'busy' && !needsYou(a)) { doneSet.set(a.id, Date.now()); changed = true; }
@@ -1679,7 +1681,7 @@ function initialize() {
     }
     $('message-count').textContent = data.chat?.length || 0;
     $('messages-tab').setAttribute('aria-label', `Messages (${data.chat?.length || 0})`);
-    const signature = JSON.stringify([selectedId, tab, limit, records.map((record) => [record.key, record.delivered]), data.hasMore, agent.name]);
+    const signature = JSON.stringify([selectedId, tab, limit, records.map((record) => [record.key, record.delivered]), data.hasMore, agent.name, agent.status, busySince.get(agent.id) || 0]); // status: the live line ends when it stops
     if (list.dataset.signature === signature && !reset) return;
     const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 90, previousTop = scroller.scrollTop;
     list.dataset.signature = signature;
@@ -1719,7 +1721,10 @@ function initialize() {
           const sender = peer ? byId.get(message.from) || { kind: '' } : agent;
           const delivery = message.human ? `<span class="queued-label">${icon(message.delivered ? 'check' : 'clock')}${message.delivered ? 'Picked up by agent' : 'Queued for next prompt'}</span>` : '';
           // replies read as plain prose under your prompt; only agent-to-agent notes say who wrote them
-          element.innerHTML = `${peer ? `<header class="message-head">${avatar(sender)}<span>${escapeHtml(message.fromName)}</span>${icon('arrow-right')}<span>${escapeHtml(message.toName)}</span>${time ? `<time>${time}</time>` : ''}</header>` : ''}<div class="message-body md">${messageBody(message.text, user, message.type === 'transcript')}</div><footer class="message-foot">${delivery}${!peer && time ? `<time>${time}</time>` : ''}<button class="icon-button" data-copy-message aria-label="Copy message" title="Copy message">${icon('copy')}</button></footer>`;
+          // images you attached show as thumbnails, not as their paths
+          const pics = user ? sentImages(message.text) : { text: message.text, images: [] };
+          const thumbs = pics.images.length ? `<div class="message-images">${pics.images.map((p) => `<button type="button" data-file="${escapeHtml(p)}" title="${escapeHtml(p)}"><img alt="${escapeHtml(p.split(/[\\/]/).pop())}" loading="lazy" src="/api/file/raw?${new URLSearchParams({ path: p })}"></button>`).join('')}</div>` : '';
+          element.innerHTML = `${peer ? `<header class="message-head">${avatar(sender)}<span>${escapeHtml(message.fromName)}</span>${icon('arrow-right')}<span>${escapeHtml(message.toName)}</span>${time ? `<time>${time}</time>` : ''}</header>` : ''}${thumbs}${pics.text.trim() ? `<div class="message-body md">${messageBody(pics.text, user, message.type === 'transcript')}</div>` : ''}<footer class="message-foot">${delivery}${!peer && time ? `<time>${time}</time>` : ''}<button class="icon-button" data-copy-message aria-label="Copy message" title="Copy message">${icon('copy')}</button></footer>`;
         }
       }
       items.push({ message, element });
@@ -2697,6 +2702,17 @@ function initialize() {
   // Files wait above the message, images as thumbnails and the rest as chips with their name (× removes one),
   // and go in as paths when it is sent: Claude Code and Codex read files and images from paths.
   const quotePath = (p) => (/\s/.test(p) ? `"${p}"` : p);
+  // the image paths a sent prompt carried (as quotePath wrote them), taken out of its text
+  function sentImages(text) {
+    const images = [];
+    const rest = String(text ?? '').replace(/(^|\s)(?:"((?:\/|~\/|[A-Za-z]:\\)[^"\n]+)"|((?:\/|~\/|[A-Za-z]:\\)\S+))(?=\s|$)/g, (all, lead, quoted, bare) => {
+      const p = quoted || bare;
+      if (!IMAGE.test(p)) return all;
+      if (!images.includes(p)) images.push(p);
+      return lead;
+    });
+    return { text: images.length ? rest.replace(/[ \t]+$/gm, '') : rest, images };
+  }
   function renderAttachments() {
     const list = attachments.get(selectedId) || [], row = $('attach-row');
     row.hidden = !list.length;

@@ -114,6 +114,29 @@ const queue = () => ui(`[...document.querySelectorAll('#prompt-queue .queued-tex
   await sleep(500);
   assert.equal(await ui(`document.getElementById('toast').hidden`), true, 'no pop-up after sending');
   console.log('PASS stop and quiet send: Stop interrupts a working agent; sending shows no pop-up');
+
+  // the conversation: a pasted image shows as a picture, not its path; the live line ends when the agent stops,
+  // even when its transcript does not change after that
+  const png = path.join(fixture, 'shot.png');
+  fs.writeFileSync(png, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+  const sessionId = `stand-in-${pidOf(0)}`, dir = path.join(claudeHome, 'projects', fixture.replace(/[^a-zA-Z0-9]/g, '-'));
+  fs.mkdirSync(dir, { recursive: true });
+  const t0 = Date.now() - 60_000, at = (s) => new Date(t0 + s * 1000).toISOString();
+  const line = (o, i) => JSON.stringify({ uuid: `u${i}`, sessionId, cwd: fixture, ...o });
+  set(0, 'busy'); await sleep(800);
+  fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), [
+    { type: 'user', timestamp: at(0), message: { role: 'user', content: `It says it's empty: ${png}` } },
+    { type: 'assistant', timestamp: at(5), message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: png } }] } },
+    { type: 'user', timestamp: at(6), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } },
+    { type: 'assistant', timestamp: at(9), message: { role: 'assistant', content: [{ type: 'text', text: 'Done: the folder is empty.' }] } },
+  ].map(line).join('\n') + '\n');
+  await until(() => ui(`[...document.querySelectorAll('.message.user')].some((m) => m.querySelector('.message-images img'))`), 'the prompt shows its image');
+  assert.equal(await ui(`[...document.querySelectorAll('.message.user')].find((m) => m.querySelector('.message-images'))?.querySelector('.message-body')?.textContent.trim()`), "It says it's empty:", 'the path is gone from the text');
+  await until(() => ui(`document.querySelector('.message-images img').naturalWidth > 0`), 'the image loads');
+  await until(() => ui(`!!document.querySelector('.work-fold.live')`), 'a live line while it works');
+  set(0, 'idle');
+  await until(() => ui(`!document.querySelector('.work-fold.live') && !!document.querySelector('.work-fold:not(.live)')`), 'the live line ends once it is idle', 8000);
+  console.log('PASS conversation: a pasted image shows as a picture; the live line becomes "Worked for" once the agent is idle');
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);
 })().catch(async (e) => {
   failed = true; console.error(e); console.error('page errors:', errors);
