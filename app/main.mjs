@@ -948,7 +948,7 @@ handle('pty:restore', ({ cwd, kind, resume, cols, rows }) => {
 handle('sessions:load', () => readJSON(SESSIONS, null));
 handle('sessions:save', (data) => writeJSON(SESSIONS, data));
 const UI_STATE = path.join(DATA, 'workspace-ui.json');
-const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled']);
+const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-stacks']);
 handle('workspace:load', () => readJSON(UI_STATE, {}));
 handle('workspace:save', ({ key, value }) => {
   if (!UI_KEYS.has(key) || typeof value !== 'string' || value.length > 768 * 1024) throw new Error('Invalid workspace preference.');

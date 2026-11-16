@@ -58,11 +58,11 @@ const rpc = (action, args = {}) => ui(`new Promise((resolve) => {
 })`).then((reply) => { if (reply.error) throw new Error(reply.error); return reply.value; });
 const selector = (attribute, value) => `[${attribute}=${JSON.stringify(value)}]`;
 const project = (key) => `.project-group${selector('data-project-key', key)}`;
-const worktree = (dir) => `.worktree-group${selector('data-worktree-path', dir)}`;
+const agents = (key) => `${project(key)} .project-agents`; // one level: every agent of a project, whatever its worktree
 const session = (key) => selector('data-agent', `desktop-${key}`);
 const projectOrder = () => ui(`[...document.querySelectorAll('.project-group[data-sort-kind="project"]')].map((e) => e.dataset.projectKey)`);
-const treeOrder = () => ui(`[...document.querySelector(${JSON.stringify(project(repo))}).querySelectorAll('.worktree-group')].map((e) => e.dataset.worktreePath)`);
-const rootOrder = () => ui(`[...document.querySelector(${JSON.stringify(worktree(repo))}).querySelector('.worktree-sessions').children].map((e) => e.dataset.sortId)`);
+const treeOrder = async () => (await rpc('state')).projects.find((p) => p.key === repo).worktrees.map((w) => w.path);
+const rootOrder = () => ui(`[...document.querySelector(${JSON.stringify(agents(repo))}).querySelector('.worktree-sessions').children].filter((e) => e.dataset.sortGroup === ${JSON.stringify(repo)}).map((e) => e.dataset.sortId)`);
 const click = (s) => ui(`document.querySelector(${JSON.stringify(s)}).click()`);
 const mouse = (type, x, y) => win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1 });
 async function rect(s) {
@@ -99,7 +99,6 @@ async function reach(a, b) {
     assert.deepEqual(await treeOrder(), expected.worktrees);
     assert.deepEqual(await rootOrder(), expected.sessions);
     await click(project(repo) + ' .project-button');
-    if (await ui(`document.querySelector(${JSON.stringify(worktree(repo) + ' .worktree-button')}).getAttribute('aria-expanded') === 'false'`)) await click(worktree(repo) + ' .worktree-button');
     await click(session('parent'));
     assert.equal(await ui(`document.querySelector('#message-input').value`), 'Keep this draft while dragging');
     assert.equal(await ui(`document.querySelector(${JSON.stringify(session('grandchild'))}).closest('.session-node').dataset.depth`), '2');
@@ -107,18 +106,18 @@ async function reach(a, b) {
     console.log('PASS GUI order, fork topology, selection and drafts survive a restart');
     return;
   }
-  // flat like T3: the main checkout has no label of its own, other worktrees get a slim branch line, forks indent
+  // one level under a project: every agent, whatever worktree it runs in, and forks indent under their parent
   const indents = await ui(`${JSON.stringify(['parent', 'child-one', 'grandchild'].map((id) => session(id) + ' .session-name'))}.map((s) => document.querySelector(s).getBoundingClientRect().left)`);
   for (let i = 1; i < indents.length; i++) assert.ok(indents[i] > indents[i - 1], `fork level ${i} is indented: ${indents}`);
-  assert.ok(await ui(`!document.querySelector(${JSON.stringify(worktree(repo) + ' .worktree-heading')}).offsetParent`), 'the main checkout has no extra label');
-  assert.ok(await ui(`!!document.querySelector('[data-worktree-path=${JSON.stringify(path.join(fixture, 'feature-a'))}] .worktree-heading').offsetParent`), 'a worktree shows its branch line');
-  assert.equal(await ui(`document.querySelector(${JSON.stringify(session('checkout-0'))}).closest('.worktree-group').dataset.worktreePath`), path.join(fixture, 'feature-a'));
-  console.log('PASS project → worktree → session → fork hierarchy has visible indentation');
+  assert.equal(await ui(`document.querySelectorAll('#project-list .worktree-heading').length`), 0, 'no worktree level');
+  const checkout = await ui(`(() => { const n = document.querySelector(${JSON.stringify(session('checkout-0'))}).closest('.session-node'); return { group: n.dataset.sortGroup, project: n.closest('.project-group').dataset.projectKey, sibling: n.parentElement === document.querySelector(${JSON.stringify(session('parent'))}).closest('.session-node').parentElement }; })()`);
+  assert.deepEqual(checkout, { group: path.join(fixture, 'feature-a'), project: repo, sibling: true }, 'a worktree agent sits beside the main checkout agents');
+  console.log('PASS project → session → fork hierarchy, worktrees on one level, has visible indentation');
 
   await click(session('parent'));
   await ui(`document.querySelector('#message-input').value = 'Keep this draft while dragging'; document.querySelector('#message-input').dispatchEvent(new Event('input', { bubbles: true }));`);
   const parentNode = session('parent') + ':not([hidden])';
-  const first = `${worktree(repo)} .worktree-sessions > .session-node`;
+  const first = `${agents(repo)} .worktree-sessions > .session-node`;
   await ui(`window.draggedRow = document.querySelector(${JSON.stringify(parentNode)})`);
   await drag(parentNode, await reach(first, `${first}:nth-child(2)`), async () => {
     await sleep(1300);
@@ -145,9 +144,6 @@ async function reach(a, b) {
   assert.equal(savedForks.find((s) => s.key === 'grandchild').parent, savedForks.findIndex((s) => s.key === 'child-one'));
   console.log('PASS fork sibling dragging and keyboard reordering preserve descendant ancestry');
 
-  const featureA = worktree(path.join(fixture, 'feature-a'));
-  await drag(featureA + ' .worktree-button', await reach(featureA, worktree(repo)));
-  assert.deepEqual((await treeOrder()).slice(0, 2), [path.join(fixture, 'feature-a'), repo]);
   for (const key of await projectOrder()) if (await ui(`document.querySelector(${JSON.stringify(project(key) + ' .project-button')}).getAttribute('aria-expanded') === 'true'`)) await click(project(key) + ' .project-button');
   const before = await projectOrder();
   await drag(project(before[0]) + ' .project-button', await reach(project(before[0]), project(before[1])));
@@ -157,7 +153,7 @@ async function reach(a, b) {
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(state, 'app.json'))).projectOrder, await projectOrder());
   const label = await ui(`(() => { const e = document.querySelector(${JSON.stringify(project(repo) + ' .project-name')}); return { text: e.textContent, width: e.getBoundingClientRect().width }; })()`);
   assert.equal(label.text, 'alpha'); assert.ok(label.width > 16, 'project names remain visible after reordering');
-  console.log('PASS worktree and project drags use the same saved order as Terminal mode');
+  console.log('PASS project drags use the same saved order as Terminal mode');
   const cancelOrder = await projectOrder(), head = project(cancelOrder[0]) + ' .project-button';
   const cancelRect = await rect(head), cx = cancelRect.x + cancelRect.width / 2, cy = cancelRect.y + cancelRect.height / 2;
   const expanded = await ui(`document.querySelector(${JSON.stringify(head)}).getAttribute('aria-expanded')`);
@@ -268,7 +264,7 @@ async function reach(a, b) {
   await ui(`document.querySelector('[data-shelf="snoozed"] .settled-button').click()`);
   await ui(`document.querySelector('[data-shelf="snoozed"] [data-agent="desktop-second"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 200 }))`);
   await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent === 'Wake up').click()`);
-  await until(() => ui(`!document.querySelector('[data-shelf="snoozed"]')?.isConnected && !!document.querySelector(${JSON.stringify(worktree(repo))} + ' [data-agent="desktop-second"]')`), 'wake brings it back');
+  await until(() => ui(`!document.querySelector('[data-shelf="snoozed"]')?.isConnected && !!document.querySelector(${JSON.stringify(agents(repo))} + ' [data-agent="desktop-second"]')`), 'wake brings it back');
   // Archive: right-click, Archive, it moves to the Archived shelf (still running); Unarchive brings it back
   await ui(`document.querySelector(${JSON.stringify(session('third'))}).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 200 }))`);
   await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent === 'Archive').click()`);
@@ -277,7 +273,7 @@ async function reach(a, b) {
   await ui(`document.querySelector('[data-shelf="archived"] .settled-button').click()`);
   await ui(`document.querySelector('[data-shelf="archived"] [data-agent="desktop-third"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 200 }))`);
   await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent === 'Unarchive').click()`);
-  await until(() => ui(`!document.querySelector('[data-shelf="archived"]')?.isConnected && !!document.querySelector(${JSON.stringify(worktree(repo))} + ' [data-agent="desktop-third"]')`), 'unarchive brings it back');
+  await until(() => ui(`!document.querySelector('[data-shelf="archived"]')?.isConnected && !!document.querySelector(${JSON.stringify(agents(repo))} + ' [data-agent="desktop-third"]')`), 'unarchive brings it back');
   // Group by status: every agent on its own row under its state; back to projects after
   await click('#group-by');
   await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent === 'Group by status').click()`);
@@ -291,10 +287,10 @@ async function reach(a, b) {
   fs.writeFileSync(expectedFile, JSON.stringify({ projects: await projectOrder(), worktrees: await treeOrder(), sessions: await rootOrder() }));
   if (process.env.SYNAPSE_GUI_SCREENSHOT) {
     const unfold = async (s) => { if (await ui(`document.querySelector(${JSON.stringify(s)}).getAttribute('aria-expanded') === 'false'`)) { await click(s); return true; } return false; };
-    const p = await unfold(project(repo) + ' .project-button'), w = await unfold(worktree(repo) + ' .worktree-button');
+    const p = await unfold(project(repo) + ' .project-button');
     await ui(`document.querySelector(${JSON.stringify(project(repo))}).scrollIntoView({ block: 'start' })`);
     await sleep(300); fs.writeFileSync(process.env.SYNAPSE_GUI_SCREENSHOT, (await win.webContents.capturePage()).toPNG());
-    if (w) await click(worktree(repo) + ' .worktree-button'); if (p) await click(project(repo) + ' .project-button');
+    if (p) await click(project(repo) + ' .project-button');
   }
   await sleep(500);
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy/.test(e)), []);

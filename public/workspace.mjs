@@ -400,7 +400,7 @@ function initialize() {
       const message = event.data;
       const owns = (id) => desktop?.sessions.some((s) => s.id === id && s.pane === pane.dataset.paneKey);
       if (message?.type === 'synapse:desktop-bootstrap') {
-        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled'].map((key) => [key, getStorage(key, null)]));
+        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-stacks'].map((key) => [key, getStorage(key, null)]));
         pane.contentWindow.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, location.origin);
       }
       if (message?.type === 'synapse:desktop-ready') sendPaneState(pane);
@@ -571,7 +571,13 @@ function initialize() {
     setStorage('synapse-drafts', JSON.stringify(Object.fromEntries(entries)));
   }
 
+  // the side panels slide (CSS); while they do, a docked terminal follows without re-measuring its rows each frame
+  const PANEL_MS = 340;
+  let panelsMovingUntil = 0;
+  const panelsMoving = () => performance.now() < panelsMovingUntil;
+  const panelsMove = () => { panelsMovingUntil = performance.now() + PANEL_MS + 40; };
   function setSidebar(open, persist = true) {
+    if (open !== sidebarOpen) panelsMove();
     sidebarOpen = open;
     $('workspace').dataset.sidebar = open ? 'open' : 'closed';
     $('sidebar-toggle').setAttribute('aria-expanded', String(open));
@@ -580,10 +586,18 @@ function initialize() {
     if (persist && !narrow.matches) setStorage('synapse-sidebar', open ? 'open' : 'closed');
   }
 
+  let inspectorHide = null;
   function syncInspector() {
     const visible = inspectorOpen && view === 'session' && !!byId.get(selectedId);
     if (!visible) inspectorFile = null;
-    $('inspector').hidden = !visible;
+    // it slides in and out: shown before it opens, hidden only once it has slid away
+    const pane = $('inspector'), was = $('workspace').dataset.inspector === 'open';
+    if (visible !== was) panelsMove();
+    clearTimeout(inspectorHide);
+    if (visible) {
+      if (pane.hidden) { pane.hidden = false; void pane.offsetWidth; } // start from closed, so it slides
+    } else if (!pane.hidden) inspectorHide = setTimeout(() => { if ($('workspace').dataset.inspector !== 'open') pane.hidden = true; }, was ? PANEL_MS : 0);
+    pane.inert = !visible;
     $('workspace').dataset.inspector = visible ? 'open' : 'closed';
     $('context-toggle').setAttribute('aria-expanded', String(visible));
     if (visible) renderInspector();
@@ -648,6 +662,8 @@ function initialize() {
 
   // what a session is about: its transcript title (Claude's own, or your first prompt), unless you named it
   const titleOf = (agent) => (agent.autoName || !agent.title ? agent.name : agent.title);
+  // status view: a project's agents in the same state stack into one deck that fans out on hover
+  let stackProjects = getStorage('synapse-stacks') === 'on';
   let sidebarQuery = '', groupBy = ['project', 'status', 'recent'].includes(getStorage('synapse-group')) ? getStorage('synapse-group') : 'project';
   const GENERATED = /^(claude|codex|gemini|opencode|cursor-agent|cursor|amp|copilot|shell|agent|pi|kiro)(-\d+)?$/i;
   const readJSON = (key, fallback) => { try { return JSON.parse(getStorage(key, '')) ?? fallback; } catch { return fallback; } };
@@ -911,7 +927,7 @@ function initialize() {
     syncChildren(el.lastElementChild, entries.map(nodeOf));
     return el;
   }
-  function flatSection(key, label, nodes) {
+  function flatSection(key, label, nodes, count = nodes.length) {
     let el = flatSections.get(key);
     if (!el) {
       el = document.createElement('section'); el.className = 'flat-group'; el.dataset.flat = key;
@@ -923,8 +939,28 @@ function initialize() {
     el.querySelector('.fold-toggle').setAttribute('aria-expanded', String(!closed));
     el.lastElementChild.hidden = closed;
     el.querySelector('.flat-label').textContent = label;
-    el.querySelector('.count').textContent = nodes.length;
+    el.querySelector('.count').textContent = count;
     syncChildren(el.lastElementChild, nodes);
+    return el;
+  }
+  // a deck of one project's agents in one state: the newest on top, the others peeking out under it until hovered
+  const stackElements = new Map();
+  function stackNode(key, group, nodes) {
+    let el = stackElements.get(key);
+    if (!el) {
+      el = document.createElement('div'); el.className = 'stack'; el.dataset.stack = key;
+      el.innerHTML = '<div class="stack-label"><span class="stack-badge" aria-hidden="true"></span><span class="stack-name"></span><span class="stack-count"></span></div><div class="stack-top"></div><div class="stack-rest"><div class="stack-rest-inner"></div></div>';
+      stackElements.set(key, el);
+    }
+    const badge = el.querySelector('.stack-badge');
+    badge.textContent = badgeText(group.name); badge.style.setProperty('--badge', projectColor(group));
+    el.querySelector('.stack-name').textContent = group.name;
+    el.querySelector('.stack-count').textContent = nodes.length;
+    el.dataset.depth = String(Math.min(nodes.length - 1, 2)); // how many cards peek out
+    el.title = `${group.name} · ${nodes.length} agents`;
+    syncChildren(el.querySelector('.stack-top'), nodes.slice(0, 1));
+    nodes.slice(1).forEach((n, i) => n.style.setProperty('--i', i));
+    syncChildren(el.querySelector('.stack-rest-inner'), nodes.slice(1));
     return el;
   }
 
@@ -934,6 +970,7 @@ function initialize() {
     for (const a of state.agents) triggerAt(a); // note every state change, even in a group of one
     for (const id of triggered.keys()) if (!byId.has(id)) triggered.delete(id);
     const flip = flipStart();
+    const liveStacks = new Set();
     const groups = projectGroups(true), desired = [], live = new Set(), liveWorktrees = new Set(), settledRoots = [], snoozedRoots = [];
     // the search box filters the list as you type (fuzzy, like ⌘K); a fork stays under its parent
     const query = sidebarQuery.trim();
@@ -1033,46 +1070,33 @@ function initialize() {
         button.title = group.managed ? `${group.name} · Drag to reorder` : group.name;
         section.querySelector('.project-add:not(.project-session)').hidden = !group.managed;
         sortHandle(section, button, 'project', group.key, group.managed);
-        button.setAttribute('aria-expanded', String(!!hits || !collapsed.has(group.key)));
-        section.lastElementChild.hidden = !hits && collapsed.has(group.key);
-        const worktrees = group.worktrees.map((worktree, index) => {
-          const key = `worktree:${worktree.path}`;
-          liveWorktrees.add(key);
-          let node = worktreeElements.get(key);
-          if (!node) {
-            node = document.createElement('section'); node.className = 'worktree-group'; node.dataset.worktreePath = worktree.path;
-            node.innerHTML = `<div class="worktree-heading"><button class="worktree-button" type="button"><span class="worktree-chevron">${icon('chevron-down')}</span><span class="worktree-icon"></span><span class="worktree-name"></span><span class="count"></span></button><button class="worktree-add project-add desktop-only" type="button" aria-label="New session in this worktree" title="New session in this worktree">${icon('plus')}</button></div><div class="worktree-sessions"></div>`;
-            node.querySelector('.worktree-button').dataset.worktreeToggle = key;
-            node.querySelector('.worktree-add').dataset.newSessionCwd = worktree.path;
-            worktreeElements.set(key, node);
-          }
-          const head = node.querySelector('.worktree-button');
-          head.querySelector('.worktree-icon').innerHTML = icon(worktree.home ? 'home' : 'branch');
-          head.querySelector('.worktree-name').textContent = worktree.home ? worktree.branch || worktree.name : worktree.branch && worktree.branch !== worktree.name ? `${worktree.name} · ${worktree.branch}` : worktree.name;
-          head.querySelector('.count').textContent = worktree.agents.length;
-          head.title = `${worktree.path}${worktree.branch ? ` · ${worktree.branch}` : ''}${worktree.managed ? ' · Drag to reorder' : ''}`;
-          head.setAttribute('aria-expanded', String(!collapsed.has(key)));
-          node.querySelector('.worktree-add').hidden = !worktree.managed;
-          sortHandle(node, head, 'worktree', worktree.path, worktree.managed);
-          // the main checkout, first in its project, needs no label (and so cannot be folded away)
-          const bare = !!worktree.home && index === 0;
-          node.classList.toggle('bare', bare);
-          node.lastElementChild.hidden = !bare && !hits && collapsed.has(key);
-          const roots = sessionTree(worktree.agents).filter(shown).map(prune);
-          node.hidden = !!hits && !roots.length;
-          const keep = [];
-          for (const entry of roots) {
+        // a folded project unfolds while the pointer rests on it (CSS); clicking its name pins it open or folded
+        const folded = !hits && collapsed.has(group.key);
+        button.setAttribute('aria-expanded', String(!folded));
+        section.classList.toggle('folded', folded);
+        // one level: every agent of the project, whatever worktree it runs in, in one list (the main checkout first)
+        const key = `project:${group.key}`;
+        liveWorktrees.add(key);
+        let node = worktreeElements.get(key);
+        if (!node) {
+          node = document.createElement('div'); node.className = 'project-agents';
+          node.innerHTML = '<div class="worktree-sessions"></div>';
+          worktreeElements.set(key, node);
+        }
+        const keep = [];
+        for (const worktree of group.worktrees) {
+          for (const entry of sessionTree(worktree.agents).filter(shown).map(prune)) {
             if (archivedTree(entry)) archivedRoots.push({ entry, place: group.name });
             else if (snoozedTree(entry)) snoozedRoots.push({ entry, place: group.name });
             else if (settledTree(entry)) settledRoots.push({ entry, place: group.name });
-            else keep.push(entry);
+            else keep.push({ entry, path: worktree.path });
           }
-          syncChildren(node.lastElementChild, keep.map((entry) => sessionNode(entry)));
-          return node;
-        });
-        section.classList.toggle('solo', group.worktrees.length === 1 && !!group.worktrees[0].home);
-        syncChildren(section.lastElementChild, worktrees);
-        section.hidden = !!hits && worktrees.every((node) => node.hidden);
+        }
+        // an agent reorders only among those in its own folder, since its process runs there
+        syncChildren(node.firstElementChild, keep.map(({ entry, path }) => { const n = sessionNode(entry); n.dataset.sortGroup = path; return n; }));
+        syncChildren(section.lastElementChild, [node]);
+        section.hidden = !!hits && !keep.length;
+        section.classList.toggle('empty', !keep.length);
         desired.push(section);
       }
     } else {
@@ -1090,7 +1114,19 @@ function initialize() {
       if (groupBy === 'status') {
         for (const [key, label] of [['needs', 'Needs you'], ['working', 'Working'], ['done', 'Done'], ['idle', 'Idle']]) {
           const these = rows.filter((r) => statusKey(r.a) === key).sort(byTrigger);
-          if (these.length) desired.push(flatSection(key, label, these.map((r) => sessionNode(r.entry, 0, r.place))));
+          if (!these.length) continue;
+          if (!stackProjects || hits) { desired.push(flatSection(key, label, these.map((r) => sessionNode(r.entry, 0, r.place)))); continue; }
+          // stacked: a project with two or more agents here becomes one deck, placed where its first agent was
+          const byProject = new Map();
+          for (const r of these) { const k = r.a.projectKey || r.place; if (!byProject.has(k)) byProject.set(k, []); byProject.get(k).push(r); }
+          const nodes = [];
+          for (const [k, list] of byProject) {
+            if (list.length < 2) { nodes.push(sessionNode(list[0].entry, 0, list[0].place)); continue; }
+            const group = groups.find((g) => g.key === k) || { key: k, name: list[0].place, agents: list.map((r) => r.a) };
+            const stackKey = `${key}:${k}`; liveStacks.add(stackKey);
+            nodes.push(stackNode(stackKey, group, list.map((r) => sessionNode(r.entry, 0, ''))));
+          }
+          desired.push(flatSection(key, label, nodes, these.length));
         }
       } else desired.push(flatSection('recent', 'Recent', rows.sort(recent).map((r) => sessionNode(r.entry, 0, r.place))));
       for (const g of groups) for (const w of g.worktrees) liveWorktrees.add(`worktree:${w.path}`);
@@ -1104,6 +1140,7 @@ function initialize() {
     if (archivedRoots.length) desired.push(shelf('archived', 'Archived', archivedRoots.sort(byRecent), ({ entry, place }) => sessionNode(entry, 0, place)));
     for (const [id, node] of sessionElements) if (!live.has(id)) { node.remove(); sessionElements.delete(id); }
     for (const [key, node] of worktreeElements) if (!liveWorktrees.has(key)) { node.remove(); worktreeElements.delete(key); }
+    for (const [key, node] of stackElements) if (!liveStacks.has(key)) { node.remove(); stackElements.delete(key); }
     for (const [key, section] of projectElements) if (!groups.some((group) => group.key === key)) { section.remove(); projectElements.delete(key); }
     if (!groups.length && !people) {
       const empty = document.createElement('p'); empty.className = 'sidebar-placeholder';
@@ -1176,6 +1213,7 @@ function initialize() {
     dropdown($('group-by'), [
       { label: 'Group by project', icon: mark('project'), run: set('project') },
       { label: 'Group by status', icon: mark('status'), run: set('status') },
+      ...(groupBy === 'status' ? [{ label: 'Stack by project', icon: stackProjects ? 'check' : '', run: () => { stackProjects = !stackProjects; setStorage('synapse-stacks', stackProjects ? 'on' : 'off'); renderSidebar(); } }] : []),
       { label: 'Most recent first', icon: mark('recent'), run: set('recent') },
       '-',
       { label: 'Tidy up…', icon: 'clock', run: tidyDialog },
@@ -1194,7 +1232,7 @@ function initialize() {
     ]);
   }
 
-  const sortableSiblings = (item) => [...item.parentElement.children].filter((node) => node.dataset.sortKind === item.dataset.sortKind);
+  const sortableSiblings = (item) => [...item.parentElement.children].filter((node) => node.dataset.sortKind === item.dataset.sortKind && node.dataset.sortGroup === item.dataset.sortGroup);
   async function reorderSidebar(item, target, side) {
     const name = item.firstElementChild.textContent.trim(), other = target.firstElementChild.textContent.trim();
     desktop = await desktopCall('reorder', { kind: item.dataset.sortKind, from: item.dataset.sortId, to: target.dataset.sortId, side });
@@ -2001,7 +2039,7 @@ function initialize() {
   });
   // ⌘⇧W / ⌘⇧S: the agent above or below in the list as it is shown (folded sections are skipped)
   function moveSelection(step) {
-    const rows = [...$('project-list').querySelectorAll('.session-row')].filter((row) => row.offsetParent);
+    const rows = [...$('project-list').querySelectorAll('.session-row')].filter((row) => row.offsetParent && !row.closest('.project-group.folded:not(:hover):not(:has(:focus-visible))') && !(row.closest('.stack-rest') && !row.closest('.stack').matches(':hover, :has(:focus-visible), :has([aria-current="page"])')));
     if (!rows.length) return;
     const at = rows.findIndex((row) => row.dataset.agent === selectedId && view === 'session');
     const next = rows[at < 0 ? (step > 0 ? 0 : rows.length - 1) : Math.max(0, Math.min(rows.length - 1, at + step))];
@@ -2410,10 +2448,10 @@ function initialize() {
       drawer: session && drawerId && !$('term-drawer').hidden && !drawerAnim ? { id: drawerId, rect: dockRect($('drawer-host')), covers } : null,
     };
     for (const place of ['main', 'drawer']) {
-      const w = want[place]?.rect ? want[place] : null, sig = w ? JSON.stringify(w) : '';
+      const w = want[place]?.rect ? { ...want[place], moving: panelsMoving() } : null, sig = w ? JSON.stringify(w) : '';
       if (sig === docked[place] && focus !== place) continue;
       docked[place] = sig;
-      desktopCall('dock', { place, id: w?.id || null, rect: w?.rect || null, covers: w?.covers || [], focus: focus === place }).catch(() => { docked[place] = ''; });
+      desktopCall('dock', { place, id: w?.id || null, rect: w?.rect || null, covers: w?.covers || [], focus: focus === place, moving: !!w?.moving }).catch(() => { docked[place] = ''; });
     }
   }
 
@@ -3158,6 +3196,9 @@ function initialize() {
     if (button.dataset.searchAction) { const hit = searchHits[Number(button.dataset.searchAction)]; if (hit?.action) return runHit(hit); }
     if (button.dataset.project) {
       const key = button.dataset.project; collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
+      // folding the one under the pointer: it stays folded until the pointer leaves, then hover unfolds it again
+      const section = button.closest('.project-group');
+      if (section && collapsed.has(key)) { section.classList.add('hover-off'); section.addEventListener('pointerleave', () => section.classList.remove('hover-off'), { once: true }); }
       setStorage('synapse-collapsed', JSON.stringify([...collapsed])); renderSidebar(); return;
     }
     if (button.dataset.approvalKey) return answerApproval(button.dataset.approvalKey);
@@ -3291,6 +3332,8 @@ function initialize() {
   setInterval(() => { for (const el of document.querySelectorAll('.work-fold.live .work-time[data-since]')) { const since = Number(el.dataset.since); el.textContent = since ? duration(Math.max(0, Date.now() - since)) : ''; } }, 1000);
   // docked terminals follow the page every frame (a sidebar sliding, a window resizing); only changes are sent
   if (embedded && !paneKey) { const follow = () => { syncDocks(); requestAnimationFrame(follow); }; requestAnimationFrame(follow); }
+  // panels slide only once the first layout is drawn (a reload restores them in place)
+  setTimeout(() => $('workspace').classList.add('panels-ready'), 600);
 }
 
 // other pages (the file viewer) import the helpers above without starting a workspace
@@ -3304,7 +3347,7 @@ if (typeof document !== 'undefined' && document.getElementById('workspace')) {
         const origin = new URLSearchParams(location.search).has('pane') ? location.origin : 'null';
         if (event.source !== parent || event.origin !== origin || event.data?.type !== 'synapse:desktop-bootstrap') return;
         clearTimeout(timer); removeEventListener('message', receive);
-        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled'];
+        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-stacks'];
         for (const key of keys) {
           try {
             const value = event.data.preferences?.[key];

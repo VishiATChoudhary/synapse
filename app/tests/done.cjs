@@ -71,7 +71,7 @@ const dot = () => js(`[...document.querySelectorAll('.dot')].map((d) => d.classN
   // look elsewhere: the settings cover the session
   await js(`document.querySelector('#settings').click()`);
   await until(() => js(`!document.querySelector('#modal').hidden`), 'settings open');
-  assert.match(await js(`document.querySelector('#modal').textContent`), /notify when done/);
+  assert.match(await js(`document.querySelector('#modal').textContent`), /notify when done/i);
   await until(async () => /\bdone\b/.test(await dot()), 'green once the turn completes', 12000);
   // Synapse in front: a toast; behind another app (the test window can lose focus): a notification
   await until(async () => shown.length || js(`!document.querySelector('#toast').hidden && document.querySelector('#toast').classList.contains('act')`), 'it says it is done', 6000);

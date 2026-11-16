@@ -1993,79 +1993,44 @@ function canvasMenu({ hit, agent, group, x, y, hiddenCount }, r = $('#canvas-fra
   }
   if (items.length) contextMenu(items, r.left + x, r.top + y);
 }
-async function openSettings() {
+// Settings: a window of its own, sections on the left (with a search across all of them), the chosen one on the right.
+// Every change saves to ~/.synapse/app.json as it is made.
+const SETTINGS_PANES = [
+  ['general', 'General', '◐'], ['notifications', 'Notifications', '◔'], ['agents', 'Agents', '✳'], ['workspaces', 'Workspaces', '▤'],
+  ['appearance', 'Appearance', '◑'], ['shortcuts', 'Shortcuts', '⌘'], ['phone', 'Phone', '◫'], ['people', 'People & agent talk', '◎'],
+];
+async function openSettings(start) {
   let s = {};
   try { s = await synapse.settings.get(); } catch {}
   modal('settings', (body, close) => {
-    const setup = el('div', 'opt set'), setupButton = el('button', 'btn', 'Set up');
-    const setupReport = el('pre', 'setup-report'); setupReport.hidden = true;
-    setup.append(el('span', 'k', 'Agent integrations'), el('span', 'c', 'Add Synapse tools and prompt hooks to your agent settings. Existing files are backed up.'), setupButton);
-    setupButton.onclick = async () => {
-      setupButton.disabled = true; setupButton.textContent = 'Setting up…';
-      try { setupReport.textContent = await synapse.integrations.install(); setupReport.hidden = false; setupButton.textContent = 'Set up again'; }
-      catch (e) { setupReport.textContent = e.message; setupReport.hidden = false; setupButton.textContent = 'Try again'; }
-      finally { setupButton.disabled = false; }
+    // one setting: its name and what it does on the left, its control on the right
+    const row = (title, desc, ...controls) => {
+      const r = el('div', 'set-row'), text = el('div', 'set-text');
+      text.append(el('div', 'set-title', title)); if (desc) text.append(el('div', 'set-desc', desc));
+      const ctl = el('div', 'set-ctl'); ctl.append(...controls.filter(Boolean));
+      r.append(text, ctl); return r;
     };
-    body.append(setup, setupReport);
-    const linkRow = el('label', 'opt set'), cb = el('input');
-    cb.type = 'checkbox'; cb.checked = !!s.autoSymlink;
-    linkRow.append(cb, el('span', 'k', 'link workspaces'), el('span', 'c', 'symlink workspaces added from elsewhere into ~/.synapse/workspaces, so the library can bring them back'));
-    cb.onchange = async () => {
-      try { await synapse.settings.set({ autoSymlink: cb.checked }); toast(cb.checked ? 'new workspaces get linked into ~/.synapse/workspaces' : 'workspaces are no longer linked · existing links stay'); }
-      catch (e) { cb.checked = !cb.checked; toast(e.message, true); }
+    // an on/off switch that saves itself; a refused save puts it back
+    const toggle = (checked, save) => {
+      const cb = el('input', 'switch'); cb.type = 'checkbox'; cb.checked = checked; cb.setAttribute('role', 'switch');
+      cb.onchange = async () => { try { await save(cb.checked, cb); } catch (e) { cb.checked = !cb.checked; toast(e.message, true); } };
+      return cb;
     };
-    const forkRow = el('label', 'opt set'), fcb = el('input');
-    fcb.type = 'checkbox'; fcb.checked = !!s.autoSendFork;
-    forkRow.append(fcb, el('span', 'k', 'send forks'), el('span', 'c', 'send a fork\'s question right away, instead of leaving it in the child\'s prompt for you to send'));
-    fcb.onchange = async () => {
-      try { M.autoSendFork = (await synapse.settings.set({ autoSendFork: fcb.checked })).autoSendFork; toast(fcb.checked ? 'forks send their question right away' : 'a fork\'s question waits in its prompt for you'); }
-      catch (e) { fcb.checked = !fcb.checked; toast(e.message, true); }
-    };
-    const safeRow = el('label', 'opt set'), scb = el('input');
-    scb.type = 'checkbox'; scb.checked = s.safeWorktreeDelete !== false;
-    safeRow.append(scb, el('span', 'k', 'safe worktree auto-deletion'), el('span', 'c', 'deleting a worktree first commits its uncommitted changes (untracked files too) to its branch, so it never refuses and nothing is lost; ignored files go with the folder'));
-    scb.onchange = async () => {
-      try { M.safeDelete = (await synapse.settings.set({ safeWorktreeDelete: scb.checked })).safeWorktreeDelete; toast(scb.checked ? 'deleting a worktree saves its changes to the branch first' : 'worktrees with uncommitted changes ask before they are deleted'); }
-      catch (e) { scb.checked = !scb.checked; toast(e.message, true); }
-    };
-    const doneRow = el('label', 'opt set'), dcb = el('input');
-    dcb.type = 'checkbox'; dcb.checked = s.notifyDone !== false;
-    doneRow.append(dcb, el('span', 'k', 'notify when done'), el('span', 'c', 'a notification when an agent finishes while Synapse is in the background, a toast when you are looking at another one'));
-    dcb.onchange = async () => {
-      try { dcb.checked = CUES.notify = (await synapse.settings.set({ notifyDone: dcb.checked })).notifyDone; toast(dcb.checked ? 'agents tell you when they are done' : 'no notifications when agents finish'); }
-      catch (e) { dcb.checked = !dcb.checked; toast(e.message, true); }
-    };
-    // which sound says an agent is done, and whether errors make one (purr); picking one plays it
-    const soundRow = el('div', 'opt set'), seg = el('div', 'seg view-seg sound-seg');
-    const paintSound = (v) => seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.sound === v));
-    for (const [key, label] of Object.entries(DONE_SOUNDS)) {
-      const b = el('button', '', label); b.type = 'button'; b.dataset.sound = key;
-      b.onclick = async (e) => {
-        e.preventDefault();
-        try { CUES.done = (await synapse.settings.set({ doneSound: key })).doneSound; paintSound(CUES.done); if (key !== 'off') playSound(key); }
-        catch (err) { toast(err.message, true); }
-      };
-      seg.append(b);
+    const button = (label, onclick, cls = '') => { const b = el('button', `set-btn ${cls}`.trim(), label); b.type = 'button'; b.onclick = onclick; return b; };
+    const card = (...children) => { const c = el('div', 'set-card'); c.append(...children); return c; };
+    const group = (title, ...children) => { const g = el('section', 'set-group'); if (title) g.append(el('h3', 'set-group-title', title)); g.append(...children); return g; };
+    const panes = {};
+    const pane = (key, intro, ...groups) => { const p = el('div', 'set-pane'); p.dataset.pane = key; if (intro) p.append(el('p', 'set-intro', intro)); p.append(...groups); panes[key] = p; };
+
+    // ---- General
+    const viewSeg = el('div', 'set-seg view-seg');
+    for (const [v, label] of [['gui', 'GUI'], ['terminal', 'Terminal']]) {
+      const b = button(label, () => { close(); if (v === 'gui') openWorkspace(); else showWorkspace(false); }, (v === 'gui') === workspaceOpen ? 'on' : '');
+      b.dataset.view = v; viewSeg.append(b);
     }
-    paintSound(s.doneSound || 'bubbleTap');
-    soundRow.append(el('span', 'k', 'done sound'), el('span', 'c', 'plays when an agent finishes a turn; pick one to hear it'), seg);
-    const errRow = el('label', 'opt set'), ecb = el('input');
-    ecb.type = 'checkbox'; ecb.checked = s.errorSound !== false;
-    errRow.append(ecb, el('span', 'k', 'error sound'), el('span', 'c', 'a low purr when something fails or an agent quits with an error'));
-    ecb.onchange = async () => {
-      try { CUES.error = (await synapse.settings.set({ errorSound: ecb.checked })).errorSound; if (CUES.error) playSound('purr'); }
-      catch (e) { ecb.checked = !ecb.checked; toast(e.message, true); }
-    };
-    const loginRow = el('label', 'opt set'), lcb = el('input');
-    lcb.type = 'checkbox'; lcb.checked = !!s.openAtLogin;
-    loginRow.append(lcb, el('span', 'k', 'Open Synapse at login'), el('span', 'c', 'so friends\' questions get answered while you work'));
-    lcb.onchange = async () => {
-      try { lcb.checked = (await synapse.settings.set({ openAtLogin: lcb.checked })).openAtLogin; toast(lcb.checked ? 'Synapse opens at login' : 'Synapse no longer opens at login'); }
-      catch (e) { lcb.checked = !lcb.checked; toast(e.message, true); }
-    };
-    const updRow = el('div', 'opt set'), updVal = el('span', 'c'), updBtn = el('button', 'btn', 'check now');
+    const updVal = el('span', 'set-desc'), updBtn = button('Check now', null);
     const showUpd = (u) => {
-      const at = `version ${u.current || '?'}`;
+      const at = `Version ${u.current || '?'}`;
       updVal.textContent = !u.enabled ? `${at} · ${u.current?.includes('-') ? 'preview build, install updates manually' : 'running from source, updates come with git pull'}`
         : u.state === 'checking' ? `${at} · checking…`
         : u.state === 'error' ? `${at} · last check failed: ${u.error}`
@@ -2073,94 +2038,161 @@ async function openSettings() {
         : `${at} · up to date`;
       updBtn.hidden = !u.enabled;
     };
-    updRow.append(el('span', 'k', 'updates'), updVal, updBtn);
-    synapse.update.get().then(showUpd, () => {});
-    updBtn.onclick = async () => { updBtn.disabled = true; updVal.textContent = 'checking…'; try { showUpd(await synapse.update.check()); } catch (e) { toast(e.message, true); } updBtn.disabled = false; };
-    // GUI or Terminal: one choice, kept here rather than in the toolbar
-    const viewRow = el('div', 'opt set'), viewSeg = el('div', 'seg view-seg');
-    for (const [v, label] of [['gui', 'GUI'], ['terminal', 'Terminal']]) {
-      const b = el('button', (v === 'gui') === workspaceOpen ? 'on' : '', label);
-      b.dataset.view = v;
-      b.onclick = () => { close(); if (v === 'gui') openWorkspace(); else showWorkspace(false); };
-      viewSeg.append(b);
-    }
-    viewRow.append(el('span', 'k', 'view'), el('span', 'c', 'GUI shows sessions, connections and friends as a workspace; Terminal is the raw terminals with forks'), viewSeg);
-    const tourRow = el('div', 'opt set'), tourBtn = el('button', 'btn', 'replay');
-    tourRow.append(el('span', 'k', 'tour'), el('span', 'c', 'the six steps a new install starts with'), tourBtn);
-    tourBtn.onclick = () => { close(); showOnboarding(false); };
-    const pastRow = el('div', 'opt set past-set'), pastBtn = el('button', 'btn', 'browse');
-    pastRow.append(el('span', 'k', 'past chats'), el('span', 'c', 'import your Claude Code and Codex chats from before Synapse, and pick them up here  ·  ⇧⌘H'), pastBtn);
-    pastBtn.onclick = () => { close(); openPastChats(); };
-    // what used to crowd the top right: activity, friends, fork, splits and past chats
-    const toolsRow = el('div', 'opt set'), tools = el('span', 'look-ctl tool-btns');
+    synapse.update.get().then(showUpd, () => { updVal.textContent = 'Version unknown'; });
+    updBtn.onclick = async () => { updBtn.disabled = true; updVal.textContent = 'Checking…'; try { showUpd(await synapse.update.check()); } catch (e) { toast(e.message, true); } updBtn.disabled = false; };
+    const updRow = row('Updates', '', updBtn); updRow.querySelector('.set-text').append(updVal);
+    const tools = el('div', 'set-tools');
     for (const [label, title, run] of [
-      ['▦ activity', 'your year in code and prompts', () => showActivity(true)],
-      ['◎ friends', 'your trusted people, and what you share with each', () => openFriends()],
-      ['⑂ fork', 'fork the open agent  ·  ⇧⌘F', () => promptFork()],
-      ['◫ split', 'split side by side  ·  ⌘D', () => splitShell('right')],
-      ['⊟ split', 'split top and bottom  ·  ⇧⌘D', () => splitShell('down')],
-    ]) {
-      const b = el('button', 'btn', label); b.type = 'button'; b.title = title;
-      b.onclick = () => { close(); setTimeout(run, 0); };
-      tools.append(b);
+      ['Activity', 'Your year in code and prompts', () => showActivity(true)],
+      ['Friends', 'Your trusted people, and what you share with each', () => openFriends()],
+      ['Fork', 'Fork the open agent  ·  ⇧⌘F', () => promptFork()],
+      ['Split right', 'Split side by side  ·  ⌘D', () => splitShell('right')],
+      ['Split down', 'Split top and bottom  ·  ⇧⌘D', () => splitShell('down')],
+    ]) { const b = button(label, () => { close(); setTimeout(run, 0); }); b.title = title; tools.append(b); }
+    pane('general', null,
+      group('Window',
+        row('View', 'GUI shows sessions, connections and friends as a workspace. Terminal is the raw terminals with forks.', viewSeg),
+        row('Open Synapse at login', 'So friends’ questions get answered while you work.', toggle(!!s.openAtLogin, async (on, cb) => { cb.checked = (await synapse.settings.set({ openAtLogin: on })).openAtLogin; toast(cb.checked ? 'Synapse opens at login' : 'Synapse no longer opens at login'); }))),
+      group('Synapse', updRow, row('Tour', 'The six steps a new install starts with.', button('Replay', () => { close(); showOnboarding(false); }))),
+      group('Quick open', row('Tools', 'Activity, friends, forks and splits.', tools)));
+
+    // ---- Notifications
+    const soundSeg = el('div', 'set-seg set-seg-wrap sound-seg');
+    const paintSound = (v) => soundSeg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.sound === v));
+    for (const [key, label] of Object.entries(DONE_SOUNDS)) {
+      const b = button(label, async () => { try { CUES.done = (await synapse.settings.set({ doneSound: key })).doneSound; paintSound(CUES.done); if (key !== 'off') playSound(key); } catch (err) { toast(err.message, true); } });
+      b.dataset.sound = key; soundSeg.append(b);
     }
-    toolsRow.append(el('span', 'k', 'open'), el('span', 'c', 'activity, friends, fork and splits · past chats is below, ⇧⌘H'), tools);
-    body.append(el('div', 'hint', '~/.synapse/app.json · esc closes'), toolsRow, viewRow, pastRow, importRows({ remove: true }), linkRow, forkRow, safeRow, doneRow, soundRow, errRow, loginRow, updRow, tourRow);
-    const commands = el('div', 'agent-commands'), commandInputs = new Map();
+    paintSound(s.doneSound || 'bubbleTap');
+    pane('notifications', null,
+      group('When an agent finishes',
+        row('Notify when done', 'A notification when an agent finishes while Synapse is in the background, a toast when you are looking at another one.', toggle(s.notifyDone !== false, async (on, cb) => { cb.checked = CUES.notify = (await synapse.settings.set({ notifyDone: on })).notifyDone; })),
+        row('Done sound', 'Plays when an agent finishes a turn. Pick one to hear it.'), soundSeg),
+      group('When something fails',
+        row('Error sound', 'A low purr when something fails or an agent quits with an error.', toggle(s.errorSound !== false, async (on) => { CUES.error = (await synapse.settings.set({ errorSound: on })).errorSound; if (CUES.error) playSound('purr'); }))));
+
+    // ---- Agents
+    const setupReport = el('pre', 'setup-report'); setupReport.hidden = true;
+    const setupButton = button('Set up', async () => {
+      setupButton.disabled = true; setupButton.textContent = 'Setting up…';
+      try { setupReport.textContent = await synapse.integrations.install(); setupReport.hidden = false; setupButton.textContent = 'Set up again'; }
+      catch (e) { setupReport.textContent = e.message; setupReport.hidden = false; setupButton.textContent = 'Try again'; }
+      finally { setupButton.disabled = false; }
+    }, 'primary');
+    const commands = el('div', 'set-commands'), commandInputs = new Map();
     for (const [kind, profile] of Object.entries(s.profiles || {})) {
-      const row = el('label', 'opt set'), input = el('input');
-      input.value = profile.command; input.spellcheck = false; input.setAttribute('aria-label', `${profile.label || kind} command`);
-      row.append(el('span', 'k', profile.label || kind), input); commands.append(row); commandInputs.set(kind, input);
+      const input = el('input', 'set-input mono'); input.value = profile.command; input.spellcheck = false; input.setAttribute('aria-label', `${profile.label || kind} command`);
+      const r = el('label', 'set-command'); r.append(el('span', 'set-command-name', profile.label || kind), input); commands.append(r); commandInputs.set(kind, input);
     }
-    const saveCommands = el('button', 'btn', 'Save commands');
-    saveCommands.onclick = async () => {
+    const saveCommands = button('Save commands', async () => {
       saveCommands.disabled = true;
       try { const result = await synapse.settings.set({ profiles: Object.fromEntries([...commandInputs].map(([kind, input]) => [kind, { command: input.value }])) }); M.profiles = result.profiles; render(); toast('Commands saved. New sessions use these commands.'); }
       catch (e) { toast(e.message, true); }
       finally { saveCommands.disabled = false; }
-    };
-    commands.append(saveCommands); body.append(el('div', 'sub', 'Agent commands'), commands);
-    const looks = el('div', 'looks'), keys = el('div', 'my-keys');
-    body.append(el('div', 'sub', 'appearance'), looks, el('div', 'sub', 'your shortcuts'), keys);
-    drawLooks(looks); drawShortcuts(keys);
-    const phones = el('div', 'phones');
-    body.append(el('div', 'sub', 'phone'), phones);
-    drawPhones(phones);
-    const people = el('div', 'people');
-    body.append(el('div', 'sub', 'trusted people'), people);
-    drawPeople(people);
-    const perHour = el('input'), model = el('select'), used = el('span', 'c');
-    perHour.type = 'number'; perHour.min = 1; perHour.max = 600; perHour.value = s.talkPerHour ?? 60;
-    perHour.onchange = async () => {
-      try { perHour.value = (await synapse.settings.set({ talkPerHour: perHour.value })).talkPerHour; toast(`friends' agents may ask ${perHour.value} an hour each`); }
-      catch (e) { toast(e.message, true); }
-    };
-    for (const [v, label] of [['agent', 'the agent\'s own'], ['opus', 'opus'], ['sonnet', 'sonnet'], ['haiku', 'haiku']]) { const o = el('option', '', label); o.value = v; model.appendChild(o); }
-    model.value = s.talkModel || 'agent';
-    model.onchange = async () => {
-      try { model.value = (await synapse.settings.set({ talkModel: model.value })).talkModel; toast(`answers use ${model.value === 'agent' ? 'the agent\'s own model' : model.value}`); }
-      catch (e) { toast(e.message, true); }
-    };
-    const limitRow = el('label', 'opt set'), modelRow = el('label', 'opt set'), usedRow = el('div', 'opt set');
-    limitRow.append(el('span', 'k', 'questions an hour'), perHour, el('span', 'c', 'most a friend\'s agents may ask yours each hour'));
-    modelRow.append(el('span', 'k', 'answer model'), model, el('span', 'c', 'answers spend your Claude usage'));
-    usedRow.append(el('span', 'k', 'answers given'), used);
-    used.textContent = '…';
+    });
+    const actions = el('div', 'set-actions'); actions.append(saveCommands); commands.append(actions);
+    pane('agents', null,
+      group('Integrations', card(row('Agent integrations', 'Add Synapse tools and prompt hooks to your agents’ settings. Existing files are backed up.', setupButton), setupReport)),
+      group('Commands', el('p', 'set-desc set-pad', 'The command each agent starts with. New sessions use these; running ones keep theirs.'), commands),
+      group('Forks', row('Send forks right away', 'Send a fork’s question at once, instead of leaving it in the child’s prompt for you to send.', toggle(!!s.autoSendFork, async (on) => { M.autoSendFork = (await synapse.settings.set({ autoSendFork: on })).autoSendFork; toast(on ? 'Forks send their question right away' : 'A fork’s question waits in its prompt for you'); }))));
+
+    // ---- Workspaces
+    pane('workspaces', null,
+      group('Folders',
+        row('Link workspaces', 'Symlink workspaces added from elsewhere into ~/.synapse/workspaces, so the library can bring them back.', toggle(!!s.autoSymlink, async (on) => { await synapse.settings.set({ autoSymlink: on }); toast(on ? 'New workspaces get linked into ~/.synapse/workspaces' : 'Workspaces are no longer linked. Existing links stay.'); })),
+        row('Safe worktree deletion', 'Deleting a worktree first commits its uncommitted changes (untracked files too) to its branch, so nothing is lost. Ignored files go with the folder.', toggle(s.safeWorktreeDelete !== false, async (on) => { M.safeDelete = (await synapse.settings.set({ safeWorktreeDelete: on })).safeWorktreeDelete; toast(on ? 'Deleting a worktree saves its changes to the branch first' : 'Worktrees with uncommitted changes ask before they are deleted'); }))),
+      group('Past chats', card(row('Chats from before Synapse', 'Import your Claude Code and Codex chats and pick them up here. ⇧⌘H', button('Browse', () => { close(); openPastChats(); })), importRows({ remove: true }))));
+
+    // ---- Appearance, shortcuts, phone, people: drawn by their own helpers
+    const looks = el('div', 'looks'); drawLooks(looks);
+    pane('appearance', null, group('Theme and terminal', looks));
+    const keys = el('div', 'my-keys'); drawShortcuts(keys);
+    const builtIn = el('div', 'set-keys');
+    for (const [title, list] of SHORTCUTS) {
+      const box = el('div', 'set-keys-group'); box.append(el('div', 'set-keys-title', title));
+      for (const [k, what] of list) { const r = el('div', 'set-key'); r.append(el('span', '', what), el('kbd', '', k)); box.append(r); }
+      builtIn.append(box);
+    }
+    pane('shortcuts', null, group('Your shortcuts', keys), group('Built in', builtIn));
+    const phones = el('div', 'phones'); drawPhones(phones);
+    pane('phone', 'Pair your phone to follow and answer your agents away from the desk.', group(null, phones));
+    const people = el('div', 'people'); drawPeople(people);
+    const perHour = el('input', 'set-input num'), model = el('select', 'set-input'), used = el('span', 'set-value', '…');
+    perHour.type = 'number'; perHour.min = 1; perHour.max = 600; perHour.value = s.talkPerHour ?? 60; perHour.setAttribute('aria-label', 'Questions an hour');
+    perHour.onchange = async () => { try { perHour.value = (await synapse.settings.set({ talkPerHour: perHour.value })).talkPerHour; toast(`Friends’ agents may ask ${perHour.value} an hour each`); } catch (e) { toast(e.message, true); } };
+    for (const [v, label] of [['agent', 'The agent’s own'], ['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku']]) { const o = el('option', '', label); o.value = v; model.appendChild(o); }
+    model.value = s.talkModel || 'agent'; model.setAttribute('aria-label', 'Answer model');
+    model.onchange = async () => { try { model.value = (await synapse.settings.set({ talkModel: model.value })).talkModel; toast(`Answers use ${model.value === 'agent' ? 'the agent’s own model' : model.value}`); } catch (e) { toast(e.message, true); } };
     synapse.settings.usage().then((u) => {
       used.textContent = `${u.today} today · ${u.week} this week` + (u.byPeer.length ? ` · ${u.byPeer.map((p) => `${p.name} ${p.today}`).join(', ')}` : '');
-    }, () => { used.textContent = 'unavailable'; });
-    body.append(el('div', 'sub', 'agent talk'), limitRow, modelRow, usedRow);
-    const hist = el('div', 'talk-hist');
-    body.append(el('div', 'sub', 'conversations'), hist);
-    drawTalkHistory(hist);
-    for (const [title, keys] of SHORTCUTS) {
-      const box = el('div', 'keys');
-      for (const [k, what] of keys) { const row = el('span'); row.append(el('kbd', '', k), what); box.appendChild(row); }
-      body.append(el('div', 'sub', title), box);
+    }, () => { used.textContent = 'Unavailable'; });
+    const hist = el('div', 'talk-hist'); drawTalkHistory(hist);
+    pane('people', null,
+      group('Trusted people', people),
+      group('Agent talk',
+        row('Questions an hour', 'The most a friend’s agents may ask yours each hour.', perHour),
+        row('Answer model', 'Answers spend your Claude usage.', model),
+        row('Answers given', '', used)),
+      group('Conversations', hist));
+
+    // ---- the frame: nav (with search) and the pane
+    const shell = el('div', 'settings'), nav = el('nav', 'set-nav'), main = el('div', 'set-main');
+    const search = el('input', 'set-search'); search.type = 'search'; search.placeholder = 'Search settings'; search.spellcheck = false;
+    const head = el('div', 'set-head'), headTitle = el('h2', 'set-head-title'), closeBtn = button('×', close, 'set-close');
+    closeBtn.setAttribute('aria-label', 'Close settings'); closeBtn.title = 'Close  ·  esc';
+    head.append(headTitle, closeBtn);
+    const scroller = el('div', 'set-scroll'); scroller.append(...Object.values(panes));
+    const empty = el('p', 'set-empty', 'No setting matches.'); empty.hidden = true; scroller.append(empty);
+    main.append(head, scroller);
+    nav.append(el('div', 'set-nav-title', 'Settings'), search);
+    const links = new Map();
+    for (const [key, label, glyph] of SETTINGS_PANES) {
+      const b = el('button', 'set-link'); b.type = 'button'; b.dataset.settingsPane = key;
+      b.append(el('span', 'set-glyph', glyph), el('span', '', label));
+      b.onclick = () => { search.value = ''; show(key); };
+      nav.append(b); links.set(key, b);
     }
+    nav.append(el('div', 'set-nav-foot', '~/.synapse/app.json'));
+    let current = SETTINGS_PANES.some(([k]) => k === start) ? start : localStorage.getItem('synapse-settings-pane') || 'general';
+    if (!panes[current]) current = 'general';
+    function show(key) {
+      current = key; localStorage.setItem('synapse-settings-pane', key);
+      for (const [k, p] of Object.entries(panes)) { p.hidden = k !== key; p.classList.remove('searching'); }
+      for (const [k, b] of links) b.setAttribute('aria-current', String(k === key));
+      for (const n of scroller.querySelectorAll('.set-row, .set-group')) n.hidden = false;
+      empty.hidden = true;
+      headTitle.textContent = SETTINGS_PANES.find(([k]) => k === key)[1];
+      scroller.scrollTop = 0;
+    }
+    // search: every pane at once, only the rows that match, each under its section's name
+    search.oninput = () => {
+      const q = search.value.trim().toLowerCase();
+      if (!q) return show(current);
+      headTitle.textContent = `Results for “${search.value.trim()}”`;
+      let any = false;
+      for (const [k, p] of Object.entries(panes)) {
+        p.classList.add('searching'); p.dataset.label = SETTINGS_PANES.find(([x]) => x === k)[1];
+        let hit = false;
+        for (const g of p.querySelectorAll('.set-group')) {
+          const title = g.querySelector('.set-group-title')?.textContent.toLowerCase() || '';
+          const rows = [...g.querySelectorAll(':scope > .set-row')];
+          let gHit = title.includes(q);
+          for (const r of rows) { const m = gHit || r.textContent.toLowerCase().includes(q); r.hidden = !m; gHit ||= m; }
+          if (!rows.length) gHit ||= g.textContent.toLowerCase().includes(q);
+          g.hidden = !gHit; hit ||= gHit;
+        }
+        p.hidden = !hit; any ||= hit;
+      }
+      for (const b of links.values()) b.setAttribute('aria-current', 'false');
+      empty.hidden = any;
+    };
+    search.onkeydown = (e) => { if (e.key === 'Escape' && search.value) { e.stopPropagation(); search.value = ''; show(current); } };
+    shell.append(nav, main);
+    body.append(shell);
+    show(current);
     body.tabIndex = 0; body.onkeydown = (e) => { if (e.key === 'Escape') close(); };
   });
-  // not the hourly limit field: settings open to read, not to type
+  // not a field: settings open to read, not to type
   $('#modal-body').focus();
 }
 
@@ -2180,7 +2212,7 @@ function drawLooks(box) {
     b.onclick = () => save({ theme: id });
     grid.append(b);
   }
-  box.append(grid, el('div', 'hint', 'add your own under "themes" in ~/.synapse/app.json: label, dark, paper, ink, sig and 16 ansi colours'));
+  box.append(grid, el('div', 'hint', 'Add your own under "themes" in ~/.synapse/app.json: label, dark, paper, ink, sig and 16 ansi colours'));
   const font = el('input'), list = el('datalist');
   list.id = 'font-list'; for (const f of FONTS) { const o = el('option'); o.value = f; list.append(o); }
   font.setAttribute('list', 'font-list'); font.value = look.font || 'Fragment Mono'; font.spellcheck = false; font.setAttribute('aria-label', 'terminal font');
@@ -2192,14 +2224,14 @@ function drawLooks(box) {
   height.onchange = () => save({ lineHeight: Number(height.value) });
   const fontRow = el('div', 'opt set'), fontCtl = el('span', 'look-ctl');
   fontCtl.append(font, list, size, height);
-  fontRow.append(el('span', 'k', 'font'), el('span', 'c', 'the terminal font, then its size and line height; any font installed on this computer works'), fontCtl);
+  fontRow.append(el('span', 'k', 'Font'), el('span', 'c', 'The terminal font, then its size and line height. Any font installed on this computer works.'), fontCtl);
   const cursorRow = el('div', 'opt set'), cursorCtl = el('span', 'look-ctl'), seg = el('div', 'seg');
   for (const c of CURSORS) { const b = el('button', c === (look.cursor || 'bar') ? 'on' : '', c); b.type = 'button'; b.onclick = () => save({ cursor: c }); seg.append(b); }
   const blink = el('label', 'look-blink'), bcb = el('input');
-  bcb.type = 'checkbox'; bcb.checked = look.blink !== false; bcb.onchange = () => save({ blink: bcb.checked });
-  blink.append(bcb, 'blink');
+  bcb.type = 'checkbox'; bcb.className = 'switch'; bcb.checked = look.blink !== false; bcb.onchange = () => save({ blink: bcb.checked });
+  blink.append(bcb, 'Blink');
   cursorCtl.append(seg, blink);
-  cursorRow.append(el('span', 'k', 'cursor'), el('span', 'c', 'its shape, and whether it blinks'), cursorCtl);
+  cursorRow.append(el('span', 'k', 'Cursor'), el('span', 'c', 'Its shape, and whether it blinks.'), cursorCtl);
   box.append(fontRow, cursorRow);
 }
 
@@ -2247,9 +2279,9 @@ function drawShortcuts(box) {
       row.append(rec, what, detail, del);
       box.append(row);
     });
-    const add = el('button', 'btn', '+ add shortcut'); add.type = 'button';
+    const add = el('button', 'btn', '+ Add shortcut'); add.type = 'button';
     add.onclick = () => { items.push({ keys: '', action: 'agent', kind: agentProfiles()[0] || 'claude' }); draw(); box.querySelectorAll('.key-rec').item(items.length - 1)?.click(); };
-    box.append(add, el('div', 'hint', 'needs ⌘, ⌃ or ⌥ (or an F key) · yours win over the built-in ones · kept under "shortcuts" in ~/.synapse/app.json'));
+    box.append(add, el('div', 'hint', 'Needs ⌘, ⌃ or ⌥ (or an F key) · yours win over the built-in ones · kept under "shortcuts" in ~/.synapse/app.json'));
   };
   // the next key combination pressed names the shortcut; esc leaves it as it was
   const record = (btn, done, index) => {
@@ -2755,7 +2787,7 @@ function openTurn(pty) {
 }
 synapse.notify.onOpen(openTurn);
 // the installed app set itself up in the agent CLIs (main.mjs autoSetup): say so once, Settings shows the details
-synapse.integrations.onSetup(({ added }) => toast(`Synapse is set up in your agents: MCP server, hooks and the synapse skill (${added} change${added === 1 ? '' : 's'}). Details in Settings`, false, () => openSettings()));
+synapse.integrations.onSetup(({ added }) => toast(`Synapse is set up in your agents: MCP server, hooks and the synapse skill (${added} change${added === 1 ? '' : 's'}). Details in Settings`, false, () => openSettings('agents')));
 synapse.fork.onRequest(({ requestId, parentPty, question }) => fork(question, { requestId, parentPty }));
 
 // ---------------------------------------------------------------- account, trusted people, synapse requests
@@ -2996,7 +3028,7 @@ function renderFriends() {
   inp.onkeydown = (e) => { if (e.key === 'Enter') { e.stopPropagation(); submit(); } };
   add.append(inp, go);
   const more = el('button', 'friends-link', 'manage in settings');
-  more.onclick = () => { closeFriends(); openSettings(); };
+  more.onclick = () => { closeFriends(); openSettings('people'); };
   pop.append(add, more);
 }
 
@@ -3520,7 +3552,7 @@ synapse.phone.onChanged(({ asking, shares }) => {
   }
   if (phoneBox?.isConnected) drawPhones(phoneBox);
 });
-synapse.phone.onShow(() => openSettings());
+synapse.phone.onShow(() => openSettings('phone'));
 // the phone asked for a new agent: open it like ⌃1 would, in the workspace it picked
 synapse.phone.onSpawn(({ req, cwd, kind }) => {
   const wt = worktreeOf(cwd);
@@ -3721,7 +3753,7 @@ function undock(place) {
   docks.delete(place); d.box.remove();
   if (d.x.docked === place) { d.x.docked = null; d.x.el.classList.remove('visible'); if (M.slots.some((s) => s.sessions.includes(d.x))) $('#stage').appendChild(d.x.el); }
 }
-function dock({ place, id, rect, covers = [], focus = false } = {}) {
+function dock({ place, id, rect, covers = [], focus = false, moving = false } = {}) {
   if (!['main', 'drawer'].includes(place)) throw new Error('Unknown terminal place.');
   for (const [p, d] of docks) if (!M.slots.some((s) => s.sessions.includes(d.x))) undock(p); // closed meanwhile
   if (!id || !rect || !workspaceOpen) { undock(place); render(); return; }
@@ -3744,8 +3776,9 @@ function dock({ place, id, rect, covers = [], focus = false } = {}) {
     .map((c) => ({ x: n(c.x) - n(rect.x), y: n(c.y) - n(rect.y), w: n(c.width), h: n(c.height) }))
     .filter((c) => c.x < w && c.y < h && c.x + c.w > 0 && c.y + c.h > 0);
   d.box.style.clipPath = holes.length ? `path(evenodd, "M0 0H${w}V${h}H0Z${holes.map((c) => `M${c.x - 6} ${c.y - 6}h${c.w + 12}v${c.h + 12}h${-(c.w + 12)}Z`).join('')}")` : '';
-  // moving the box is free; only a new size makes the terminal measure and redraw its rows
-  const size = `${n(rect.width)}x${n(rect.height)}`, resized = d.size !== size; d.size = size;
+  // moving the box is free; only a new size makes the terminal measure and redraw its rows. While a panel slides
+  // (moving) the box follows it frame by frame and the rows are measured once, when it settles
+  const size = `${n(rect.width)}x${n(rect.height)}`, resized = !moving && d.size !== size; if (!moving) d.size = size;
   if (resized || focus) requestAnimationFrame(() => { if (x.el.isConnected) { if (resized) x.fit.fit(); if (focus) x.term.focus(); } });
 }
 const ownSession = (id) => {

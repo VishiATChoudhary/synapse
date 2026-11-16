@@ -78,7 +78,7 @@ const shot = async (name) => { if (process.env.LOOKS_SHOTS) fs.writeFileSync(pat
   await shot('appearance');
 
   // Settings > your shortcuts: record ⌥⌘C to open a Claude tab with a first prompt
-  await js(`[...document.querySelectorAll('.my-keys > .btn')].find((b) => b.textContent.includes('add shortcut')).click()`);
+  await js(`[...document.querySelectorAll('.my-keys > .btn')].find((b) => b.textContent.includes('Add shortcut')).click()`);
   await until(() => js(`!!document.querySelector('.key-rec.recording')`), 'recording');
   await press({ key: 'ç', code: 'KeyC', metaKey: true, altKey: true });
   await until(() => cfg().shortcuts?.[0]?.keys === 'alt+cmd+c', 'the keys kept');
@@ -86,7 +86,7 @@ const shot = async (name) => { if (process.env.LOOKS_SHOTS) fs.writeFileSync(pat
   await until(() => cfg().shortcuts?.[0]?.text === 'hello from a shortcut', 'the first prompt kept');
   assert.equal(cfg().shortcuts[0].kind, 'claude');
   // a second one runs a command in the tab in front
-  await js(`[...document.querySelectorAll('.my-keys > .btn')].find((b) => b.textContent.includes('add shortcut')).click()`);
+  await js(`[...document.querySelectorAll('.my-keys > .btn')].find((b) => b.textContent.includes('Add shortcut')).click()`);
   await until(() => js(`!!document.querySelector('.key-rec.recording')`), 'recording again');
   await press({ key: 'F6', code: 'F6' });
   await until(() => cfg().shortcuts?.[1]?.keys === 'f6', 'F6 kept');

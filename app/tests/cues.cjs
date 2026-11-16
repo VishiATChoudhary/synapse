@@ -94,7 +94,7 @@ const heard = () => js(`window.__tones.splice(0)`);
 
   // error sound: a failing action purrs; off, it stays quiet
   await heard(); await sleep(200);
-  const errRow = `[...document.querySelectorAll('#modal .opt')].find((o) => o.textContent.startsWith('error sound'))`;
+  const errRow = `[...document.querySelectorAll('#modal .set-row')].find((o) => o.textContent.startsWith('Error sound'))`;
   assert.equal(await js(`${errRow}.querySelector('input').checked`), true, 'error sound on by default');
   await js(`(() => { const i = ${errRow}.querySelector('input'); i.click(); })()`);
   await until(() => settings().errorSound === false, 'error sound off saved');
