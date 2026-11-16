@@ -1006,8 +1006,11 @@ function initialize() {
       const who = label === agent.name ? '' : GENERATED.test(agent.name || '') ? kindName(agent) : agent.name;
       const shared = (friends?.links || []).some((l) => l.local && (l.local.id === agent.backendId || l.local.id === agent.id));
       // second line: the agent's tool (its logo) and who it is; left: the project's GitHub owner picture
-      const sub = watchNote ? `${watchNote.kind === 'wake' ? 'Checks again' : 'Waiting'}: ${watchNote.kind === 'wake' ? watchNote.text : watchNote.text}` : [place, who || kindName(agent)].filter(Boolean).join(' · ');
-      const logo = LOGOS.has(agent.kind) ? agent.kind : '';
+      // the project view is lean: one line per agent, no icons; a second line only when it says something
+      const lean = groupBy === 'project' && !place;
+      row.classList.toggle('lean', lean);
+      const sub = watchNote ? `${watchNote.kind === 'wake' ? 'Checks again' : 'Waiting'}: ${watchNote.text}` : lean ? who : [place, who || kindName(agent)].filter(Boolean).join(' · ');
+      const logo = LOGOS.has(agent.kind) && !lean ? agent.kind : '';
       const subHtml = `${shared ? `<span class="shared-mark" title="Shared with a friend">${icon('users')}</span>` : ''}${logo ? `<span class="sub-kind" data-logo="${escapeHtml(logo)}" aria-hidden="true"></span>` : ''}${escapeHtml(sub)}`;
       if (row.dataset.sub !== subHtml) { row.dataset.sub = subHtml; row.querySelector('.session-sub').innerHTML = subHtml; }
       row.classList.add('titled');

@@ -1167,3 +1167,11 @@ body.sorting .session-row .row-actions { display: none; }
 .watch-text span { color: var(--color-ink); overflow-wrap: anywhere; }
 .watch-text small { color: var(--color-muted); font-size: var(--text-xs); }
 .watch-row .icon-button { flex: none; }
+
+/* ---------------------------------------------------------------- project view: lean rows
+   One line per agent under its project: the name where the project's name starts, its state on the right. No
+   icon per agent (the project says where, the tool is in the tooltip and the chat). */
+.session-row.lean { min-height: 28px; padding: 4px 10px 4px 36px; gap: 8px; }
+.session-row.lean .session-kind { display: none; }
+.session-row.lean .session-sub { margin-top: 0; }
+.session-children .session-row.lean { min-height: 26px; padding-block: 3px; }
