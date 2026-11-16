@@ -35,8 +35,6 @@ async function main() {
     const self = agentForProcess(process.ppid, input.session_id || undefined);
     if (self) me = self.id;
   }
-  // a new prompt from the user: whatever the agent was waiting on is no longer what it is about
-  if (event === 'UserPromptSubmit' && me) { try { (await import('./waiting.mjs')).clear(me); } catch {} }
 
   // `/sfork <question>`: file a fork request and block the prompt so it never enters this session.
   // The Synapse app (or `synapse fork` when no app runs) picks the request up and spawns the child.

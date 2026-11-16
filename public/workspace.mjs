@@ -329,15 +329,7 @@ const avatar = (agent) => `<span class="agent-avatar" data-logo="${LOGOS.has(age
 // a project's badge, like T3's: two letters on a tint of its colour
 const badgeText = (name) => { const words = String(name || '?').split(/[\s_.-]+/).filter(Boolean); return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] || '?').slice(0, 2)).toUpperCase(); };
 const hueOf = (text) => { let h = 0; for (const c of String(text)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
-// what an agent waits on outside itself: what it said it waits for (synapse_waiting), its background tasks still
-// running, a scheduled wake-up still ahead
-const watchList = (agent) => [
-  ...(agent.waiting ? [{ kind: 'wait', text: agent.waiting.what, url: agent.waiting.url, since: agent.waiting.since }] : []),
-  ...(agent.background || []).map((t) => ({ kind: 'task', text: t.label, since: t.since })),
-  ...(agent.wake && agent.wake.at > Date.now() ? [{ kind: 'wake', text: agent.wake.reason || 'Checks again', at: agent.wake.at }] : []),
-];
-const watching = (agent) => !agent.exited && agent.status !== 'exited' && watchList(agent).length > 0;
-const activityLabel = (agent) => agent.status !== 'busy' && !['waiting', 'needs_input'].includes(agent.status) && watching(agent) ? 'Watching' : agent.status === 'busy' ? 'Working' : ['waiting', 'needs_input'].includes(agent.status) ? 'Needs input' : agent.status === 'exited' ? 'Exited' : 'Idle';
+const activityLabel = (agent) => agent.status === 'busy' ? 'Working' : ['waiting', 'needs_input'].includes(agent.status) ? 'Needs input' : agent.status === 'exited' ? 'Exited' : 'Idle';
 // a spinner drawn again (the state refreshes every second) picks up where a shared clock is, instead of starting
 // over, so it turns smoothly however often its row is redrawn
 const spinPhase = (period = 900) => `animation-delay:-${Date.now() % period}ms`;
@@ -745,7 +737,7 @@ function initialize() {
       if ((a.status === 'busy' || needsYou(a)) && settledAt[a.id] !== undefined) { delete settledAt[a.id]; changed = true; }
       const finished = doneSet.get(a.id);
       if (finished && tidy.idle && Date.now() - finished > tidy.idle) { doneSet.delete(a.id); changed = true; }
-      const busy = a.status === 'busy' || needsYou(a) || watching(a), idleFor = Date.now() - Math.max(usedAt(a), finished || 0, unarchivedAt[a.id] || 0);
+      const busy = a.status === 'busy' || needsYou(a), idleFor = Date.now() - Math.max(usedAt(a), finished || 0, unarchivedAt[a.id] || 0);
       if (!busy && tidy.archive && idleFor > tidy.archive && archived[a.id] === undefined && a.id !== selectedId && usedAt(a)) { archived[a.id] = Date.now(); delete snoozed[a.id]; doneSet.delete(a.id); changed = true; }
       if (!busy && !a.remote && !a.exited && tidy.close && idleFor > tidy.close && usedAt(a) && !expiring.has(a.id) && a.id !== selectedId) {
         expiring.add(a.id);
@@ -826,7 +818,7 @@ function initialize() {
       setStorage('synapse-tidy', JSON.stringify(tidy)); renderSidebar();
     });
   }
-  const stateOf = (a) => (needsYou(a) ? 'needs' : a.status === 'busy' ? 'working' : watching(a) ? 'watching' : doneSet.has(a.id) ? 'done' : a.exited ? 'ended' : 'idle');
+  const stateOf = (a) => (needsYou(a) ? 'needs' : a.status === 'busy' ? 'working' : doneSet.has(a.id) ? 'done' : a.exited ? 'ended' : 'idle');
   const isSnoozed = (a) => snoozed[a.id] !== undefined && a.id !== selectedId;
   // Status view sorts by trigger: when each agent entered its current state. Output from a working agent does not
   // reorder anything; a row moves only when its agent starts, stops, finishes or needs you, and then it goes on top.
@@ -1008,9 +1000,7 @@ function initialize() {
       dot.classList.remove('done', 'waiting');
       const pill = row.querySelector('.state-pill');
       pill.className = `state-pill ${st}`;
-      const watchNote = st === 'watching' ? watchList(agent)[0] : null;
-      pill.title = watchNote ? watchNote.text : '';
-      pill.innerHTML = st === 'needs' ? 'Needs you' : st === 'watching' ? `${icon('eye')}Watching` : st === 'done' ? 'Active' : snoozed[agent.id] !== undefined ? `${icon('clock')}` : '';
+      pill.innerHTML = st === 'needs' ? 'Needs you' : st === 'done' ? 'Active' : snoozed[agent.id] !== undefined ? `${icon('clock')}` : '';
       const label = titleOf(agent);
       row.querySelector('.session-name').textContent = label;
       // the second line says who: the agent's name, or its tool when the name is just a generated one
@@ -1020,7 +1010,7 @@ function initialize() {
       // the project view is lean: one line per agent, no icons; a second line only when it says something
       const lean = groupBy === 'project' && !place;
       row.classList.toggle('lean', lean);
-      const sub = watchNote ? `${watchNote.kind === 'wake' ? 'Checks again' : 'Waiting'}: ${watchNote.text}` : lean ? who : [place, who || kindName(agent)].filter(Boolean).join(' · ');
+      const sub = lean ? who : [place, who || kindName(agent)].filter(Boolean).join(' · ');
       const logo = LOGOS.has(agent.kind) && !lean ? agent.kind : '';
       const subHtml = `${shared ? `<span class="shared-mark" title="Shared with a friend">${icon('users')}</span>` : ''}${logo ? `<span class="sub-kind" data-logo="${escapeHtml(logo)}" aria-hidden="true"></span>` : ''}${escapeHtml(sub)}`;
       if (row.dataset.sub !== subHtml) { row.dataset.sub = subHtml; row.querySelector('.session-sub').innerHTML = subHtml; }
@@ -1126,7 +1116,7 @@ function initialize() {
       }
       const recent = (x, y) => (y.a.lastActivity || 0) - (x.a.lastActivity || 0);
       if (groupBy === 'status') {
-        for (const [key, label] of [['needs', 'Needs you'], ['working', 'Working'], ['watching', 'Watching'], ['done', 'Active'], ['idle', 'Idle']]) {
+        for (const [key, label] of [['needs', 'Needs you'], ['working', 'Working'], ['done', 'Active'], ['idle', 'Idle']]) {
           const these = rows.filter((r) => statusKey(r.a) === key).sort(byTrigger);
           if (!these.length) continue;
           desired.push(flatSection(key, label, these.map((r) => sessionNode(r.entry, 0, r.place))));
@@ -1863,13 +1853,7 @@ function initialize() {
     $('browser-url').blur(); browserAct('go', { url });
   });
 
-  // Watching, on the details panel: each thing the agent waits on, since when, and a link when it gave one
-  function watchSection(agent) {
-    const list = watchList(agent);
-    if (!list.length || agent.exited) return '';
-    const when = (w) => w.kind === 'wake' ? `in ${relativeTime(Date.now() - (w.at - Date.now())) === 'now' ? 'a moment' : relativeTime(Date.now() - (w.at - Date.now()))}` : relativeTime(w.since) === 'now' ? 'since just now' : `for ${relativeTime(w.since)}`;
-    return `<section class="inspector-section watch-section"><div class="inspector-title-row"><h3 class="inspector-label">Watching</h3><span class="count">${list.length}</span></div>${list.map((w) => `<div class="watch-row">${icon(w.kind === 'wake' ? 'clock' : w.kind === 'task' ? 'terminal' : 'eye')}<div class="watch-text"><span>${escapeHtml(w.text)}</span><small>${w.kind === 'wake' ? 'Checks again' : w.kind === 'task' ? 'Running in the background' : 'Waiting'} ${when(w)}</small></div>${w.url ? `<a class="icon-button" href="${escapeHtml(w.url)}" target="_blank" rel="noopener" title="Open" aria-label="Open">${icon('external')}</a>` : ''}</div>`).join('')}</section>`;
-  }
+
   // Todos: what is left to do with this agent. They are the same todos as on the Todos page, linked to this agent.
   function renderTodosTab(agent) {
     const mine = agentTodos(agent), open = mine.filter((t) => !t.done), done = mine.filter((t) => t.done);
@@ -1899,12 +1883,11 @@ function initialize() {
     browserSignature = '';
     const peers = relations(agent.id), chat = recentCache.get(agent.id)?.data.chat || [];
     loadChanges(agent);
-    const signature = JSON.stringify([agent.id, agent.name, agent.status, agent.lastActivity, watchList(agent), todosOf(agent), peers, chat.slice(-3), Math.floor(Date.now() / 60000), changeCache.get(agent.id)?.data, friends?.links?.length, friends?.outgoing?.length, friends?.incoming?.length]);
+    const signature = JSON.stringify([agent.id, agent.name, agent.status, agent.lastActivity, todosOf(agent), peers, chat.slice(-3), Math.floor(Date.now() / 60000), changeCache.get(agent.id)?.data, friends?.links?.length, friends?.outgoing?.length, friends?.incoming?.length]);
     if (signature === inspectorSignature) return;
     inspectorSignature = signature;
     inspectorBody(agent).innerHTML = `
       <section class="inspector-section"><div class="session-summary">${avatar(agent)}<div><strong>${escapeHtml(agent.name)}</strong><span class="session-provider">${escapeHtml(kindName(agent))}</span></div></div><div class="detail-row"><span>Status</span><span class="status-label">${status(agent)}${activityLabel(agent)}</span></div><div class="detail-row"><span>Last activity</span><span>${relativeTime(agent.lastActivity) === 'now' ? 'Just now' : `${relativeTime(agent.lastActivity)} ago`}</span></div><div class="folder-path">${icon('folder')}<span>${escapeHtml(agent.cwd)}</span></div></section>
-      ${watchSection(agent)}
       ${changesSection(agent)}
       ${sharingSection(agent)}
       <section class="inspector-section"><div class="inspector-title-row"><h3 class="inspector-label">Connected agents</h3><span class="count">${peers.length}</span></div>${peers.map((peer) => `<div class="connection-row">${avatar(peer.agent)}<button class="connection-info" data-agent="${escapeHtml(peer.agent.id)}"><strong>${escapeHtml(peer.agent.name)}</strong><span>${icon(peer.reads && peer.shares ? 'arrows' : peer.reads ? 'arrow-left' : 'arrow-right')}${peer.reads && peer.shares ? 'Two-way context' : peer.reads ? 'Reads context from' : 'Shares context with'}</span></button><button class="icon-button unlink-button" data-remove-links="${peer.edges.map((edge) => escapeHtml(edge.id)).join(',')}" aria-label="Disconnect ${escapeHtml(peer.agent.name)}" title="Disconnect">${icon('unlink')}</button></div>`).join('')}<button class="add-context" data-action="add-connection">${icon('plus')}Add connection</button><p class="inspector-note">Linked agents can share context and message each other across tools.</p></section>
