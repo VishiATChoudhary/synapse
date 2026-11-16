@@ -75,6 +75,14 @@ const set = (slot, status) => fs.writeFileSync(path.join(ctl, `state-${slot}`), 
   assert.equal(seen.size, 1, `working rows reordered while nothing changed:\n${[...seen].join('\n')}`);
   console.log('PASS steady: 3 working agents printing output keep their order for 4 s');
 
+  // the header's spinner for a working agent is drawn once and keeps turning, not restarted by each refresh
+  await ui(`document.querySelector('.session-row[data-state="working"]').click()`);
+  await until(() => ui(`!!document.querySelector('#session-status .status-dot.busy')`), 'the header spinner');
+  await ui(`window.__spin = document.querySelector('#session-status .status-dot.busy'); true`);
+  await new Promise((r) => setTimeout(r, 3500));
+  assert.ok(await ui(`document.querySelector('#session-status .status-dot.busy') === window.__spin`), 'the header spinner was redrawn');
+  console.log('PASS spinner: the working spinner in the header is not redrawn while its agent works');
+
   // the bottom working agent needs you: it gets its own group; then it goes back to work and lands on top, sliding up
   const bottom = first.at(-1);
   // find which slot the bottom row is: flip slots to waiting one by one until the bottom row changes state

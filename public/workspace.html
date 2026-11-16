@@ -54,6 +54,8 @@
     <main class="main" id="main" tabindex="-1">
       <header class="topbar">
         <button class="icon-button" id="sidebar-toggle" aria-label="Toggle navigation" aria-controls="sidebar" aria-expanded="true" title="Toggle navigation"><span data-icon="panel-left"></span></button>
+        <button class="icon-button nav-arrow" id="nav-back" aria-label="Back" title="Back  ⌘←" disabled><span data-icon="arrow-left"></span></button>
+        <button class="icon-button nav-arrow" id="nav-forward" aria-label="Forward" title="Forward  ⌘→" disabled><span data-icon="arrow-right"></span></button>
         <div class="breadcrumbs" id="breadcrumbs"><span>Your workspace</span></div>
         <div class="topbar-actions" id="session-actions" hidden>
           <span class="session-status" id="session-status"></span>
@@ -78,6 +80,7 @@
             <div class="approval-card" id="approval-card" role="region" aria-label="Waiting for your answer" hidden></div>
             <form class="composer" id="composer">
               <label class="sr-only" for="message-input">Message this agent</label>
+              <div class="attach-row" id="attach-row" hidden></div>
               <textarea id="message-input" rows="1" maxlength="12000" placeholder="Message your agent…" aria-describedby="delivery-note" required></textarea>
               <div class="composer-toolbar"><span class="provider-label" id="provider-label"></span><button type="button" class="icon-button desktop-only attach-button" id="attach-files" aria-label="Attach files" title="Attach files"><span data-icon="paperclip"></span></button><button type="button" class="changes-chip desktop-only" id="changes-chip" hidden title="Changes in this checkout"></button><span class="composer-channel"><span data-icon="network"></span>Via Synapse</span><span class="composer-shortcut">Enter to send</span><button class="send-button" id="send-message" type="submit" aria-label="Send message" title="Send message" disabled><span data-icon="arrow-up"></span></button></div>
             </form>
@@ -92,7 +95,7 @@
         </section>
         <section class="new-view" id="new-view" aria-labelledby="new-title" hidden>
           <div class="new-inner">
-            <h1 id="new-title">What should we do in <button type="button" class="new-project" id="new-project" aria-haspopup="menu" aria-expanded="false"></button>?</h1>
+            <h1 id="new-title"><span id="new-lead">What should we do in</span> <button type="button" class="new-project" id="new-project" aria-haspopup="menu" aria-expanded="false"></button>?</h1>
             <form class="composer new-composer" id="new-composer">
               <label class="sr-only" for="new-input">First message</label>
               <textarea id="new-input" rows="3" maxlength="12000" placeholder="Describe the task. Leave empty to just start the agent."></textarea>

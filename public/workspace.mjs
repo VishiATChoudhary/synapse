@@ -258,7 +258,10 @@ const avatar = (agent) => `<span class="agent-avatar" data-logo="${LOGOS.has(age
 const badgeText = (name) => { const words = String(name || '?').split(/[\s_.-]+/).filter(Boolean); return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] || '?').slice(0, 2)).toUpperCase(); };
 const hueOf = (text) => { let h = 0; for (const c of String(text)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
 const activityLabel = (agent) => agent.status === 'busy' ? 'Working' : ['waiting', 'needs_input'].includes(agent.status) ? 'Needs input' : agent.status === 'exited' ? 'Exited' : 'Idle';
-const status = (agent) => `<span class="status-dot ${agent.status === 'busy' ? 'busy' : ''}" aria-hidden="true"></span>`;
+// a spinner drawn again (the state refreshes every second) picks up where a shared clock is, instead of starting
+// over, so it turns smoothly however often its row is redrawn
+const spinPhase = (period = 900) => `animation-delay:-${Date.now() % period}ms`;
+const status = (agent) => agent.status === 'busy' ? `<span class="status-dot busy" style="${spinPhase()}" aria-hidden="true"></span>` : '<span class="status-dot" aria-hidden="true"></span>';
 const relativeTime = (time) => {
   const seconds = Math.max(0, (Date.now() - Number(time || Date.now())) / 1000);
   return seconds < 60 ? 'now' : seconds < 3600 ? `${Math.floor(seconds / 60)}m` : seconds < 86400 ? `${Math.floor(seconds / 3600)}h` : `${Math.floor(seconds / 86400)}d`;
@@ -421,6 +424,7 @@ function initialize() {
       if (message.key === 'j') toggleDrawer();
       else if (message.key === 'k') openSearch();
       else if (message.key === 'n' && !message.shift) connectAgent();
+      else if (message.key === 't') showNew(null, 'shell');
     }
     if (message?.type === 'synapse:canvas-action') sendCanvas(message.action);
   });
@@ -454,6 +458,9 @@ function initialize() {
   let view = 'session', selectedId = getStorage('synapse-selected') || null, tab = 'conversation', filter = 'all';
   let sidebarOpen = !narrow.matches && getStorage('synapse-sidebar', 'open') === 'open';
   let inspectorOpen = wide.matches && getStorage('synapse-inspector', 'open') === 'open';
+  // files pasted, dropped or attached in the composer, shown as chips (images as thumbnails) until sent (see insertPaths)
+  const IMAGE = /\.(png|jpe?g|gif|webp|bmp|heic|tiff?)$/i;
+  const attachments = new Map(); // session -> file paths waiting to be sent
   let drafts;
   try { drafts = JSON.parse(getStorage('synapse-drafts', '{}')); if (!drafts || typeof drafts !== 'object') drafts = {}; } catch { drafts = {}; }
   const projectElements = new Map(), worktreeElements = new Map(), sessionElements = new Map(), recentCache = new Map();
@@ -774,9 +781,13 @@ function initialize() {
     let el = flatSections.get(key);
     if (!el) {
       el = document.createElement('section'); el.className = 'flat-group'; el.dataset.flat = key;
-      el.innerHTML = '<h3 class="flat-heading"><span class="flat-dot"></span><span class="flat-label"></span><span class="count"></span></h3><div class="flat-list"></div>';
+      el.innerHTML = `<h3 class="flat-heading"><button type="button" class="fold-toggle" data-fold-toggle="flat:${escapeHtml(key)}"><span class="flat-dot"></span><span class="flat-label"></span><span class="count"></span><span class="fold-chevron">${icon('chevron-down')}</span></button></h3><div class="flat-list"></div>`;
       flatSections.set(key, el);
     }
+    // a heading folds its section (remembered); the count stays in view
+    const closed = collapsed.has(`flat:${key}:closed`);
+    el.querySelector('.fold-toggle').setAttribute('aria-expanded', String(!closed));
+    el.lastElementChild.hidden = closed;
     el.querySelector('.flat-label').textContent = label;
     el.querySelector('.count').textContent = nodes.length;
     syncChildren(el.lastElementChild, nodes);
@@ -982,8 +993,11 @@ function initialize() {
     for (const a of remote) if (!list.some((p) => p.name === a.remote.owner || p.handle === a.remote.handle)) list.push({ name: a.remote.owner, handle: a.remote.handle || null, trustsYou: true });
     if (!list.length && !friends.incoming.length) return null;
     peopleSection ||= Object.assign(document.createElement('section'), { className: 'people-group',
-      innerHTML: `<div class="people-heading"><span>People</span><span class="count"></span><button class="project-add" type="button" data-person-add="1" aria-label="Trust someone new" title="Trust someone new">${icon('plus')}</button></div><div class="people-list"></div>` });
+      innerHTML: `<div class="people-heading"><button type="button" class="fold-toggle" data-fold-toggle="people"><span>People</span><span class="count"></span><span class="fold-chevron">${icon('chevron-down')}</span></button><button class="project-add" type="button" data-person-add="1" aria-label="Trust someone new" title="Trust someone new">${icon('plus')}</button></div><div class="people-list"></div>` });
     peopleSection.querySelector('.count').textContent = list.length || '';
+    const peopleClosed = collapsed.has('people:closed');
+    peopleSection.querySelector('.fold-toggle').setAttribute('aria-expanded', String(!peopleClosed));
+    peopleSection.lastElementChild.hidden = peopleClosed;
     const rows = list.map((p) => {
       const mine = remote.filter((a) => a.remote.owner === p.name || (p.handle && a.remote.handle === p.handle));
       const asks = friends.incoming.filter((r) => r.from?.handle === p.handle || r.from?.name === p.name).length;
@@ -1139,6 +1153,12 @@ function initialize() {
     catch (error) { toast(error.message); }
   });
 
+  // Back and forward, like a browser or T3: every view you open is a step (⌘← ⌘→, the mouse's side buttons)
+  let navPos = 0, navMax = 0;
+  function syncNavArrows() { $('nav-back').disabled = navPos <= 0; $('nav-forward').disabled = navPos >= navMax; }
+  $('nav-back').onclick = () => { if (navPos > 0) history.back(); };
+  $('nav-forward').onclick = () => { if (navPos < navMax) history.forward(); };
+  addEventListener('mouseup', (event) => { if (event.button === 3) { event.preventDefault(); $('nav-back').click(); } if (event.button === 4) { event.preventDefault(); $('nav-forward').click(); } });
   function navigate(nextView, id = null, push = true) {
     if (nextView === 'canvas' && embedded) nextView = 'session'; // the canvas lives in Terminal mode; the GUI is the list
     if (paneKey && nextView === 'session' && id !== selectedId) { persistDraft(); parent.postMessage({ type: 'synapse:pane-navigate', id }, location.origin); return; }
@@ -1152,7 +1172,7 @@ function initialize() {
     }
     if (push) {
       const route = nextView === 'session' ? `agent=${encodeURIComponent(id)}` : nextView;
-      if (location.hash !== `#${route}`) history.pushState({ view: nextView, id: selectedId }, '', `#${route}`);
+      if (location.hash !== `#${route}`) { navPos++; navMax = navPos; history.pushState({ view: nextView, id: selectedId, pos: navPos }, '', `#${route}`); syncNavArrows(); }
     }
     if (narrow.matches) setSidebar(false, false);
     renderSidebar(); renderMain(true); resizeComposer();
@@ -1225,7 +1245,8 @@ function initialize() {
     if (isSession) {
       const breadcrumbs = `<span class="crumb-project">${escapeHtml(agent.project)}</span><span class="crumb-sep" aria-hidden="true">/</span><span class="crumb-title">${escapeHtml(titleOf(agent))}</span>`;
       if ($('breadcrumbs').innerHTML !== breadcrumbs) $('breadcrumbs').innerHTML = breadcrumbs;
-      $('session-status').innerHTML = `${status(agent)}${activityLabel(agent)}`;
+      const statusKey = `${agent.status}|${activityLabel(agent)}`;
+      if ($('session-status').dataset.key !== statusKey) { $('session-status').dataset.key = statusKey; $('session-status').innerHTML = `${status(agent)}${activityLabel(agent)}`; }
       $('provider-label').innerHTML = `${avatar(agent)}<span>${escapeHtml(kindName(agent))}</span>${agent.modelName ? `<span class="model-name">${escapeHtml(agent.modelName)}</span>` : ''}${embedded && agent.owned && agent.kind === 'claude' ? icon('chevron-down') : ''}`;
       $('provider-label').classList.toggle('pickable', !!(embedded && agent.owned && agent.kind === 'claude'));
       $('provider-label').title = `${agent.name} runs ${kindName(agent)} in ${agent.cwd || agent.project}`;
@@ -1246,7 +1267,7 @@ function initialize() {
       $('thread-view').querySelector('.composer-region').hidden = tab === 'terminal';
       if (embedded) { $('open-terminal').hidden = !agent.cwd; $('open-terminal').setAttribute('aria-expanded', String(!$('term-drawer').hidden)); }
       if (drawerCwd && agent.cwd && drawerCwd !== agent.cwd && !$('term-drawer').hidden) openDrawer(true);
-      if (reset) { $('message-input').value = drafts[selectedId] || ''; $('send-error').hidden = true; }
+      if (reset) { $('message-input').value = drafts[selectedId] || ''; $('send-error').hidden = true; renderAttachments(); }
       if (!split && tab !== 'terminal') { updateComposer(); renderTimeline(reset); loadRecent(); }
       document.title = `${titleOf(agent)} · Synapse`;
     } else {
@@ -1723,9 +1744,9 @@ function initialize() {
     if (waitingNow ? approvalFor !== agent.id : approvalFor) paintApproval();
     $('message-input').setAttribute('aria-label', agent ? `Message ${agent.name}` : 'Message this agent');
     composerPaint?.();
-    $('send-message').disabled = !agent || agent.exited || !connected || sending || !$('message-input').value.trim();
+    $('send-message').disabled = !agent || agent.exited || !connected || sending || (!$('message-input').value.trim() && !attachments.get(selectedId)?.length);
     $('composer').setAttribute('aria-busy', String(sending));
-    $('send-message').innerHTML = sending ? '<span class="spinner" aria-hidden="true"></span>' : icon('arrow-up');
+    if ($('send-message').dataset.sending !== String(sending)) { $('send-message').dataset.sending = String(sending); $('send-message').innerHTML = sending ? '<span class="spinner" aria-hidden="true"></span>' : icon('arrow-up'); }
   }
 
   function resizeComposer() {
@@ -1735,7 +1756,8 @@ function initialize() {
   async function sendMessage(event) {
     event.preventDefault();
     if (sending || !connected || !byId.has(selectedId)) return;
-    const id = selectedId, text = $('message-input').value.trim(), original = $('message-input').value;
+    const id = selectedId, images = attachments.get(id) || [], typed = $('message-input').value.trim(), original = $('message-input').value;
+    const text = [typed, images.map(quotePath).join(' ')].filter(Boolean).join(' ');
     if (!text) return;
     sending = true; updateComposer(); $('send-error').hidden = true;
     try {
@@ -1747,6 +1769,7 @@ function initialize() {
       }
       if (agent.owned) await desktopCall('submit', { id, text });
       else await api(`/api/agents/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
+      attachments.delete(id); if (selectedId === id) renderAttachments();
       if (selectedId === id && $('message-input').value === original) { $('message-input').value = ''; drafts[id] = ''; persistDraft(); resizeComposer(); }
       else { drafts[id] = drafts[id] === original ? '' : drafts[id]; }
       recentCache.delete(id);
@@ -1773,12 +1796,15 @@ function initialize() {
   // and the first message typed right there. Enter starts the agent with that message.
   const newDraft = { cwd: null, kind: getStorage('synapse-new-kind') || null };
   const worktreeList = () => (desktop?.projects || []).flatMap((p) => p.worktrees.map((w) => ({ ...w, project: p.label, projectKey: p.key, home: w.path === p.worktrees[0]?.path })));
-  function showNew(cwd) {
+  // kind: open the screen on that agent (⌘T: a shell), otherwise the last one picked
+  function showNew(cwd, kind = null) {
     const list = worktreeList();
     if (!list.length) { desktopCall('add-project').catch((e) => toast(e.message)); return; }
     const current = byId.get(selectedId);
     const want = cwd || current?.cwd;
     newDraft.cwd = list.find((w) => w.path === want)?.path || list.find((w) => want?.startsWith(`${w.path}/`))?.path || (list.some((w) => w.path === newDraft.cwd) ? newDraft.cwd : list[0].path);
+    if (kind && Object.hasOwn(desktop.profiles, kind)) newDraft.kind = kind;
+    else if (newDraft.kind === 'shell' || !Object.hasOwn(desktop.profiles, newDraft.kind)) newDraft.kind = getStorage('synapse-new-kind') !== 'shell' && Object.hasOwn(desktop.profiles, getStorage('synapse-new-kind')) ? getStorage('synapse-new-kind') : null;
     if (!Object.hasOwn(desktop.profiles, newDraft.kind)) newDraft.kind = ['claude', 'codex'].find((k) => Object.hasOwn(desktop.profiles, k)) || Object.keys(desktop.profiles)[0];
     navigate('new');
     requestAnimationFrame(() => $('new-input').focus());
@@ -1798,6 +1824,7 @@ function initialize() {
     $('new-branch').innerHTML = `${icon('branch')}<span>${escapeHtml(w.home ? 'Main checkout' : w.branch || w.name)}</span>${icon('chevron-down')}`;
     const profile = desktop.profiles[newDraft.kind] || {};
     $('new-agent').innerHTML = `${avatar({ kind: newDraft.kind, name: profile.label || newDraft.kind })}<span>${escapeHtml(profile.label || newDraft.kind)}</span>${icon('chevron-down')}`;
+    $('new-lead').textContent = newDraft.kind === 'shell' ? 'Open a terminal in' : 'What should we do in';
     $('new-input').placeholder = newDraft.kind === 'shell' ? 'Opens a shell in this folder. Type a command to run, or leave empty.' : 'Describe the task. Leave empty to just start the agent.';
     const command = String(profile.command || (newDraft.kind === 'shell' ? 'your shell' : newDraft.kind)).replace(/^exec\s+/, '').replace(/^\S*\//, '');
     $('new-hint').textContent = `Runs ${command} in ${w.path.replace(/^\/Users\/[^/]+/, '~')}`;
@@ -1813,7 +1840,7 @@ function initialize() {
     dropdown($('new-branch'), [...items, '-', { label: 'New worktree…', icon: 'plus', run: () => runDesktop('worktree', { key: w.projectKey }) }], (() => { const r = $('new-branch').getBoundingClientRect(); return { x: r.left, y: r.bottom + 6 }; })());
   };
   $('new-agent').onclick = () => {
-    const items = Object.entries(desktop.profiles).map(([k, p]) => ({ label: p.label || k, icon: k === newDraft.kind ? 'check' : k === 'shell' ? 'terminal' : null, run: () => { newDraft.kind = k; setStorage('synapse-new-kind', k); renderNew(); $('new-input').focus(); } }));
+    const items = Object.entries(desktop.profiles).map(([k, p]) => ({ label: p.label || k, icon: k === newDraft.kind ? 'check' : k === 'shell' ? 'terminal' : null, run: () => { newDraft.kind = k; if (k !== 'shell') setStorage('synapse-new-kind', k); renderNew(); $('new-input').focus(); } }));
     dropdown($('new-agent'), items, (() => { const r = $('new-agent').getBoundingClientRect(); return { x: r.left, y: r.bottom + 6 }; })());
   };
   let starting = false;
@@ -2030,6 +2057,7 @@ function initialize() {
     const agent = view === 'session' ? byId.get(selectedId) : null, out = [];
     const add = (label, iconName, run, hint = '') => out.push({ label, icon: iconName, run, hint });
     add('New session', 'compose', () => connectAgent(), embedded ? '⌘N' : '');
+    if (embedded) add('New terminal', 'terminal', () => showNew(null, 'shell'), '⌘T');
     if (embedded) for (const p of desktop?.projects || []) {
       const home = p.worktrees.find((w) => w.home);
       if (home) add(`New session in ${p.label}`, 'compose', () => connectAgent(home.path));
@@ -2108,7 +2136,7 @@ function initialize() {
         $('message-input').value = drafts[selectedId] || '';
       } else { persistDraft(); view = 'overview'; }
     }
-    if (first) history.replaceState({ view, id: selectedId }, '', location.href);
+    if (first) { history.replaceState({ view, id: selectedId, pos: 0 }, '', location.href); syncNavArrows(); }
     $('demo-banner').hidden = !state.demo;
     if (embedded) {
       $('connect-agent').setAttribute('aria-label', 'New session'); $('connect-agent').title = 'New session  ⌘N';
@@ -2478,13 +2506,30 @@ function initialize() {
       { label: 'Fable', icon: agent.modelName?.startsWith('Fable') ? 'check' : '', run: pick('fable') },
     ]);
   });
-  // paths go into the prompt, quoted when they hold spaces; Claude Code and Codex read files and images from paths
-  function insertPaths(paths) {
+  // Files wait above the message, images as thumbnails and the rest as chips with their name (× removes one),
+  // and go in as paths when it is sent: Claude Code and Codex read files and images from paths.
+  const quotePath = (p) => (/\s/.test(p) ? `"${p}"` : p);
+  function renderAttachments() {
+    const list = attachments.get(selectedId) || [], row = $('attach-row');
+    row.hidden = !list.length;
+    row.innerHTML = list.map((p, i) => {
+      const name = escapeHtml(p.split(/[\\/]/).pop()), remove = `<button type="button" class="attach-remove" data-attach-remove="${i}" aria-label="Remove ${name}">${icon('x')}</button>`;
+      return IMAGE.test(p)
+        ? `<figure class="attach-thumb" title="${escapeHtml(p)}"><img alt="${name}" src="/api/file/raw?${new URLSearchParams({ path: p })}">${remove}</figure>`
+        : `<figure class="attach-file" title="${escapeHtml(p)}">${icon('file')}<span>${name}</span>${remove}</figure>`;
+    }).join('');
+    updateComposer();
+  }
+  $('attach-row').addEventListener('click', (event) => {
+    const b = event.target.closest('[data-attach-remove]'); if (!b) return;
+    const list = [...(attachments.get(selectedId) || [])]; list.splice(Number(b.dataset.attachRemove), 1);
+    attachments.set(selectedId, list); renderAttachments(); $('message-input').focus();
+  });
+  function insertPaths(paths) { // files to send with the next message
     if (!paths?.length) return;
-    const input = $('message-input'), text = paths.map((p) => (/\s/.test(p) ? `"${p}"` : p)).join(' ');
-    const at = input.selectionStart ?? input.value.length, before = input.value.slice(0, at);
-    input.setRangeText(`${before && !/\s$/.test(before) ? ' ' : ''}${text} `, at, input.selectionEnd ?? at, 'end');
-    input.dispatchEvent(new Event('input', { bubbles: true })); input.focus();
+    const have = attachments.get(selectedId) || [];
+    attachments.set(selectedId, [...have, ...paths.filter((p) => !have.includes(p))]);
+    renderAttachments(); $('message-input').focus();
   }
   $('attach-files').onclick = async () => {
     const agent = byId.get(selectedId); if (!agent?.owned) return;
@@ -2506,7 +2551,7 @@ function initialize() {
     event.preventDefault();
     try {
       const got = await desktopCall('paste');
-      if (got.paths.length) { insertPaths(got.paths); if (got.saved) toast('Image saved and added as a path.'); return; }
+      if (got.paths.length) { insertPaths(got.paths); return; }
       insertPaths(await saveDropped([...data.files]));
     } catch (e) { toast(e.message); }
   });
@@ -2584,6 +2629,11 @@ function initialize() {
     if (button.dataset.person) return personMenu(button);
     if (button.dataset.personAdd) return trustSomeone();
     if (button.id === 'group-by') return groupMenu();
+    if (button.dataset.foldToggle) {
+      const key = `${button.dataset.foldToggle}:closed`;
+      collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
+      setStorage('synapse-collapsed', JSON.stringify([...collapsed])); renderSidebar(); return;
+    }
     if (button.dataset.settledToggle) {
       const key = `${button.dataset.settledToggle === '1' ? 'settled' : button.dataset.settledToggle}:open`;
       collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
@@ -2633,7 +2683,7 @@ function initialize() {
     }
     if (embedded && (event.metaKey || event.ctrlKey)) {
       if (key === 'n') { event.preventDefault(); if (event.shiftKey) runDesktop('worktree', { key: byId.get(selectedId)?.projectKey || desktop?.projects[0]?.key }); else connectAgent(); return; }
-      if (key === 't') { event.preventDefault(); const cwd = byId.get(selectedId)?.cwd || desktop?.projects[0]?.worktrees[0]?.path; if (cwd) runDesktop('new-session', { cwd, kind: 'shell' }); return; }
+      if (key === 't') { event.preventDefault(); showNew(null, 'shell'); return; }
       if (key === ',') { event.preventDefault(); runDesktop('settings'); return; }
       if (key === 'j') { event.preventDefault(); toggleDrawer(); return; }
       if (key === 'b') { event.preventDefault(); setSidebar(!sidebarOpen); return; }
@@ -2642,6 +2692,9 @@ function initialize() {
       if (key === 'w') { event.preventDefault(); runDesktop('close', { id: selectedId }); return; }
       if (/^[1-9\[\]]$/.test(key)) { event.preventDefault(); runDesktop('switch-session', { key }); return; }
       if (key === 'f' && event.shiftKey) { event.preventDefault(); forkSession(); return; }
+    }
+    if (event.metaKey && !event.shiftKey && !event.altKey && ['ArrowLeft', 'ArrowRight'].includes(event.key) && !editing && !paneKey) {
+      event.preventDefault(); $(event.key === 'ArrowLeft' ? 'nav-back' : 'nav-forward').click(); return;
     }
     if ((event.metaKey || event.ctrlKey) && ['k', 'f'].includes(event.key.toLowerCase())) { event.preventDefault(); openSearch(); return; }
     if (event.key === '/' && !editing && !$('action-dialog').open && !$('search-dialog').open) { event.preventDefault(); if (sidebarOpen) $('sidebar-filter').focus(); else openSearch(); }
@@ -2663,6 +2716,9 @@ function initialize() {
     }
   });
   addEventListener('popstate', (event) => {
+    if (Number.isInteger(event.state?.pos)) { navPos = event.state.pos; syncNavArrows(); }
+    // a session closed since: show the overview in its place
+    if (event.state?.view === 'session' && !byId.has(event.state.id)) return navigate('overview', null, false);
     if (event.state?.view) return navigate(event.state.view, event.state.id, false);
     const previousView = view, previousId = selectedId;
     readRoute();

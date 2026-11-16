@@ -886,3 +886,31 @@ textarea.field { line-height: 1.5; resize: vertical; }
 
 /* Status view: a row moving up the queue passes over the rows it overtakes */
 .moving-up { position: relative; z-index: 2; }
+
+/* pasted or dropped images, waiting to be sent */
+.attach-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 6px 10px 0; position: relative; z-index: 1; }
+.attach-row[hidden] { display: none; }
+.attach-thumb { position: relative; margin: 0; width: 64px; height: 64px; border-radius: 10px; overflow: hidden; border: 1px solid var(--color-border-strong); background: var(--color-panel); }
+.attach-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach-remove { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: rgb(0 0 0 / 0.65); color: #fff; opacity: 0; transition: opacity var(--dur-micro); }
+.attach-thumb:hover .attach-remove, .attach-remove:focus-visible { opacity: 1; }
+.attach-remove svg { width: 12px; height: 12px; }
+.attach-file { position: relative; margin: 0; display: inline-flex; align-items: center; gap: 6px; height: 34px; max-width: 240px; padding: 0 28px 0 10px; border-radius: 10px; border: 1px solid var(--color-border-strong); background: var(--color-panel); font-size: var(--text-sm); color: var(--color-ink); align-self: flex-end; }
+.attach-file > svg { width: 15px; height: 15px; flex: none; color: var(--color-muted); }
+.attach-file > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-file .attach-remove { top: 50%; right: 5px; transform: translateY(-50%); background: transparent; color: var(--color-muted); opacity: 1; }
+.attach-file .attach-remove:hover { color: var(--color-ink); background: var(--color-hover); }
+
+/* foldable sidebar sections: status groups and People */
+.fold-toggle { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 0; font: inherit; color: inherit; background: none; border: 0; cursor: pointer; text-align: start; }
+.fold-toggle:hover { color: var(--color-ink); }
+.flat-heading .fold-toggle .count { margin-inline-start: auto; font-weight: 400; color: var(--color-faint); }
+.people-heading .fold-toggle { flex: 1; gap: 6px; }
+.fold-chevron { display: inline-flex; opacity: 0; transition: opacity var(--dur-micro); }
+.fold-toggle:hover .fold-chevron, .fold-toggle:focus-visible .fold-chevron, .fold-toggle[aria-expanded='false'] .fold-chevron { opacity: 1; }
+.fold-chevron .icon, .fold-chevron svg { width: 12px; height: 12px; transition: transform var(--dur-micro) var(--ease-out); }
+.fold-toggle[aria-expanded='false'] .fold-chevron svg { transform: rotate(-90deg); }
+.flat-list[hidden], .people-list[hidden] { display: none; }
+.nav-arrow:disabled { opacity: 0.35; cursor: default; background: none; }
+.nav-arrow svg, .nav-arrow .icon { width: 16px; height: 16px; }
+body:not(.desktop) .nav-arrow { display: none; }

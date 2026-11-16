@@ -48,8 +48,8 @@ const native = (code) => win.webContents.executeJavaScript(code, true);
   execFileSync('osascript', ['-e', `set the clipboard to (read (POSIX file "${png}") as «class PNGf»)`]);
   const pasteInto = async () => { await ui(`(() => { const i = document.querySelector('#message-input'); i.value = ''; i.focus(); return true; })()`); win.webContents.paste(); };
   await pasteInto();
-  await until(() => ui(`document.querySelector('#message-input').value.includes('paste-')`), 'image path in the composer', 8000);
-  const value = await ui(`document.querySelector('#message-input').value`);
+  await until(() => ui(`(document.querySelector('#attach-row .attach-thumb')?.title || '').includes('paste-')`), 'image thumbnail in the composer', 8000);
+  const value = await ui(`document.querySelector('#attach-row .attach-thumb').title`);
   const file = value.match(/'?(\/[^' ]+\.png)'?/)?.[1];
   assert.ok(file && fs.existsSync(file), `pasted image file missing: ${value}`);
   assert.deepEqual(nativeImage.createFromPath(file).getSize(), { width: 40, height: 30 });
@@ -58,8 +58,8 @@ const native = (code) => win.webContents.executeJavaScript(code, true);
   // a file copied in Finder pastes as its own path, no copy made
   execFileSync('osascript', ['-e', `tell application "Finder" to set the clipboard to (POSIX file "${png}")`]);
   await pasteInto();
-  await until(() => ui(`document.querySelector('#message-input').value.includes('shot.png')`), 'file path in the composer', 8000);
-  console.log('PASS file paste:', (await ui(`document.querySelector('#message-input').value`)).trim());
+  await until(() => ui(`[...document.querySelectorAll('#attach-row figure')].some((f) => f.title.endsWith('shot.png'))`), 'the file in the composer', 8000);
+  console.log('PASS file paste:', await ui(`[...document.querySelectorAll('#attach-row figure')].map((f) => f.title).join(' ')`));
 })().catch(async (e) => {
   failed = true; console.error(e);
   if (win) fs.writeFileSync('/tmp/gui-paste.failed.png', (await win.webContents.capturePage()).toPNG());

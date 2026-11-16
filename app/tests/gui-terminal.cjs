@@ -67,11 +67,24 @@ const near = (a, b) => Math.abs(a.x - b.x) < 2 && Math.abs(a.y - b.y) < 2 && Mat
   assert.match(await ui(`document.getElementById('new-agent').textContent`), /Claude/);
   if (process.env.TERMINAL_SHOT) fs.writeFileSync(process.env.TERMINAL_SHOT.replace(/\.png$/, '-new.png'), (await win.webContents.capturePage()).toPNG());
 
+  // ⌘T: the same screen, on a shell, asking where the terminal should open; ⌘N goes back to the agent
+  await key('t');
+  await until(() => ui(`document.getElementById('new-lead').textContent === 'Open a terminal in' && /Shell/.test(document.getElementById('new-agent').textContent)`), '⌘T opens the picker on a shell');
+  await key('n');
+  await until(() => ui(`document.getElementById('new-lead').textContent === 'What should we do in' && /Claude/.test(document.getElementById('new-agent').textContent)`), '⌘N is back on the agent');
   // Enter starts the agent and its first message reaches it
   await ui(`(() => { const t = document.getElementById('new-input'); t.value = 'build the launch pad'; t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
   await until(() => ui(`!document.getElementById('thread-view').hidden && document.querySelector('.crumb-title')?.textContent === 'claude'`), 'the session opens in the GUI');
   await until(async () => fs.existsSync(typed) && fs.readFileSync(typed, 'utf8').includes('build the launch pad'), 'the first message reached the agent');
   console.log('PASS new session: ⌘N asks what to do in the project, Enter starts the agent with that message');
+
+  // back and forward: the arrows step between the views opened, and say when there is nothing to go to
+  await until(() => ui(`!document.getElementById('nav-back').disabled && document.getElementById('nav-forward').disabled`), 'back is possible, forward is not');
+  await ui(`document.getElementById('nav-back').click()`);
+  await until(() => ui(`!document.getElementById('new-view').hidden && !document.getElementById('nav-forward').disabled`), 'back to the new session screen');
+  await ui(`document.getElementById('nav-forward').click()`);
+  await until(() => ui(`!document.getElementById('thread-view').hidden && document.querySelector('.crumb-title')?.textContent === 'claude' && document.getElementById('nav-forward').disabled`), 'forward to the session');
+  console.log('PASS back and forward: the arrows step between views');
 
   // the Terminal tab: the agent's own terminal sits exactly over the page's box and takes keys
   await until(() => ui(`!document.getElementById('terminal-tab').hidden`), 'a Terminal tab for an owned session');

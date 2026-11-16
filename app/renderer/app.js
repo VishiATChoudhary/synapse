@@ -2335,7 +2335,7 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keydown', (e) => {
   if (!$('#modal').hidden || !$('#login').hidden) return;
   // a terminal docked in the GUI has the focus: the GUI's own shortcuts still reach the page
-  if (workspaceOpen && appMod(e) && !e.altKey && ['j', 'k', 'n'].includes(e.key.toLowerCase()) && e.target.closest?.('.gui-dock')) {
+  if (workspaceOpen && appMod(e) && !e.altKey && ['j', 'k', 'n', 't'].includes(e.key.toLowerCase()) && e.target.closest?.('.gui-dock')) {
     e.preventDefault(); workspacePost({ type: 'synapse:desktop-key', key: e.key.toLowerCase(), shift: e.shiftKey }); return;
   }
   const mine = !workspaceOpen && matchShortcut(e);

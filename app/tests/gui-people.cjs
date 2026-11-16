@@ -102,22 +102,36 @@ const menuText = () => ui(`[...document.querySelectorAll('.pop-menu button')].ma
   let clip = { paths: [path.join(fixture, 'notes with space.txt')] };
   fs.writeFileSync(clip.paths[0], 'x');
   ipcMain.removeHandler('clipboard:files'); ipcMain.handle('clipboard:files', () => ({ ok: true, value: clip }));
-  const paste = (name) => ui(`(() => { const i = document.querySelector('#message-input'); i.focus(); const dt = new DataTransfer(); dt.items.add(new File([new Uint8Array([137, 80, 78, 71, 1, 2, 3])], ${JSON.stringify(name)}, { type: 'image/png' })); i.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); })()`);
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFElEQVR4nGP4z8DwHwyBNAMDAwMAZOMH+eiV5JcAAAAASUVORK5CYII=';
+  const paste = (name) => ui(`(() => { const PNG = '${PNG}'; const i = document.querySelector('#message-input'); i.focus(); const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob(PNG), (c) => c.charCodeAt(0))], ${JSON.stringify(name)}, { type: 'image/png' })); i.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); })()`);
   await type('look at');
   await paste('ignored.png');
-  await until(async () => (await ui(`document.querySelector('#message-input').value`)) === `look at "${clip.paths[0]}" `, 'copied Finder files paste as their paths');
+  // a file shows as a chip with its name; the text keeps only what was typed
+  await until(async () => JSON.stringify(await ui(`[...document.querySelectorAll('#attach-row figure')].map((f) => f.title)`)) === JSON.stringify(clip.paths), 'copied Finder files show as chips');
+  assert.equal(await ui(`document.querySelector('#attach-row .attach-file span').textContent`), 'notes with space.txt');
+  assert.equal(await ui(`document.querySelector('#message-input').value`), 'look at');
+  if (process.env.ATTACH_SHOT) fs.writeFileSync(process.env.ATTACH_SHOT, (await win.webContents.capturePage()).toPNG());
+  await ui(`document.querySelector('#attach-row [data-attach-remove]').click()`);
   clip = { paths: [] };
   await type('');
   await paste('shot.png');
-  await until(() => ui(`/pastes\\/paste-.*-shot\\.png $/.test(document.querySelector('#message-input').value)`), 'a pasted image is saved and pasted as its path');
-  const saved = (await ui(`document.querySelector('#message-input').value`)).trim();
-  assert.deepEqual([...fs.readFileSync(saved)], [137, 80, 78, 71, 1, 2, 3], 'the saved file holds the pasted bytes');
+  // an image waits above the text as a thumbnail, not as a path in it; it alone is enough to send, × removes it
+  await until(() => ui(`/pastes\\/paste-.*-shot\\.png$/.test(document.querySelector('#attach-row .attach-thumb')?.title || '')`), 'a pasted image is saved and shown as a thumbnail');
+  assert.equal(await ui(`document.querySelector('#message-input').value`), '');
+  assert.match(await ui(`document.querySelector('#attach-row img').src`), /\/api\/file\/raw\?path=/);
+  assert.equal(await ui(`document.querySelector('#send-message').disabled`), false, 'an image alone can be sent');
+  const saved = await ui(`document.querySelector('#attach-row .attach-thumb').title`);
+  assert.equal(fs.readFileSync(saved).toString('base64'), PNG, 'the saved file holds the pasted bytes');
+  await until(() => ui(`document.querySelector('#attach-row img').naturalWidth === 2`), 'the thumbnail shows the image');
+  await ui(`document.querySelector('#attach-row [data-attach-remove]').click()`);
+  await until(() => ui(`document.querySelector('#attach-row').hidden && document.querySelector('#send-message').disabled`), 'removing the thumbnail');
   await type('');
   await ui(`(() => { const dt = new DataTransfer(); dt.items.add(new File(['hello'], 'drop me.md', { type: 'text/markdown' })); document.querySelector('#composer').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); })()`);
-  await until(() => ui(`/drop-me\\.md $/.test(document.querySelector('#message-input').value)`), 'a dropped file is copied and added as a path');
-  assert.equal(fs.readFileSync((await ui(`document.querySelector('#message-input').value`)).trim(), 'utf8'), 'hello');
+  await until(() => ui(`/drop-me\\.md$/.test(document.querySelector('#attach-row .attach-file')?.title || '')`), 'a dropped file is copied and shown as a chip');
+  assert.equal(fs.readFileSync(await ui(`document.querySelector('#attach-row .attach-file').title`), 'utf8'), 'hello');
+  await ui(`document.querySelector('#attach-row [data-attach-remove]').click()`);
   await type('');
-  console.log('PASS paste and drop: Finder files paste as paths, images and dropped files are saved and added as paths');
+  console.log('PASS paste and drop: files show as chips with their name, images as thumbnails, sent as paths');
 
   // right-click: the /synapse actions. A second codex, then link the two from the menu
   await native(`[...document.querySelectorAll('#launch .launch-item')].find((b) => b.textContent.trim() === 'Codex').click()`);
@@ -133,6 +147,24 @@ const menuText = () => ui(`[...document.querySelectorAll('.pop-menu button')].ma
   await ui(`document.querySelector('#action-form').requestSubmit()`);
   await until(async () => (await ui(`fetch('/api/state').then((r) => r.json()).then((s) => s.edges.length)`)) === edgesBefore + 2, 'linked both ways');
   console.log('PASS right-click: link, message, plan, read and copy, the /synapse actions; Link connects two agents both ways');
+
+  // People and the status sections fold from their headings, and stay folded
+  await ui(`document.querySelector('[data-fold-toggle="people"]').click()`);
+  await until(() => ui(`document.querySelector('.people-list').hidden && document.querySelector('[data-fold-toggle="people"]').getAttribute('aria-expanded') === 'false'`), 'People folds');
+  assert.ok(await ui(`JSON.parse(localStorage.getItem('synapse-collapsed')).includes('people:closed')`));
+  await ui(`document.querySelector('[data-fold-toggle="people"]').click()`);
+  await until(() => ui(`!document.querySelector('.people-list').hidden`), 'People unfolds');
+  await ui(`document.getElementById('group-by').click()`);
+  await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent.includes('Group by status')).click()`);
+  await until(() => ui(`!!document.querySelector('[data-fold-toggle^="flat:"]')`), 'a status section');
+  const section = await ui(`document.querySelector('[data-fold-toggle^="flat:"]').dataset.foldToggle.slice(5)`);
+  const sel = (inner) => `document.querySelector('[data-flat="${section}"] ${inner}')`;
+  await ui(`${sel('.fold-toggle')}.click()`);
+  await until(() => ui(`${sel('.flat-list')}.hidden && /\\d/.test(${sel('.count')}.textContent)`), 'the section folds and keeps its count');
+  assert.ok(await ui(`JSON.parse(localStorage.getItem('synapse-collapsed')).includes('flat:${section}:closed')`));
+  await ui(`${sel('.fold-toggle')}.click()`);
+  await until(() => ui(`!${sel('.flat-list')}.hidden`), 'the section unfolds');
+  console.log('PASS folding: People and the status sections fold from their headings and stay folded');
 
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);
 })().catch(async (e) => {
