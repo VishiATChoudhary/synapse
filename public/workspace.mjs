@@ -167,20 +167,84 @@ export function searchSessions(agents, query) {
 
 // An agent waiting for you in its terminal (Claude's "Do you want to…", Codex's approval) usually shows a numbered
 // menu. Read the question and the choices off the screen so the GUI can offer them as buttons.
-const BOX = /[│┃║|╭╮╰╯─━┌┐└┘├┤]/g;
+// What an agent shows when it waits on you, read from its terminal screen: Claude Code's and Codex's permission
+// prompts, Claude's questions (one or several, as tabs; single or multi-select, each option with a description,
+// "Type something." for your own answer, "Chat about this"), its review screen, and plain menus without numbers
+// (the folder trust check). Returns the question with its title and any command, and the options with their keys.
+const RULE = /^[\s─━═]{12,}$/, DASHED = /^[\s╌┄┈╍]{12,}$/;
+const PROMPT_FOOTER = /(Enter to (select|confirm)|Esc to cancel|to navigate|enter to confirm|esc to cancel)/i;
 export function parseApproval(lines) {
-  const clean = (lines || []).map((line) => String(line).replace(BOX, ' ').replace(/\s+$/, ''));
-  const option = /^\s*[❯›>▶]?\s*(\d)[.)]\s+(.+?)\s*$/;
-  let end = -1;
-  for (let i = clean.length - 1; i >= 0; i--) if (option.test(clean[i])) { end = i; break; }
-  if (end < 0) return { question: clean.filter((l) => l.trim()).slice(-6).join('\n').trim(), options: [] };
-  let start = end;
-  while (start > 0 && (option.test(clean[start - 1]) || (!clean[start - 1].trim() && option.test(clean[start - 2] || '')))) start--;
+  const raw = (lines || []).map((line) => String(line).replace(/\s+$/, ''));
+  while (raw.length && !raw.at(-1)) raw.pop(); // the screen's empty rows below the prompt
+  const clean = raw.map((line) => line.replace(/^\s*[│┃║|]\s?|\s?[│┃║|]\s*$/g, '').replace(/[╭╮╰╯┌┐└┘├┤]/g, ' ').replace(/\s+$/, ''));
+  const isRule = (i) => RULE.test(raw[i]) || /^\s*[╭╰]─+[╮╯]\s*$/.test(raw[i]);
+  const NUM = /^(\s*)([❯›>▶]\s*)?(\d+)[.)]\s+(.*)$/;
+  let footer = clean.length;
+  for (let i = clean.length - 1; i >= Math.max(0, clean.length - 10); i--) if (PROMPT_FOOTER.test(clean[i])) { footer = i; break; }
+  // the options: numbered ones, read upwards from the footer, with the indented lines under each as its description
+  let last = -1;
+  for (let i = footer - 1; i >= 0; i--) { if (NUM.test(clean[i])) { last = i; break; } if (clean[i].trim() && !isRule(i) && footer - i > 6) break; }
   const options = [];
-  for (let i = start; i <= end; i++) { const m = clean[i].match(option); if (m && !options.some((o) => o.key === m[1])) options.push({ key: m[1], label: m[2].trim(), selected: /^\s*[❯›>▶]/.test(clean[i]) }); }
-  const above = clean.slice(Math.max(0, start - 10), start).map((l) => l.trim()).filter(Boolean);
-  const ask = above.findLastIndex((l) => /\?\s*$/.test(l));
-  return { question: (ask >= 0 ? above.slice(Math.max(0, ask - 4)) : above.slice(-4)).join('\n'), options };
+  let first = -1;
+  if (last >= 0) {
+    const col = (i) => clean[i].match(NUM)[1].length;
+    let i = last;
+    for (; i >= 0; i--) {
+      if (NUM.test(clean[i])) { first = i; continue; }
+      if (!clean[i].trim() || isRule(i)) continue;
+      // a description sits deeper than the option numbers around it
+      const next = clean.slice(i + 1, last + 1).findIndex((l) => NUM.test(l));
+      if (next >= 0 && clean[i].search(/\S/) > col(i + 1 + next) + 2) continue;
+      break;
+    }
+    for (let j = first; j <= last; j++) {
+      const m = clean[j].match(NUM); if (!m) continue;
+      let label = m[4].trim(), checked;
+      const box = label.match(/^\[([ ✔✓xX])\]\s*(.*)$/);
+      if (box) { checked = box[1] !== ' '; label = box[2]; }
+      const desc = [];
+      for (let k = j + 1; k <= last && !NUM.test(clean[k]) && !isRule(k); k++) if (clean[k].trim()) desc.push(clean[k].trim());
+      // multi-select: "Submit" sits under the last option, as its own row
+      const submit = desc.at(-1) === 'Submit' ? desc.pop() : null;
+      if (options.some((o) => o.key === m[3])) continue;
+      options.push({ key: m[3], label, selected: !!m[2], ...(checked !== undefined ? { checked } : {}), ...(desc.length ? { description: desc.join(' ') } : {}),
+        ...(/^Type something\.?$/i.test(label) || (checked === undefined && /^Type something/i.test(label)) ? { input: true } : {}), ...(/^Chat about this$/i.test(label) ? { chat: true } : {}) });
+      if (submit) options.submit = true;
+    }
+  } else {
+    // a menu without numbers: the line with the pointer and the lines lined up with it
+    const at = clean.slice(0, footer).findLastIndex((l) => /^\s*[❯›]\s+\S/.test(l));
+    if (at >= 0) {
+      const textCol = clean[at].search(/[❯›]/) + 2;
+      first = at; last = at;
+      while (first > 0 && clean[first - 1].trim() && clean[first - 1].search(/\S/) === textCol) first--;
+      while (last + 1 < footer && clean[last + 1].trim() && clean[last + 1].search(/\S/) === textCol) last++;
+      for (let j = first; j <= last; j++) options.push({ key: `nav:${j - at}`, label: clean[j].replace(/^\s*[❯›]?\s*/, ''), selected: j === at });
+    }
+  }
+  const multi = options.some((o) => o.checked !== undefined);
+  // the question: what is above the options, back to the rule that opens the prompt
+  const top = first >= 0 ? first : footer;
+  let from = Math.max(0, top - 16);
+  for (let i = top - 1; i >= from; i--) if (isRule(i)) { from = i + 1; break; }
+  let title = '', tabs = [], detail = [], text = [], inDetail = false;
+  for (let i = from; i < top; i++) {
+    const l = clean[i].trim();
+    if (DASHED.test(raw[i])) { inDetail = !inDetail; continue; }
+    if (!l) continue;
+    if (/[☐☒✔]/.test(l) && (/[←→]/.test(l) || !tabs.length) && !text.length) {
+      const found = [...l.matchAll(/([☐☒✔])\s+([^☐☒✔←→]+?)(?=\s+[☐☒✔→]|\s*$|\s+→)/g)].map((m) => ({ label: m[2].trim(), done: m[1] !== '☐', submit: m[1] === '✔' }));
+      if (found.length > 1 || /[←→]/.test(l)) tabs = found.filter((t) => !t.submit); else title = found[0]?.label || l.replace(/[☐☒✔]/g, '').trim();
+      continue;
+    }
+    if (inDetail) { detail.push(clean[i].replace(/^ /, '')); continue; }
+    if (/^Tip:/i.test(l)) continue;
+    text.push(l);
+  }
+  // a permission prompt opens with what it is about ("Bash command"), then says what it does; the question comes last
+  if (!title && text.length > 1 && !/[?.:]$/.test(text[0]) && text[0].length < 40) title = text.shift();
+  const question = text.join('\n');
+  return { title, tabs, question: [question, ...detail].filter(Boolean).join('\n'), text: question, detail: detail.join('\n'), options, multi, submit: !!options.submit, footer: footer < clean.length ? clean[footer].trim() : '' };
 }
 
 export function sessionTree(agents) {
@@ -203,6 +267,7 @@ export function sessionTree(agents) {
 
 const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
+  todo: '<rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
   search: '<circle cx="10.7" cy="10.7" r="6.7"/><path d="m16 16 4.5 4.5"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   network: '<rect x="9" y="2" width="6" height="6" rx="1.5"/><rect x="2" y="16" width="6" height="6" rx="1.5"/><rect x="16" y="16" width="6" height="6" rx="1.5"/><path d="M12 8v4M5 16v-4h14v4"/>',
@@ -476,12 +541,14 @@ function initialize() {
   let sending = false, recentController, recentRequest = 0, recentTarget, recentDirty = false, limit = 60;
   let source, stateFrame = 0, pendingState, toastTimer, draftTimer, flowTimer;
   let composerPaint = null; // set once the composer's highlighting exists; drafts loaded before then repaint on input
+  let linear = { connected: false }, todoPick = null, todosSignature = '', showDone = false, askLater = 0; // todos
+  const seenLive = new Set(), goneSince = new Map(); // agents seen running, and when one stopped being listed
   let modalSubmit = null, modalVersion = 0, searchHits = [], searchIndex = 0, renderedMessages = new Map();
   let overviewSignature = '', connectionsSignature = '', inspectorSignature = '';
 
   function readRoute() {
     const route = location.hash.slice(1);
-    if (['overview', 'connections', 'activity', 'canvas'].includes(route)) view = route;
+    if (['overview', 'connections', 'activity', 'canvas', 'todos'].includes(route)) view = route;
     else if (route === 'new' && embedded) view = 'new';
     else if (route.startsWith('agent=')) { view = 'session'; selectedId = new URLSearchParams(route).get('agent'); }
   }
@@ -1331,6 +1398,7 @@ function initialize() {
     $('overview-view').hidden = view !== 'overview';
     $('connections-view').hidden = view !== 'connections';
     $('activity-view').hidden = view !== 'activity';
+    $('todos-view').hidden = view !== 'todos';
     $('canvas-view').hidden = view !== 'canvas';
     $('session-actions').hidden = !isSession;
     if (isSession) {
@@ -1363,9 +1431,10 @@ function initialize() {
       if (!split && tab !== 'terminal') { updateComposer(); renderTimeline(reset); loadRecent(); }
       document.title = `${titleOf(agent)} · Synapse`;
     } else {
-      const title = view === 'new' ? 'New session' : view === 'activity' ? 'Activity' : view === 'canvas' ? 'Canvas' : view === 'connections' ? 'Connections' : 'Your workspace';
+      const title = view === 'new' ? 'New session' : view === 'todos' ? 'Todos' : view === 'activity' ? 'Activity' : view === 'canvas' ? 'Canvas' : view === 'connections' ? 'Connections' : 'Your workspace';
       $('breadcrumbs').textContent = title;
       if (view === 'new') renderNew();
+      if (view === 'todos') { renderTodos(); refreshLinear(); }
       document.title = `${title} · Synapse`;
       if (view === 'canvas') { if (!$('gui-canvas').src) $('gui-canvas').src = '/canvas'; }
       else if (view === 'activity') activityView.refresh();
@@ -1550,19 +1619,51 @@ function initialize() {
     let screen;
     try { screen = await desktopCall('screen', { id: agent.id }); } catch { card.hidden = true; return; }
     if (selectedId !== agent.id) return;
-    const { question, options } = parseApproval(screen.lines);
-    const head = `${avatar(agent)}<strong>${escapeHtml(kindName(agent))} needs your answer</strong>`;
-    const choices = options.length
-      ? options.map((o) => `<button type="button" class="button ${o.selected ? 'primary' : 'secondary'}" data-approval-key="${o.key}"><kbd>${o.key}</kbd>${escapeHtml(o.label)}</button>`).join('')
-      : `<button type="button" class="button primary" data-approval-key="enter">Continue</button>`;
-    card.innerHTML = `<div class="approval-head">${head}</div>${question ? `<pre class="approval-question">${escapeHtml(question)}</pre>` : ''}<div class="approval-choices">${choices}<button type="button" class="button secondary" data-approval-key="escape">Cancel <kbd>Esc</kbd></button><button type="button" class="text-button" data-action="show-terminal">Show terminal ${icon('terminal')}</button></div>`;
+    const p = parseApproval(screen.lines), sig = JSON.stringify(p);
+    // the same prompt as before: leave the card (and anything typed into it) alone
+    if (card.dataset.sig === sig && !card.hidden && approvalFor === agent.id) { approvalTimer = setTimeout(paintApproval, 1500); return; }
+    card.dataset.sig = sig;
+    const tabs = p.tabs.length > 1 ? `<span class="approval-tabs">${p.tabs.map((t) => `<span class="approval-tab${t.done ? ' done' : ''}">${t.done ? icon('check') : ''}${escapeHtml(t.label)}</span>`).join('')}</span>` : '';
+    const head = `${avatar(agent)}<strong>${escapeHtml(kindName(agent))} ${p.options.length ? 'asks you' : 'needs you'}</strong>${tabs}`;
+    const pointer = p.options.findIndex((o) => o.selected);
+    const option = (o) => {
+      const n = /^\d+$/.test(o.key) ? `<kbd>${o.key}</kbd>` : '';
+      const key = o.key.startsWith('nav:') ? `data-approval-nav="${Number(o.key.slice(4))}"` : `data-approval-key="${o.key}"`;
+      if (o.input) return `<form class="approval-option approval-input" data-approval-input="${o.key}">${n}<input type="text" maxlength="2000" placeholder="${p.multi ? 'Something else' : 'Type your own answer'}" aria-label="Your own answer"><button type="submit" class="button primary">Send</button></form>`;
+      const check = o.checked !== undefined ? `<span class="approval-check${o.checked ? ' on' : ''}">${icon('check')}</span>` : '';
+      return `<button type="button" class="approval-option${o.selected && !p.multi ? ' pointed' : ''}" ${key} ${o.checked !== undefined ? `aria-pressed="${o.checked}"` : ''}>${check || n}<span class="approval-label"><strong>${escapeHtml(o.label)}</strong>${o.description ? `<small>${escapeHtml(o.description)}</small>` : ''}</span></button>`;
+    };
+    const main = p.options.filter((o) => !o.chat), chat = p.options.find((o) => o.chat);
+    card.innerHTML = `<div class="approval-head">${head}</div>`
+      + (p.title ? `<div class="approval-title">${escapeHtml(p.title)}</div>` : '')
+      + (p.text ? `<p class="approval-text">${escapeHtml(p.text)}</p>` : '')
+      + (p.detail ? `<pre class="approval-command">${escapeHtml(p.detail)}</pre>` : '')
+      + (main.length ? `<div class="approval-options" role="group">${main.map(option).join('')}</div>` : '')
+      + `<div class="approval-choices">${!p.options.length ? `<button type="button" class="button primary" data-approval-key="enter">Continue</button>` : ''}${p.multi ? `<button type="button" class="button primary" data-approval-key="right">${p.submit ? 'Submit' : 'Next'} ${icon('arrow-right')}</button>` : ''}${chat ? `<button type="button" class="button secondary" data-approval-key="${chat.key}">Chat about this</button>` : ''}<button type="button" class="button secondary" data-approval-key="escape">Cancel <kbd>Esc</kbd></button><button type="button" class="text-button" data-action="show-terminal">Show terminal ${icon('terminal')}</button></div>`;
+    card.dataset.pointer = String(Math.max(0, pointer));
     card.hidden = false; approvalFor = agent.id;
     approvalTimer = setTimeout(paintApproval, 1500);
   }
-  async function answerApproval(key) {
+  // keys go to the agent's terminal: a number picks (or, in a multi-select, ticks) that option; a menu without
+  // numbers is walked with the arrow keys from where its pointer is; your own answer goes in as text, then Enter
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function answerApproval(key, { nav, text } = {}) {
     const id = approvalFor; if (!id) return;
-    try { await desktopCall('keys', { id, key }); } catch (e) { toast(e.message); }
-    setTimeout(paintApproval, 400);
+    const card = $('approval-card');
+    card.classList.add('answering');
+    try {
+      if (nav !== undefined) {
+        const from = Number(card.dataset.pointer) || 0, step = nav > from ? 'down' : 'up';
+        for (let i = 0; i < Math.abs(nav - from); i++) { await desktopCall('keys', { id, key: step }); await pause(60); }
+        await desktopCall('keys', { id, key: 'enter' });
+      } else if (text !== undefined) {
+        await desktopCall('keys', { id, key }); await pause(250);
+        await desktopCall('keys', { id, text }); await pause(120);
+        await desktopCall('keys', { id, key: 'enter' });
+      } else await desktopCall('keys', { id, key });
+    } catch (e) { toast(e.message); }
+    card.dataset.sig = '';
+    setTimeout(() => { card.classList.remove('answering'); paintApproval(); }, 350);
   }
 
   // Sharing: for the open agent, who it is shared with, whose agents it reads, and what is still waiting
@@ -1592,11 +1693,12 @@ function initialize() {
     inspectorFile = null; $('inspector').classList.remove('file-mode'); delete $('inspector').dataset.filePath;
     const peers = relations(agent.id), chat = recentCache.get(agent.id)?.data.chat || [];
     loadChanges(agent);
-    const signature = JSON.stringify([agent.id, agent.name, agent.status, agent.lastActivity, peers, chat.slice(-3), Math.floor(Date.now() / 60000), changeCache.get(agent.id)?.data, friends?.links?.length, friends?.outgoing?.length, friends?.incoming?.length]);
+    const signature = JSON.stringify([agent.id, agent.name, agent.status, agent.lastActivity, todosOf(agent), peers, chat.slice(-3), Math.floor(Date.now() / 60000), changeCache.get(agent.id)?.data, friends?.links?.length, friends?.outgoing?.length, friends?.incoming?.length]);
     if (signature === inspectorSignature) return;
     inspectorSignature = signature;
     $('inspector').innerHTML = `<div class="inspector-heading"><h2>Session details</h2><button class="icon-button" data-action="close-inspector" aria-label="Close session details">${icon('x')}</button></div>
       <section class="inspector-section"><div class="session-summary">${avatar(agent)}<div><strong>${escapeHtml(agent.name)}</strong><span class="session-provider">${escapeHtml(kindName(agent))}</span></div></div><div class="detail-row"><span>Status</span><span class="status-label">${status(agent)}${activityLabel(agent)}</span></div><div class="detail-row"><span>Last activity</span><span>${relativeTime(agent.lastActivity) === 'now' ? 'Just now' : `${relativeTime(agent.lastActivity)} ago`}</span></div><div class="folder-path">${icon('folder')}<span>${escapeHtml(agent.cwd)}</span></div></section>
+      ${todoSection(agent)}
       ${changesSection(agent)}
       ${sharingSection(agent)}
       <section class="inspector-section"><div class="inspector-title-row"><h3 class="inspector-label">Connected agents</h3><span class="count">${peers.length}</span></div>${peers.map((peer) => `<div class="connection-row">${avatar(peer.agent)}<button class="connection-info" data-agent="${escapeHtml(peer.agent.id)}"><strong>${escapeHtml(peer.agent.name)}</strong><span>${icon(peer.reads && peer.shares ? 'arrows' : peer.reads ? 'arrow-left' : 'arrow-right')}${peer.reads && peer.shares ? 'Two-way context' : peer.reads ? 'Reads context from' : 'Shares context with'}</span></button><button class="icon-button unlink-button" data-remove-links="${peer.edges.map((edge) => escapeHtml(edge.id)).join(',')}" aria-label="Disconnect ${escapeHtml(peer.agent.name)}" title="Disconnect">${icon('unlink')}</button></div>`).join('')}<button class="add-context" data-action="add-connection">${icon('plus')}Add connection</button><p class="inspector-note">Linked agents can share context and message each other across tools.</p></section>
@@ -2026,6 +2128,135 @@ function initialize() {
     if (field) field.focus();
   }
 
+  // ---- Todos (todos.mjs on the server, in ~/.synapse/todos.json): the user's and their agents' list. A todo can be
+  // linked to the agent doing it (by the id the server knows it by); when that agent ends, you are asked whether its
+  // open todos are done. With Linear connected, issues assigned to you come in, and ticking one moves it there too.
+  function todoList() { return state?.todos || []; }
+  function agentOfTodo(t) { return t.agent ? state.agents.find((a) => a.id === t.agent.id || a.backendId === t.agent.id) : null; }
+  function todosOf(agent) { return todoList().filter((t) => t.agent && (t.agent.id === agent.id || t.agent.id === agent.backendId)).map((t) => [t.id, t.text, t.done]); }
+  function todoRef(a) { return { id: a.backendId || a.id, name: titleOf(a) }; }
+  const todoCall = (path, method, body) => api(path, { method, ...(body ? { body: JSON.stringify(body) } : {}) });
+  async function refreshLinear() { try { linear = await api('/api/linear'); } catch {} todosSignature = ''; if (view === 'todos') renderTodos(); }
+  function paintTodoCount() {
+    const open = todoList().filter((t) => !t.done).length;
+    $('todo-count').hidden = !open; $('todo-count').textContent = open > 99 ? '99+' : String(open);
+  }
+  function todoRow(t) {
+    const a = agentOfTodo(t);
+    const chip = t.agent ? `<button type="button" class="todo-chip${a ? '' : ' gone'}" data-todo-agent="${escapeHtml(t.id)}" title="${a ? `Open ${escapeHtml(titleOf(a))}` : `${escapeHtml(t.agent.name)} has ended`}">${a ? avatar(a) : icon('user')}<span>${escapeHtml(a ? titleOf(a) : t.agent.name)}</span></button>`
+      : `<button type="button" class="todo-chip empty" data-todo-link="${escapeHtml(t.id)}">${icon('plus')}<span>Link agent</span></button>`;
+    const lin = t.linear ? `<a class="todo-linear" href="${escapeHtml(t.linear.url)}" target="_blank" rel="noopener" title="Open in Linear">${escapeHtml(t.linear.identifier)}</a>` : '';
+    const by = t.by && t.by !== 'you' && t.by !== 'Linear' ? `<span class="todo-by">by ${escapeHtml(t.by)}</span>` : '';
+    return `<div class="todo-row${t.done ? ' done' : ''}" data-todo="${escapeHtml(t.id)}"><button type="button" class="todo-check" data-todo-check="${escapeHtml(t.id)}" aria-pressed="${t.done}" aria-label="${t.done ? 'Mark not done' : 'Mark done'}">${icon('check')}</button><span class="todo-text">${escapeHtml(t.text)}</span>${by}${lin}${chip}<button type="button" class="icon-button todo-more" data-todo-more="${escapeHtml(t.id)}" aria-label="More" title="More">${icon('more')}</button></div>`;
+  }
+  function renderTodos() {
+    const all = todoList(), open = all.filter((t) => !t.done).sort((a, b) => b.createdAt - a.createdAt), done = all.filter((t) => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+    const sig = JSON.stringify([all, linear, showDone, state.agents.map((a) => [a.id, a.backendId, titleOf(a)])]);
+    if (sig === todosSignature) return;
+    todosSignature = sig;
+    const picked = todoPick && agentOfTodo({ agent: todoPick });
+    if (todoPick && !picked) todoPick = null; // the picked agent ended
+    $('todo-agent-pick').innerHTML = picked ? `${avatar(picked)}<span>${escapeHtml(titleOf(picked))}</span>` : `${icon('user')}<span>No agent</span>`;
+    $('linear-box').innerHTML = linear.connected
+      ? `<span class="linear-state${linear.error ? ' error' : ''}" title="${escapeHtml(linear.error || (linear.syncedAt ? `Synced ${relativeTime(linear.syncedAt)} ago` : 'Not synced yet'))}"><span class="linear-mark"></span>Linear${linear.name ? ` · ${escapeHtml(linear.name)}` : ''}</span><button type="button" class="button secondary" data-linear="sync">Sync</button><button type="button" class="icon-button" data-linear="menu" aria-label="Linear settings" title="Linear settings">${icon('more')}</button>`
+      : `<button type="button" class="button secondary" data-linear="connect"><span class="linear-mark"></span>Connect Linear</button>`;
+    $('todo-list').innerHTML = (open.length ? open.map(todoRow).join('') : `<p class="todo-empty">Nothing to do. Add a todo above, or ask an agent to note one.</p>`)
+      + (done.length ? `<button type="button" class="todo-done-toggle" data-todo-done-toggle aria-expanded="${showDone}">${icon(showDone ? 'chevron-down' : 'chevron-right')}Done <span class="count">${done.length}</span></button>${showDone ? done.slice(0, 200).map(todoRow).join('') : ''}` : '');
+  }
+  function todoSection(agent) {
+    const mine = todoList().filter((t) => t.agent && (t.agent.id === agent.id || t.agent.id === agent.backendId));
+    const open = mine.filter((t) => !t.done), done = mine.length - open.length;
+    if (agent.remote) return '';
+    return `<section class="inspector-section todo-section"><div class="inspector-title-row"><h3 class="inspector-label">Todos</h3><span class="count">${open.length}</span></div>${open.map(todoRow).join('')}${done ? `<p class="inspector-note">${done} done</p>` : ''}<form class="todo-add mini" data-todo-add-for="${escapeHtml(agent.id)}" autocomplete="off"><input maxlength="500" placeholder="Add a todo for this agent" aria-label="New todo for this agent"></form></section>`;
+  }
+  async function todoAction(fn) { try { await fn(); } catch (e) { toast(e.message); } }
+  function pickAgent(anchor, current, choose) {
+    const agents = state.agents.filter((a) => !a.remote && !a.exited && a.kind !== 'shell').sort((x, y) => (y.lastActivity || 0) - (x.lastActivity || 0)).slice(0, 25);
+    dropdown(anchor, [{ label: 'No agent', icon: current ? '' : 'check', run: () => choose(null) }, '-', ...agents.map((a) => ({ label: `${titleOf(a)} · ${a.project || kindName(a)}`, icon: current && (current === a.id || current === backend(a)) ? 'check' : '', run: () => choose(a) }))]);
+  }
+  function todoMenu(anchor, t) {
+    dropdown(anchor, [
+      { label: t.done ? 'Mark not done' : 'Mark done', icon: 'check', run: () => todoAction(() => todoCall(`/api/todos/${t.id}`, 'PATCH', { done: !t.done })) },
+      { label: 'Edit…', icon: 'edit', run: () => openModal('Edit todo', `<label class="field-label" for="todo-edit">Todo</label><input class="field" id="todo-edit" maxlength="500" value="${escapeHtml(t.text)}">`, 'Save', () => todoCall(`/api/todos/${t.id}`, 'PATCH', { text: $('todo-edit').value })) },
+      { label: t.agent ? 'Link to another agent…' : 'Link to an agent…', icon: 'arrows', run: () => pickAgent(anchor, t.agent?.id, (a) => todoAction(() => todoCall(`/api/todos/${t.id}`, 'PATCH', { agent: a ? todoRef(a) : null }))) },
+      ...(t.linear ? [{ label: `Open ${t.linear.identifier} in Linear`, icon: 'external', run: () => window.open(t.linear.url, '_blank', 'noopener') }]
+        : linear.connected ? [{ label: 'Send to Linear', icon: 'arrow-up', run: () => todoAction(() => todoCall(`/api/todos/${t.id}/linear`, 'POST')) }] : []),
+      '-',
+      { label: 'Delete', icon: 'x', danger: true, run: () => todoAction(() => todoCall(`/api/todos/${t.id}`, 'DELETE')) },
+    ]);
+  }
+  document.addEventListener('click', (event) => {
+    const el = event.target.closest('[data-todo-check], [data-todo-more], [data-todo-agent], [data-todo-link], [data-todo-done-toggle], [data-linear], #todo-agent-pick');
+    if (!el) return;
+    event.preventDefault();
+    const t = todoList().find((x) => x.id === (el.dataset.todoCheck || el.dataset.todoMore || el.dataset.todoAgent || el.dataset.todoLink));
+    if (el.dataset.todoCheck && t) {
+      el.closest('.todo-row')?.classList.toggle('ticking', !t.done);
+      return todoAction(() => todoCall(`/api/todos/${t.id}`, 'PATCH', { done: !t.done }));
+    }
+    if (el.dataset.todoMore && t) return todoMenu(el, t);
+    if (el.dataset.todoAgent && t) { const a = agentOfTodo(t); return a ? navigate('session', a.id) : todoMenu(el, t); }
+    if (el.dataset.todoLink && t) return pickAgent(el, null, (a) => todoAction(() => todoCall(`/api/todos/${t.id}`, 'PATCH', { agent: a ? todoRef(a) : null })));
+    if (el.hasAttribute('data-todo-done-toggle')) { showDone = !showDone; todosSignature = ''; return renderTodos(); }
+    if (el.id === 'todo-agent-pick') return pickAgent(el, todoPick?.id, (a) => { todoPick = a ? todoRef(a) : null; todosSignature = ''; renderTodos(); });
+    const act = el.dataset.linear;
+    if (act === 'connect') return openModal('Connect Linear', `<p class="dialog-copy">Issues assigned to you come in as todos. Ticking one here moves it to done in Linear, and any todo can be sent to Linear.</p><label class="field-label" for="linear-key">Personal API key</label><input class="field" id="linear-key" type="password" autocomplete="off" placeholder="lin_api_…"><p class="field-hint">In Linear: Settings → Security &amp; access → Personal API keys. It is kept on this Mac only, in ~/.synapse.</p>`, 'Connect', async () => { linear = await todoCall('/api/linear', 'PUT', { key: $('linear-key').value }); todosSignature = ''; renderTodos(); });
+    if (act === 'sync') return todoAction(async () => { el.disabled = true; try { await todoCall('/api/linear/sync', 'POST'); } finally { el.disabled = false; } await refreshLinear(); });
+    if (act === 'menu') return dropdown(el, [
+      ...(linear.teams?.length > 1 ? [{ heading: 'New issues go to' }, ...linear.teams.map((team) => ({ label: team.name, icon: team.id === linear.team ? 'check' : '', run: () => todoAction(async () => { linear = await todoCall('/api/linear', 'PATCH', { team: team.id }); todosSignature = ''; renderTodos(); }) })), '-'] : []),
+      { label: 'Disconnect Linear', icon: 'unlink', danger: true, run: () => todoAction(async () => { linear = await todoCall('/api/linear', 'DELETE'); todosSignature = ''; renderTodos(); }) },
+    ]);
+  });
+  $('todo-add').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const input = $('todo-input'), text = input.value.trim(); if (!text) return;
+    input.value = '';
+    todoAction(() => todoCall('/api/todos', 'POST', { text, agent: todoPick }));
+  });
+  document.addEventListener('submit', (event) => {
+    const form = event.target.closest?.('[data-todo-add-for]'); if (!form) return;
+    event.preventDefault();
+    const input = form.querySelector('input'), text = input.value.trim(), a = byId.get(form.dataset.todoAddFor); if (!text || !a) return;
+    input.value = '';
+    todoAction(() => todoCall('/api/todos', 'POST', { text, agent: todoRef(a) }));
+  });
+  // An agent with open todos ended (closed, its process quit, or tidied away): are they done? Asked once per todo,
+  // for agents seen running in this window (one missing at startup may just not be listed yet), after a grace period
+  // (an agent can drop out of the list for a moment while its session is matched).
+  const relinking = new Set();
+  function askEndedTodos() {
+    // linked while the app had not yet matched the session to its agent: move the link to the id agents know it by
+    for (const t of todoList()) {
+      const a = t.agent && !relinking.has(t.id) && state.agents.find((x) => x.owned && x.id === t.agent.id && x.backendId);
+      if (a) { relinking.add(t.id); todoCall(`/api/todos/${t.id}`, 'PATCH', { agent: todoRef(a) }).catch(() => {}).finally(() => relinking.delete(t.id)); }
+    }
+    const live = new Set();
+    for (const a of state.agents) if (!a.exited) { live.add(a.id); if (a.backendId) live.add(a.backendId); }
+    for (const id of live) { seenLive.add(id); goneSince.delete(id); }
+    const ended = new Map();
+    for (const t of todoList()) {
+      if (t.done || t.asked || !t.agent || live.has(t.agent.id) || !seenLive.has(t.agent.id)) continue;
+      if (!goneSince.has(t.agent.id)) goneSince.set(t.agent.id, Date.now());
+      if (Date.now() - goneSince.get(t.agent.id) < 6000) { if (!askLater) askLater = setTimeout(() => { askLater = 0; askEndedTodos(); }, 6500); continue; }
+      ended.set(t.agent.id, [...(ended.get(t.agent.id) || []), t]);
+    }
+    if (!ended.size || $('action-dialog').open) return;
+    const [, list] = [...ended][0], name = list[0].agent.name;
+    for (const t of list) todoCall(`/api/todos/${t.id}`, 'PATCH', { asked: true }).catch(() => {});
+    for (const t of list) t.asked = true; // not asked twice while the change comes back
+    openModal(`${name} ended`, `<p class="dialog-copy">It had ${list.length === 1 ? 'an open todo' : `${list.length} open todos`}. Which are done?</p><div class="todo-ask">${list.map((t) => `<label class="todo-ask-row"><input type="checkbox" value="${escapeHtml(t.id)}" checked><span>${escapeHtml(t.text)}</span>${t.linear ? `<small>${escapeHtml(t.linear.identifier)}</small>` : ''}</label>`).join('')}</div><p class="field-hint">Cancel keeps them all open.</p>`, 'Mark done', async () => {
+      const ids = [...$('dialog-content').querySelectorAll('.todo-ask input:checked')].map((i) => i.value);
+      await Promise.all(ids.map((id) => todoCall(`/api/todos/${id}`, 'PATCH', { done: true })));
+    });
+  }
+
+  $('approval-card').addEventListener('submit', (event) => {
+    const form = event.target.closest('[data-approval-input]'); if (!form) return;
+    event.preventDefault();
+    const text = form.querySelector('input').value.trim(); if (!text) return;
+    answerApproval(form.dataset.approvalInput, { text });
+  });
+
   // ---- A new version: a card in the top right while it downloads, then Restart (or Later, until the next version)
   let update = {};
   function renderUpdateCard() {
@@ -2423,6 +2654,7 @@ function initialize() {
       document.querySelectorAll('[data-action="connect"]').forEach((b) => { b.innerHTML = icon('plus') + 'New session'; });
     }
     updateConnection(true); renderSidebar(); renderMain(first);
+    paintTodoCount(); if (!paneKey) askEndedTodos();
     if (first && embedded && !paneKey) { const people = () => loadFriends().then(() => { renderSidebar(); inspectorSignature = ''; if (inspectorOpen) renderInspector(); }, () => {}); people(); setInterval(people, 60_000); }
     if ($('search-dialog').open) renderSearch();
   }
@@ -2919,6 +3151,7 @@ function initialize() {
       setStorage('synapse-collapsed', JSON.stringify([...collapsed])); renderSidebar(); return;
     }
     if (button.dataset.approvalKey) return answerApproval(button.dataset.approvalKey);
+    if (button.dataset.approvalNav !== undefined) return answerApproval(null, { nav: Number(button.dataset.approvalNav) });
     if (button.dataset.git) return gitAction(button.dataset.git);
     if (button.dataset.changeFile) { const agent = byId.get(selectedId); return openFile(button.dataset.changeFile, agent?.cwd); }
     if (button.id === 'changes-chip') { inspectorOpen = true; setStorage('synapse-inspector', 'open'); inspectorFile = null; inspectorSignature = ''; syncInspector(); return; }

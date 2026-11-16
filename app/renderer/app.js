@@ -3846,11 +3846,17 @@ async function desktopAction(action, args) {
     case 'screen': {
       const { x } = ownSession(args.id), buffer = x.term.buffer.active, lines = [];
       for (let i = buffer.viewportY; i < buffer.viewportY + x.term.rows; i++) lines.push(buffer.getLine(i)?.translateToString(true) || '');
-      return { lines: lines.join('\n').trimEnd().split('\n').slice(-24) };
+      return { lines: lines.join('\n').trimEnd().split('\n').slice(-40) };
     }
     case 'keys': {
       const { x } = ownSession(args.id); if (x.exited) throw new Error('This session has ended.');
-      const KEYS = { enter: '\r', escape: '\x1b', up: '\x1b[A', down: '\x1b[B', tab: '\t' };
+      const KEYS = { enter: '\r', escape: '\x1b', up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C', tab: '\t', space: ' ' };
+      // your own answer to an agent's question: plain text, no control characters (Enter is its own key)
+      if (typeof args.text === 'string') {
+        const text = args.text.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 2000);
+        if (!text.trim()) throw new Error('Type an answer first.');
+        return synapse.pty.write(x.pty, text);
+      }
       const key = String(args.key || '');
       const data = KEYS[key] ?? (/^[1-9yna]$/.test(key) ? key : null);
       if (data == null) throw new Error('That key is not allowed here.');

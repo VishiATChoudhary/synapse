@@ -15,6 +15,7 @@
     "plan.mjs",
     "remote.mjs",
     "talk.mjs",
+    "todos.mjs",
     "saved.mjs",
     "browsers.mjs",
     "account.mjs",

@@ -1,0 +1,14 @@
+ ▐▛███▛█   Claude Code v2.1.325
+▝▜██████▀  Haiku 5.5 · Claude Ultra
+ ▝▝   ▝▝   /private/tmp/cap
+❯ Call the AskUserQuestion tool now. One question, multiSelect: true, question: Which fruits do you like?,
+  options: Apple, Banana, Cherry, each with a short description. After the answer, reply with just the word
+  OK.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Fruits  ✔ Submit  →
+Review your answers
+ ● Which fruits do you like?
+   → Apple, Cherry
+Ready to submit your answers?
+❯ 1. Submit answers
+  2. Cancel

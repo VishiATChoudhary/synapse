@@ -1,0 +1,45 @@
+
+ ▐▛███▛█   Claude Code v2.1.325
+▝▜██████▀  Haiku 5.5 · Claude Ultra
+ ▝▝   ▝▝   /private/tmp/cap
+
+
+❯ Call the AskUserQuestion tool now. One question, multiSelect: true, question: Which fruits do you like?,
+  options: Apple, Banana, Cherry, each with a short description.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ Fruits  ✔ Submit  →
+
+Which fruits do you like?
+
+❯ 1. [ ] Apple
+         Crisp, sweet-tart, widely available.
+  2. [ ] Banana
+         Soft, creamy, naturally sweet.
+  3. [ ] Cherry
+         Small, juicy, sweet or sour varieties.
+  4. [ ] Type something
+     Submit
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

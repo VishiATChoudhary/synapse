@@ -7,6 +7,7 @@ import * as ops from './ops.mjs';
 import * as plan from './plan.mjs';
 import * as remote from './remote.mjs';
 import * as account from './account.mjs';
+import * as todos from './todos.mjs';
 
 const INSTRUCTIONS = `Synapse connects you to other coding agents running on this machine (Claude, Codex, Gemini, ...),
 and to agents on friends' machines that they share with you (multiplayer; those show an "owner" and can only be read).
@@ -23,7 +24,10 @@ The user links agents on the Synapse canvas, or you can link yourself with synap
   on it before going on.
 - If their agent is shared for talk, synapse_ask name@owner puts a question to it and waits for the answer;
   later answers arrive in synapse_inbox. synapse_end closes the conversation. If it is shared for reading only
-  (through a request), synapse_ask asks its owner to allow questions (status "requested", not an error: do not retry); a note arrives in synapse_inbox once they allow it.`;
+  (through a request), synapse_ask asks its owner to allow questions (status "requested", not an error: do not retry); a note arrives in synapse_inbox once they allow it.
+- The user keeps a todo list in Synapse, shared with their agents (synapse_todos). When the user asks you to note,
+  track or do something later, add it with synapse_todo_add (linked to you by default). Tick a todo you finished with
+  synapse_todo_update done=true; synapse_todo_remove deletes one. Todos may come from Linear (they show its id).`;
 
 const agentArg = { type: 'string', description: 'Agent name or id (prefix is fine)' };
 const TOOLS = [
@@ -83,6 +87,18 @@ const TOOLS = [
       outgoing: outgoing.map((r) => ({ id: r.id, to: r.to?.name || r.to?.handle, agent: r.agent?.name, status: r.status, shared: (r.shared || []).map((x) => x.name) })),
       incoming: incoming.map((r) => ({ id: r.id, from: r.from?.name || r.from?.handle, agent: r.agent?.name, target: r.target, status: r.status, note: 'The user accepts or denies this in the Synapse app.' })),
     })) },
+  { name: 'synapse_todos', description: "List the user's todos (shared with their agents). By default the open ones; mine=true only those linked to you; done=true the finished ones; all=true both.",
+    inputSchema: { type: 'object', properties: { mine: { type: 'boolean' }, done: { type: 'boolean' }, all: { type: 'boolean' } } },
+    run: (me, a) => ({ todos: todos.list({ agent: a.mine ? me.id : undefined, done: a.all ? undefined : !!a.done }).map(todos.show) }) },
+  { name: 'synapse_todo_add', description: 'Add a todo to the user\'s list. Linked to you unless agent names another agent on this machine, or agent="none". linear=true also creates it as a Linear issue (when the user connected Linear).',
+    inputSchema: { type: 'object', properties: { text: { type: 'string' }, agent: { type: 'string', description: 'Agent to link it to (name or id), "none" for no agent; default you' }, linear: { type: 'boolean' } }, required: ['text'] },
+    run: async (me, a) => todos.show(await todos.add({ text: a.text, agent: a.agent === undefined ? { id: me.id, name: me.name } : a.agent, by: me.name, linear: !!a.linear })) },
+  { name: 'synapse_todo_update', description: 'Change a todo: done=true when finished (false reopens), text to reword it, agent to link it to an agent (name or id, "me" for you, "none" to unlink). A todo from Linear moves its issue too.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'Todo id (or its first characters, or a Linear id like ENG-12)' }, done: { type: 'boolean' }, text: { type: 'string' }, agent: { type: 'string' } }, required: ['id'] },
+    run: async (me, a) => { const change = {}; if (a.done !== undefined) change.done = a.done; if (a.text !== undefined) change.text = a.text; if (a.agent !== undefined) change.agent = a.agent === 'me' ? { id: me.id, name: me.name } : a.agent; const t = await todos.update(a.id, change); return { ...todos.show(t), ...(t.warning ? { warning: t.warning } : {}) }; } },
+  { name: 'synapse_todo_remove', description: 'Delete a todo from the list (for one that is finished, prefer synapse_todo_update done=true).',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    run: (me, a) => ({ removed: todos.show(todos.remove(a.id)) }) },
 ];
 
 async function people() {

@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderMarkdown, searchSessions, sessionTree, parseApproval } from '../public/workspace.mjs';
 import { transcriptTitle } from '../discovery.mjs';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 let child, home, base;
@@ -190,6 +190,32 @@ test('approval prompts are read off the terminal screen as a question and number
   assert.equal(codex.question, 'Allow command?\nrm x');
   assert.equal(codex.options.length, 2);
   assert.deepEqual(parseApproval(['Press Enter to continue']).options, []);
+});
+
+test('agent prompts read from real Claude Code screens: questions, tabs, multi-select, permission, review, menus', () => {
+  const screen = (name) => parseApproval(readFileSync(path.join(root, 'test/fixtures/prompts', `${name}.txt`), 'utf8').split('\n'));
+  const short = (p) => p.options.map((o) => [o.key, o.label, ...(o.selected ? ['>'] : []), ...(o.checked !== undefined ? [o.checked ? 'x' : ' '] : []), ...(o.input ? ['input'] : []), ...(o.chat ? ['chat'] : [])]);
+  const q = screen('claude-question');
+  assert.equal(q.title, 'Color theme'); assert.equal(q.text, 'Which color theme do you prefer?');
+  assert.deepEqual(short(q), [['1', 'Light', '>'], ['2', 'Dark'], ['3', 'High contrast'], ['4', 'Type something.', 'input'], ['5', 'Chat about this', 'chat']]);
+  assert.match(q.options[1].description, /^Dark backgrounds with light text/);
+  const tabs = screen('claude-questions-tabs');
+  assert.deepEqual(tabs.tabs.map((t) => t.label), ['Color', 'Animal']); assert.equal(tabs.text, 'What is your favorite color?');
+  assert.equal(tabs.options.length, 5);
+  const multi = screen('claude-multiselect');
+  assert.ok(multi.multi && multi.submit);
+  assert.deepEqual(short(multi).slice(0, 4), [['1', 'Apple', '>', ' '], ['2', 'Banana', ' '], ['3', 'Cherry', ' '], ['4', 'Type something', ' ', 'input']]);
+  const perm = screen('claude-permission');
+  assert.equal(perm.title, 'Bash command'); assert.equal(perm.detail, 'touch synapse-perm-test.txt');
+  assert.equal(perm.text, 'Create empty file synapse-perm-test.txt\nDo you want to proceed?');
+  assert.deepEqual(perm.options.map((o) => o.label), ['Yes', 'Yes, and always allow access to /private/tmp/cap from this project', 'Yes, and switch to auto mode · auto mode handles these prompts for you', 'No']);
+  const review = screen('claude-review');
+  assert.equal(review.title, 'Review your answers'); assert.match(review.text, /→ Apple, Cherry\nReady to submit your answers\?/);
+  assert.deepEqual(short(review), [['1', 'Submit answers', '>'], ['2', 'Cancel']]);
+  const trust = screen('claude-trust');
+  assert.deepEqual(short(trust), [['nav:0', 'No, exit', '>'], ['nav:1', 'Yes, I trust this folder']]);
+  assert.match(trust.text, /Quick safety check/);
+  assert.deepEqual(short(screen('claude-menu')), [['1', 'Yes', '>'], ['2', 'Not now'], ['3', "Don't show again"]]);
 });
 
 test('a transcript title is Claude Code\'s newest aiTitle, else the first thing you asked', async () => {

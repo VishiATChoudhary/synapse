@@ -1,0 +1,45 @@
+
+ ▐▛███▛█   Claude Code v2.1.325
+▝▜██████▀  Haiku 5.5 · Claude Ultra
+ ▝▝   ▝▝   /private/tmp/cap
+
+
+❯ Use the AskUserQuestion tool right now with TWO questions in one call: my favorite color (3 options) and my
+  favorite animal (3 options). Do nothing else.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ Color  ☐ Animal  ✔ Submit  →
+
+What is your favorite color?
+
+❯ 1. Blue
+     Cool, calm shade
+  2. Green
+     Fresh, natural shade
+  3. Red
+     Bold, warm shade
+  4. Type something.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

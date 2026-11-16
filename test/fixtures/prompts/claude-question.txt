@@ -1,0 +1,45 @@
+
+ ▐▛███▛█   Claude Code v2.1.325
+▝▜██████▀  Haiku 5.5 · Claude Ultra
+ ▝▝   ▝▝   /private/tmp/cap
+
+
+❯ Use the AskUserQuestion tool right now to ask me which color theme I prefer, with 3 options that each have
+  a short description. Do nothing else.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Color theme
+
+Which color theme do you prefer?
+
+❯ 1. Light
+     Bright backgrounds with dark text. Clean and easy to read in daylight.
+  2. Dark
+     Dark backgrounds with light text. Easier on the eyes in low light.
+  3. High contrast
+     Maximum contrast between text and background. Best for readability and accessibility.
+  4. Type something.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

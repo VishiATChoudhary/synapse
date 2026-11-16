@@ -994,3 +994,75 @@ body.sorting .session-row .row-actions { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .message.user.rise, .fresh-in, .send-button.ready { animation: none; }
 }
+
+/* Todos: a list shared with your agents; each row ticks, links to an agent, and can carry its Linear issue */
+.todo-add { display: flex; gap: 8px; align-items: center; max-width: 880px; margin: 0 auto 14px; padding: 6px 6px 6px 14px; border: 1px solid var(--color-border-strong); border-radius: 14px; background: var(--color-raised); transition: border-color 160ms ease, box-shadow 200ms ease; }
+.todo-add:focus-within { box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 10%, transparent); }
+.todo-add input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font-size: var(--text-md); padding: 6px 0; }
+.todo-agent-pick, .todo-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 4px 9px; border-radius: var(--radius-pill); border: 1px solid var(--color-border); background: var(--color-panel); color: var(--color-muted); font-size: var(--text-sm); white-space: nowrap; }
+.todo-agent-pick span, .todo-chip span { overflow: hidden; text-overflow: ellipsis; }
+.todo-agent-pick .icon, .todo-chip .icon { width: 14px; height: 14px; }
+.todo-chip .avatar, .todo-agent-pick .avatar { width: 16px; height: 16px; }
+.todo-chip:hover, .todo-agent-pick:hover { color: var(--color-ink); border-color: var(--color-border-strong); }
+.todo-chip.empty { border-style: dashed; opacity: 0; transition: opacity 120ms ease; }
+.todo-row:hover .todo-chip.empty, .todo-chip.empty:focus-visible { opacity: 1; }
+.todo-chip.gone { text-decoration: line-through; opacity: .65; }
+.todo-list { max-width: 880px; margin: 0 auto; }
+.todo-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 10px; min-height: 40px; }
+.todo-row:hover { background: var(--color-hover, color-mix(in srgb, var(--color-ink) 4%, transparent)); }
+.todo-check { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--color-border-strong); background: transparent; color: transparent; transition: background 140ms ease, border-color 140ms ease, transform 160ms cubic-bezier(.2, .9, .3, 1.4); }
+.todo-check .icon { width: 13px; height: 13px; stroke-width: 2.6; }
+.todo-check:hover { border-color: var(--color-success); }
+.todo-check[aria-pressed='true'], .todo-row.ticking .todo-check { background: var(--color-success); border-color: var(--color-success); color: white; transform: scale(1.08); }
+.todo-text { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.45; transition: color 160ms ease; }
+.todo-row.done .todo-text, .todo-row.ticking .todo-text { color: var(--color-faint); text-decoration: line-through; }
+.todo-by { color: var(--color-faint); font-size: var(--text-sm); white-space: nowrap; }
+.todo-linear { font-size: var(--text-sm); font-family: var(--font-mono, ui-monospace, monospace); color: var(--color-muted); text-decoration: none; padding: 2px 7px; border-radius: 6px; background: color-mix(in srgb, #5e6ad2 14%, transparent); }
+.todo-linear:hover { color: var(--color-ink); }
+.todo-more { opacity: 0; }
+.todo-row:hover .todo-more, .todo-more:focus-visible, .todo-more[aria-expanded='true'] { opacity: 1; }
+.todo-empty { color: var(--color-muted); padding: 18px 8px; }
+.todo-done-toggle { display: inline-flex; align-items: center; gap: 6px; margin: 14px 0 4px; padding: 4px 8px; border: 0; background: none; color: var(--color-muted); font-size: var(--text-sm); }
+.todo-done-toggle .icon { width: 14px; height: 14px; }
+.linear-box { display: flex; align-items: center; gap: 8px; }
+.linear-state { display: inline-flex; align-items: center; gap: 7px; color: var(--color-muted); font-size: var(--text-sm); }
+.linear-state.error { color: var(--color-error); }
+.linear-mark { display: inline-block; width: 12px; height: 12px; border-radius: 4px; background: linear-gradient(135deg, #7c84f0, #5e6ad2); }
+.button .linear-mark { margin-inline-end: 4px; }
+.todo-section .todo-row { padding: 5px 4px; min-height: 34px; gap: 8px; }
+.todo-section .todo-chip { display: none; }
+.todo-add.mini { margin: 6px 0 0; padding: 2px 4px 2px 10px; border-radius: 10px; }
+.todo-add.mini input { font-size: var(--text-sm); }
+.todo-ask { display: grid; gap: 6px; margin: 10px 0; }
+.todo-ask-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--color-panel); }
+.todo-ask-row small { color: var(--color-muted); margin-inline-start: auto; }
+
+/* An agent's question or permission prompt, as a card above the composer: the title, the question, the command in
+   a code block, then each option as a row with its description (ticks for a multi-select, a field for your own) */
+.approval-card { padding: 14px 16px; max-height: min(60vh, 560px); overflow-y: auto; animation: entry-in 220ms ease-out both; }
+.approval-card.answering { opacity: .6; pointer-events: none; transition: opacity 120ms ease; }
+.approval-head { flex-wrap: wrap; }
+.approval-tabs { display: inline-flex; gap: 6px; margin-inline-start: auto; }
+.approval-tab { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: var(--radius-pill); background: var(--color-panel); color: var(--color-muted); font-size: var(--text-xs); }
+.approval-tab .icon { width: 11px; height: 11px; }
+.approval-tab.done { color: var(--color-success); }
+.approval-title { margin-top: 10px; font-size: var(--text-sm); font-weight: 600; color: var(--color-muted); }
+.approval-text { margin: 6px 0 0; white-space: pre-wrap; line-height: 1.5; color: var(--color-ink); }
+.approval-command { margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--color-panel); font: var(--text-sm)/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
+.approval-options { display: grid; gap: 4px; margin: 12px 0 10px; }
+.approval-option { display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: start; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--color-border); background: var(--color-raised); color: var(--color-ink); transition: background 120ms ease, border-color 120ms ease, transform 120ms ease; }
+button.approval-option:hover { border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border)); background: color-mix(in srgb, var(--color-accent) 6%, var(--color-raised)); }
+button.approval-option:active { transform: scale(.99); }
+.approval-option.pointed { border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border)); }
+.approval-option kbd { flex: none; display: grid; place-items: center; min-width: 20px; height: 20px; border-radius: 6px; background: var(--color-panel); color: var(--color-muted); font: 600 var(--text-xs) var(--font-body); margin-top: 1px; }
+.approval-label { display: grid; gap: 2px; min-width: 0; }
+.approval-label strong { font-weight: 500; overflow-wrap: anywhere; }
+.approval-label small { color: var(--color-muted); font-size: var(--text-sm); line-height: 1.4; }
+.approval-check { flex: none; display: grid; place-items: center; width: 18px; height: 18px; margin-top: 1px; border-radius: 5px; border: 1.5px solid var(--color-border-strong); color: transparent; }
+.approval-check .icon { width: 12px; height: 12px; stroke-width: 2.6; }
+.approval-check.on { background: var(--color-accent); border-color: var(--color-accent); color: white; }
+.approval-input { align-items: center; padding: 4px 4px 4px 10px; }
+.approval-input input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font-size: var(--text-md); padding: 4px 0; }
+.approval-input .button { height: 28px; font-size: var(--text-sm); }
+.approval-input:focus-within { border-color: color-mix(in srgb, var(--color-focus) 50%, var(--color-border)); }
+.approval-choices .button .icon { width: 14px; height: 14px; }
