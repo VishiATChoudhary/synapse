@@ -608,7 +608,7 @@ function initialize() {
   const settledAt = readJSON('synapse-settled', {}); // settled by hand (the row's ✓), until it works again // unarchived by hand: left alone for another full period
   // last real use: for a session of ours its conversation's time when known (a restart must not count as use)
   const usedAt = (a) => (a.owned ? a.usedAt || a.lastActivity : a.lastActivity) || 0;
-  const expiring = new Set();
+  const expiring = new Set(), archivedBusy = new Set(); // archivedBusy: archived by hand while working, stays archived
   const needsYou = (a) => ['waiting', 'needs_input'].includes(a.status);
   function trackStates() {
     let changed = false;
@@ -617,7 +617,14 @@ function initialize() {
       lastStatus.set(a.id, a.status);
       if (a.status === 'busy' && was !== 'busy' && was !== undefined) busySince.set(a.id, Date.now());
       // working again: back out of Archived and Snoozed (they only stay visible while open, so it would vanish when you switch away)
-      if (a.status === 'busy' && was !== 'busy' && (archived[a.id] !== undefined || snoozed[a.id] !== undefined)) { delete archived[a.id]; delete snoozed[a.id]; unarchivedAt[a.id] = Date.now(); changed = true; }
+      if (a.status === 'busy' && was !== 'busy' && snoozed[a.id] !== undefined) { delete snoozed[a.id]; changed = true; }
+      // working (or asking you) again: out of Archived, where it would only show while open; unless you archived it
+      // while it was already working
+      const active = a.status === 'busy' || needsYou(a);
+      if (!active) archivedBusy.delete(a.id);
+      if (active && archived[a.id] !== undefined && !archivedBusy.has(a.id)) { delete archived[a.id]; unarchivedAt[a.id] = Date.now(); changed = true; }
+      // it worked after it was archived (before this rule, or while the app was closed): it is in use again
+      if (archived[a.id] && (doneSet.get(a.id) || 0) > archived[a.id]) { delete archived[a.id]; unarchivedAt[a.id] = Date.now(); changed = true; }
       if (a.status === 'busy' || needsYou(a)) flushing.delete(a.id);
       if (queued[a.id]?.length && a.owned && !a.exited && a.status !== 'busy' && !needsYou(a) && !(Date.now() - (stoppedAt.get(a.id) || 0) < 4000) && (!flushing.has(a.id) || Date.now() - flushing.get(a.id) > 15_000)) sendQueued(a.id);
       if (was === 'busy' && a.status !== 'busy' && !needsYou(a)) { doneSet.set(a.id, Date.now()); changed = true; }
@@ -782,7 +789,7 @@ function initialize() {
     ];
   }
   function archive(id, on) {
-    if (on) { archived[id] = Date.now(); delete snoozed[id]; doneSet.delete(id); } else { delete archived[id]; unarchivedAt[id] = Date.now(); }
+    if (on) { archived[id] = Date.now(); delete snoozed[id]; doneSet.delete(id); const a = byId.get(id); if (a && (a.status === "busy" || needsYou(a))) archivedBusy.add(id); } else { delete archived[id]; unarchivedAt[id] = Date.now(); }
     saveMarks();
     if (on && selectedId === id) { const next = state.agents.find((a) => a.id !== id && !archived[a.id]); navigate(next ? 'session' : 'overview', next?.id || null); }
     renderSidebar();

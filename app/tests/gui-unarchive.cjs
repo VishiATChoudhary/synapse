@@ -42,7 +42,8 @@ async function until(check, label, ms = 30000) {
   while (Date.now() < deadline) { if (await Promise.resolve().then(check).catch(() => false)) return; await sleep(100); }
   throw new Error(`Timed out: ${label}`);
 }
-const ui = (code) => gui.executeJavaScript(code, true);
+// the GUI frame is looked up on each call (a reload replaces it), and a call to a frame going away gives up
+const ui = (code) => { const f = win.webContents.mainFrame.frames.find((x) => x.url.includes('?desktop=1')) || gui; return Promise.race([f.executeJavaScript(code, true), sleep(3000).then(() => { throw new Error('frame did not answer'); })]); };
 const native = (code) => win.webContents.executeJavaScript(code, true);
 const pidOf = (slot) => fs.readFileSync(path.join(ctl, `slot-${slot}`), 'utf8').trim();
 const set = (slot, status) => fs.writeFileSync(path.join(ctl, `state-${slot}`), status);
@@ -75,8 +76,7 @@ const launch = async (slot) => {
   await ui(`document.querySelector('#project-list .session-row[data-agent="${first}"] [data-row-act="archive"]').click()`);
   await until(async () => (await place(first)) === 'shelf:archived', 'archived');
   // open it and it starts working; switching away keeps it in Working
-  await ui(`document.querySelector('#project-list .session-row[data-agent="${first}"]').click()`);
-  await until(() => ui(`location.hash === '#agent=${first}'`), 'the archived agent is open');
+  await until(async () => { await ui(`document.querySelector('#project-list .session-row[data-agent="${first}"]')?.click()`); await sleep(300); return ui(`location.hash === '#agent=${first}'`); }, 'the archived agent is open');
   set(0, 'busy');
   await until(async () => (await place(first)) === 'flat:working', 'working while open').catch(async (e) => { console.log(await place(first), await place(second), await ui('location.hash')); throw e; });
   await ui(`document.querySelector('#project-list .session-row[data-agent="${second}"]').click()`);
@@ -85,6 +85,17 @@ const launch = async (slot) => {
   assert.equal(await place(first), 'flat:working', 'still in Working after switching away');
   set(0, 'idle');
   await until(async () => (await place(first)) === 'flat:done', 'Done once it finishes, not back in Archived');
+  // archived before this rule existed, with work done since: it comes back when the app starts
+  await sleep(800); // the app has saved its marks
+  const saved = path.join(state, 'workspace-ui.json'), prefs = JSON.parse(fs.readFileSync(saved, 'utf8'));
+  const marks = (k) => JSON.parse(prefs[k] || '{}');
+  prefs['synapse-archived'] = JSON.stringify({ ...marks('synapse-archived'), [second]: Date.now() - 60_000 });
+  prefs['synapse-done'] = JSON.stringify({ ...marks('synapse-done'), [second]: Date.now() - 1000 });
+  fs.writeFileSync(saved, JSON.stringify(prefs));
+  gui = null; win.webContents.reload();
+  await until(() => ui(`!!document.querySelector('#project-list .session-row[data-agent="${first}"]')`), 'GUI back', 60000);
+  await ui(`document.querySelector('#project-list .session-row[data-agent="${first}"]')?.click()`);
+  await until(async () => ['flat:done', 'flat:working'].includes(await place(second)), 'worked after it was archived: out of Archived');
   console.log('PASS archived agent working again: back in Working, stays there after switching away, then Done');
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);
 })().catch(async (e) => {
