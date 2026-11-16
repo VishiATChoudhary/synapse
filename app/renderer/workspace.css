@@ -69,7 +69,7 @@ body.gui-mode .menu { --paper: var(--color-paper); --ink: var(--color-ink); --in
 @keyframes set-in { from { opacity: 0; transform: translateY(6px) scale(.985); } }
 [data-kind="settings"] > .modal-title { display: none; }
 [data-kind="settings"] > .modal-body { flex: 1; min-height: 0; display: flex; }
-.settings { flex: 1; min-width: 0; display: grid; grid-template-columns: 232px 1fr; }
+.settings { flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-columns: 232px 1fr; grid-template-rows: minmax(0, 1fr); } /* one row the window's height: the pane scrolls inside it */
 /* nav */
 .set-nav { display: flex; flex-direction: column; gap: 2px; padding: 22px 12px 14px; background: var(--color-sidebar); border-right: 1px solid var(--color-border); overflow: auto; }
 .set-nav-title { padding: 0 10px 12px; font: 600 var(--text-lg, 17px)/1.2 var(--font-body); }
@@ -83,7 +83,7 @@ body.gui-mode .menu { --paper: var(--color-paper); --ink: var(--color-ink); --in
 .set-link[aria-current='true'] .set-glyph { color: var(--color-accent); }
 .set-nav-foot { margin-top: auto; padding: 12px 10px 0; font: 11px var(--font-mono); color: var(--color-muted); }
 /* the pane */
-.set-main { min-width: 0; display: flex; flex-direction: column; }
+.set-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .set-head { display: flex; align-items: center; justify-content: space-between; padding: 20px 28px 14px; border-bottom: 1px solid var(--color-border); }
 .set-head-title { margin: 0; font: 600 var(--text-xl, 20px)/1.25 var(--font-body); }
 .set-close { width: 30px; height: 30px; border-radius: var(--radius-sm); font-size: 20px; line-height: 1; color: var(--color-muted); }
