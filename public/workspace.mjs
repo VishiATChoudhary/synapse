@@ -567,6 +567,7 @@ function initialize() {
   let sendingSlow = false, olderAnchor = null, loadingOlder = false; // the history above, loaded as you scroll up
   let sending = false, recentController, recentRequest = 0, recentTarget, recentDirty = false, limit = 60;
   let source, stateFrame = 0, stateTimer = 0, pendingState, toastTimer, draftTimer, flowTimer;
+  let approvalTimer = null, approvalFor = null, approvalMiss = 0, approvalReading = false; // the options card: its poll, and which agent it is for
   let composerPaint = null; // set once the composer's highlighting exists; drafts loaded before then repaint on input
   let linear = { connected: false }, todoPick = null, todosSignature = '', showDone = false, askLater = 0; // todos
   const seenLive = new Set(), goneSince = new Map(); // agents seen running, and when one stopped being listed
@@ -736,7 +737,7 @@ function initialize() {
       // it worked after it was archived (before this rule, or while the app was closed): it is in use again
       if (archived[a.id] && (doneSet.get(a.id) || 0) > archived[a.id]) { delete archived[a.id]; unarchivedAt[a.id] = Date.now(); changed = true; }
       if (a.status === 'busy' || needsYou(a)) flushing.delete(a.id);
-      if (queued[a.id]?.length && a.owned && !a.exited && a.status !== 'busy' && !needsYou(a) && !(Date.now() - (stoppedAt.get(a.id) || 0) < 4000) && (!flushing.has(a.id) || Date.now() - flushing.get(a.id) > 15_000)) sendQueued(a.id);
+      if (queued[a.id]?.length && a.owned && !a.exited && a.status !== 'busy' && !needsYou(a) && !(approvalFor === a.id && !$('approval-card').hidden) && !(Date.now() - (stoppedAt.get(a.id) || 0) < 4000) && (!flushing.has(a.id) || Date.now() - flushing.get(a.id) > 15_000)) sendQueued(a.id);
       if (was === 'busy' && a.status !== 'busy' && !needsYou(a)) { doneSet.set(a.id, Date.now()); changed = true; }
       if (a.status === 'busy' && doneSet.delete(a.id)) changed = true;
       if ((a.status === 'busy' || needsYou(a)) && settledAt[a.id] !== undefined) { delete settledAt[a.id]; changed = true; }
@@ -1007,7 +1008,7 @@ function initialize() {
       pill.className = `state-pill ${st}`;
       const watchNote = st === 'watching' ? watchList(agent)[0] : null;
       pill.title = watchNote ? watchNote.text : '';
-      pill.innerHTML = st === 'needs' ? 'Needs you' : st === 'watching' ? `${icon('eye')}Watching` : st === 'done' ? `${icon('check')}Done` : snoozed[agent.id] !== undefined ? `${icon('clock')}` : '';
+      pill.innerHTML = st === 'needs' ? 'Needs you' : st === 'watching' ? `${icon('eye')}Watching` : st === 'done' ? 'Active' : snoozed[agent.id] !== undefined ? `${icon('clock')}` : '';
       const label = titleOf(agent);
       row.querySelector('.session-name').textContent = label;
       // the second line says who: the agent's name, or its tool when the name is just a generated one
@@ -1123,7 +1124,7 @@ function initialize() {
       }
       const recent = (x, y) => (y.a.lastActivity || 0) - (x.a.lastActivity || 0);
       if (groupBy === 'status') {
-        for (const [key, label] of [['needs', 'Needs you'], ['working', 'Working'], ['watching', 'Watching'], ['done', 'Done'], ['idle', 'Idle']]) {
+        for (const [key, label] of [['needs', 'Needs you'], ['working', 'Working'], ['watching', 'Watching'], ['done', 'Active'], ['idle', 'Idle']]) {
           const these = rows.filter((r) => statusKey(r.a) === key).sort(byTrigger);
           if (!these.length) continue;
           desired.push(flatSection(key, label, these.map((r) => sessionNode(r.entry, 0, r.place))));
@@ -1646,18 +1647,26 @@ function initialize() {
   }
 
   // Approvals in the GUI: an owned session waiting for you shows its question and choices above the composer
-  let approvalTimer = null, approvalFor = null;
   async function paintApproval() {
     const agent = byId.get(selectedId), card = $('approval-card');
-    const waiting = embedded && agent?.owned && !agent.exited && ['waiting', 'needs_input'].includes(agent.status) && view === 'session';
+    // a session that has not registered with Synapse yet (no backend id) may be stopped at a question of its own before
+    // it starts (Claude Code: trust this folder?); its screen is watched so that shows here too
+    const starting = embedded && agent?.owned && !agent.exited && !agent.backendId && agent.kind && agent.kind !== 'shell' && view === 'session';
+    const waiting = starting || (embedded && agent?.owned && !agent.exited && ['waiting', 'needs_input'].includes(agent.status) && view === 'session');
     clearTimeout(approvalTimer);
     if (!waiting) { if (!card.hidden && agent) $('message-input').placeholder = agent.owned ? 'Ask anything. @ agents, / commands' : `Message ${agent.name}…`; card.hidden = true; approvalFor = null; return; }
     let screen;
-    try { screen = await desktopCall('screen', { id: agent.id }); } catch { card.hidden = true; return; }
+    if (approvalReading) return; // one screen read at a time (renders call this often)
+    approvalReading = true;
+    try { screen = await desktopCall('screen', { id: agent.id }); } catch { card.hidden = true; if (starting) approvalTimer = setTimeout(paintApproval, 700); return; } finally { approvalReading = false; }
     if (selectedId !== agent.id) return;
     const p = parseApproval(screen.lines), sig = JSON.stringify(p);
+    // still starting and not asking anything: no card, look again shortly
+    // (a screen caught mid-redraw looks empty: the card goes only after two empty looks in a row)
+    if (starting && !['waiting', 'needs_input'].includes(agent.status) && !p.options?.length) { if (!card.hidden && approvalFor === agent.id && !approvalMiss++) { approvalTimer = setTimeout(paintApproval, 400); return; } approvalMiss = 0; card.hidden = true; approvalFor = null; card.dataset.sig = ''; updateComposer(); approvalTimer = setTimeout(paintApproval, 700); return; }
     // the same prompt as before: leave the card (and anything typed into it) alone
     if (card.dataset.sig === sig && !card.hidden && approvalFor === agent.id) { approvalTimer = setTimeout(paintApproval, 1500); return; }
+    approvalMiss = 0;
     card.dataset.sig = sig;
     // the question sits on top of the box you type in, as its first half: who asks, the question, then the answers
     // as a list you can also pick from the keyboard (1-9, or ↑↓ and Enter while the box is empty; Esc cancels)
@@ -1671,6 +1680,11 @@ function initialize() {
       const mark = o.checked !== undefined ? `<span class="ask-box${o.checked ? ' on' : ''}" aria-hidden="true">${icon('check')}</span>` : `<span class="ask-key">${/^\d+$/.test(o.key) ? o.key : i + 1}</span>`;
       return `<button type="button" class="ask-option${i === Math.max(0, pointer) && !p.multi ? ' active' : ''}" ${key}${o.checked !== undefined ? ` aria-pressed="${o.checked}"` : ''} title="${escapeHtml(note ? `${label}: ${note}` : label)}">${mark}<span class="ask-label">${escapeHtml(label)}</span>${note ? `<span class="ask-desc">${escapeHtml(note)}</span>` : ''}</button>`;
     };
+    // Claude Code's first question in a new folder, said plainly
+    if (p.options.some((o) => /trust this folder/i.test(o.label))) {
+      const folder = (screen.lines.join('\n').match(/Accessing workspace:\s*\n?\s*(\S[^\n]*)/) || [])[1]?.trim();
+      p.title = ''; p.detail = ''; p.text = `${folder ? `Claude Code wants to read, edit and run files in ${folder}.\n` : ''}Trust this folder?`;
+    }
     const choices = p.options.filter((o) => !o.chat && !o.input), own = p.options.find((o) => o.input), chat = p.options.find((o) => o.chat);
     const lines = (p.text || (permission ? 'Allow this?' : '')).split('\n').filter(Boolean);
     const askAt = lines.findLastIndex((l) => /\?$/.test(l)), ask = askAt >= 0 ? lines.slice(askAt).join(' ') : lines.join(' '), lead = askAt > 0 ? lines.slice(0, askAt) : [];
@@ -2210,7 +2224,7 @@ function initialize() {
     $('message-input').placeholder = !$('approval-card').hidden && approvalFor === agent?.id ? 'Or write a message for after you answer…' : agent ? (agent.owned ? 'Ask anything. @ agents, / commands' : `Message ${agent.name}…`) : 'Message your agent…';
     $('attach-files').hidden = !agent?.owned;
     if (agent?.owned) loadChanges(agent).then(paintChangesChip); else $('changes-chip').hidden = true;
-    const waitingNow = agent?.owned && ['waiting', 'needs_input'].includes(agent.status);
+    const waitingNow = agent?.owned && !agent.exited && (['waiting', 'needs_input'].includes(agent.status) || (!agent.backendId && agent.kind && agent.kind !== 'shell'));
     if (waitingNow ? approvalFor !== agent.id : approvalFor) paintApproval();
     $('message-input').setAttribute('aria-label', agent ? `Message ${agent.name}` : 'Message this agent');
     composerPaint?.();
@@ -2240,7 +2254,8 @@ function initialize() {
     sending = true; $('send-error').hidden = true;
     const slow = setTimeout(() => { sendingSlow = true; updateComposer(); }, 700); // the button only spins when it is slow
     updateComposer();
-    const agent = byId.get(id), holding = agent.owned && (agent.status === 'busy' || needsYou(agent) || queued[id]?.length || flushing.has(id));
+    const asking = approvalFor === id && !$('approval-card').hidden; // a question on screen: Enter would answer it
+    const agent = byId.get(id), holding = agent.owned && (agent.status === 'busy' || needsYou(agent) || asking || queued[id]?.length || flushing.has(id));
     // sent straight in: the prompt shows in the conversation at once and the box empties; an error puts it back
     const now = agent.owned && !holding ? { key: `out:${Date.now().toString(36)}`, text, at: Date.now() } : null;
     if (now) {
