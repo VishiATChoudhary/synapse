@@ -108,6 +108,22 @@ const set = (slot, status) => fs.writeFileSync(path.join(ctl, `state-${slot}`), 
   assert.ok(moved.includes(bottom), `slid: ${moved}`);
   if (process.env.STATUS_SHOT) fs.writeFileSync(process.env.STATUS_SHOT, (await win.webContents.capturePage()).toPNG());
   console.log('PASS trigger: an agent that changes state goes to the top of its group, sliding up');
+
+  // ⌘⇧S / ⌘⇧W: down and up the agent list as shown; the opened conversation eases in
+  const rowsNow = () => ui(`[...document.querySelectorAll('#project-list .session-row')].filter((r) => r.offsetParent).map((r) => r.dataset.agent)`);
+  const current = () => ui(`document.querySelector('#project-list .session-row[aria-current="page"]')?.dataset.agent || ''`);
+  const press = (k) => ui(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', metaKey: true, shiftKey: true, bubbles: true, cancelable: true }))`);
+  const list0 = await rowsNow();
+  await ui(`document.querySelector('#project-list .session-row').click()`);
+  await until(async () => (await current()) === list0[0], 'the first agent is open');
+  await press('s');
+  await until(async () => (await current()) === list0[1], '⌘⇧S opens the next agent');
+  await press('s');
+  await until(async () => (await current()) === list0[2], 'and the one after');
+  await press('w');
+  await until(async () => (await current()) === list0[1], '⌘⇧W goes back up');
+  await until(() => ui(`document.getElementById('message-list').classList.contains('entering') || document.getElementById('message-list').dataset.shownFor !== ''`), 'the conversation is shown for the agent');
+  console.log('PASS keys: ⌘⇧S and ⌘⇧W move down and up the agent list');
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);
 })().catch(async (e) => {
   failed = true; console.error(e);

@@ -2335,7 +2335,7 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keydown', (e) => {
   if (!$('#modal').hidden || !$('#login').hidden) return;
   // a terminal docked in the GUI has the focus: the GUI's own shortcuts still reach the page
-  if (workspaceOpen && appMod(e) && !e.altKey && ['j', 'k', 'n', 't'].includes(e.key.toLowerCase()) && e.target.closest?.('.gui-dock')) {
+  if (workspaceOpen && appMod(e) && !e.altKey && (['j', 'k', 'n', 't'].includes(e.key.toLowerCase()) || (e.shiftKey && ['w', 's'].includes(e.key.toLowerCase()))) && e.target.closest?.('.gui-dock')) {
     e.preventDefault(); workspacePost({ type: 'synapse:desktop-key', key: e.key.toLowerCase(), shift: e.shiftKey }); return;
   }
   const mine = !workspaceOpen && matchShortcut(e);
@@ -3731,9 +3731,11 @@ function dock({ place, id, rect, covers = [], focus = false } = {}) {
   if (d && d.x !== x) { undock(place); d = null; }
   for (const [p, other] of docks) if (p !== place && other.x === x) undock(p);
   if (!d) {
-    const box = el('div', 'gui-dock'); dockLayer.append(box);
+    // a terminal arriving fades in instead of popping up
+    const box = el('div', 'gui-dock entering'); dockLayer.append(box);
     box.append(x.el); x.docked = place; x.el.classList.add('visible'); x.el.style.cssText = '';
-    d = { x, box }; docks.set(place, d);
+    d = { x, box, size: '' }; docks.set(place, d);
+    requestAnimationFrame(() => requestAnimationFrame(() => box.classList.remove('entering')));
   }
   d.box.style.background = termTheme().background || '';
   Object.assign(d.box.style, { left: `${n(rect.x)}px`, top: `${n(rect.y)}px`, width: `${n(rect.width)}px`, height: `${n(rect.height)}px` });
@@ -3742,7 +3744,9 @@ function dock({ place, id, rect, covers = [], focus = false } = {}) {
     .map((c) => ({ x: n(c.x) - n(rect.x), y: n(c.y) - n(rect.y), w: n(c.width), h: n(c.height) }))
     .filter((c) => c.x < w && c.y < h && c.x + c.w > 0 && c.y + c.h > 0);
   d.box.style.clipPath = holes.length ? `path(evenodd, "M0 0H${w}V${h}H0Z${holes.map((c) => `M${c.x - 6} ${c.y - 6}h${c.w + 12}v${c.h + 12}h${-(c.w + 12)}Z`).join('')}")` : '';
-  requestAnimationFrame(() => { if (x.el.isConnected) { x.fit.fit(); if (focus) x.term.focus(); } });
+  // moving the box is free; only a new size makes the terminal measure and redraw its rows
+  const size = `${n(rect.width)}x${n(rect.height)}`, resized = d.size !== size; d.size = size;
+  if (resized || focus) requestAnimationFrame(() => { if (x.el.isConnected) { if (resized) x.fit.fit(); if (focus) x.term.focus(); } });
 }
 const ownSession = (id) => {
   for (const s of M.slots) {

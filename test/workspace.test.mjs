@@ -213,7 +213,7 @@ test('a project shows its GitHub owner picture; checkouts not on GitHub get none
   execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'git@github.com:acme-inc/api.git']);
   const on = await fetch(`${base}/api/avatar?dir=${encodeURIComponent(repo)}`, { redirect: 'manual' });
   assert.equal(on.status, 302);
-  assert.equal(on.headers.get('location'), 'https://avatars.githubusercontent.com/acme-inc?s=96');
+  assert.equal(on.headers.get('location'), 'https://github.com/acme-inc.png?size=96');
   assert.equal((await fetch(`${base}/api/avatar?dir=${encodeURIComponent(plain)}`, { redirect: 'manual' })).status, 404);
   assert.equal((await fetch(`${base}/api/avatar?dir=relative/path`, { redirect: 'manual' })).status, 404);
   await rm(repo, { recursive: true, force: true }); await rm(plain, { recursive: true, force: true });
@@ -222,4 +222,10 @@ test('a project shows its GitHub owner picture; checkouts not on GitHub get none
 test('a plan from the GUI needs a running agent to start it', async () => {
   const r = await fetch(`${base}/api/plans`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ from: 'nobody', agents: ['x'], goal: 'g' }) });
   assert.equal(r.status, 404);
+});
+
+test('ending an idle agent needs this page and a known local agent', async () => {
+  const cross = await fetch(`${base}/api/agents/anything/end`, { method: 'POST', headers: { 'sec-fetch-site': 'cross-site' } });
+  assert.equal(cross.status, 403);
+  assert.equal((await fetch(`${base}/api/agents/nobody-here/end`, { method: 'POST' })).status, 404);
 });

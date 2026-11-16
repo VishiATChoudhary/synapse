@@ -53,3 +53,5 @@ body.gui-mode .menu { --paper: var(--color-paper); --ink: var(--color-ink); --in
 #gui-docks { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .gui-dock { position: absolute; pointer-events: auto; overflow: hidden; border-radius: 8px; }
 .gui-dock .term { inset: 8px 6px 6px 12px; }
+.gui-dock { transition: opacity .16s ease-out; }
+.gui-dock.entering { opacity: 0; }

@@ -13,6 +13,8 @@ const root = path.resolve(__dirname, '../..');
 const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-gui-terminal-')));
 const project = path.join(fixture, 'rocket'), state = path.join(fixture, 'state'), bin = path.join(fixture, 'bin'), typed = path.join(fixture, 'typed.txt');
 for (const d of [project, state, bin]) fs.mkdirSync(d, { recursive: true });
+// a GitHub remote, so the rows show the owner's picture (the test never needs it to load)
+require('node:child_process').execFileSync('git', ['init', '-q', project]); require('node:child_process').execFileSync('git', ['-C', project, 'remote', 'add', 'origin', 'https://github.com/invertix-ai/rocket.git']);
 fs.writeFileSync(path.join(bin, 'claude'), `#!/usr/bin/env node
 const fs = require('fs');
 process.stdout.write('stand-in claude ready\\r\\n> ');

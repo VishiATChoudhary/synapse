@@ -231,7 +231,8 @@ async function handleRequest(req, res) {
   if (p === '/api/avatar' && req.method === 'GET') { // a project's GitHub owner picture, like T3 shows; 404 if none
     const owner = await githubOwner(url.searchParams.get('dir') || '');
     if (!owner) { res.writeHead(404, { 'cache-control': 'max-age=600' }); return res.end(); }
-    res.writeHead(302, { location: `https://avatars.githubusercontent.com/${encodeURIComponent(owner)}?s=96`, 'cache-control': 'max-age=86400' });
+    // github.com/<owner>.png leads to the picture by account id; the by-name avatar address shows the default for some orgs
+    res.writeHead(302, { location: `https://github.com/${encodeURIComponent(owner)}.png?size=96`, 'cache-control': 'max-age=86400' });
     return res.end();
   }
   if (p === '/api/plans' && req.method === 'POST') { // a shared plan from the GUI, as synapse_plan_start would
@@ -349,6 +350,18 @@ async function handleRequest(req, res) {
   }
   if (p === '/api/layout' && req.method === 'POST') {
     writeJSON(FILES.layout, { ...readJSON(FILES.layout, {}), ...(await body(req)) });
+    return json(res, 200, { ok: true });
+  }
+  // end an agent running in one of your terminals (Tidy up, after it sat idle long enough): only a discovered local agent,
+  // only while its process is still the one discovered, never one that is working or waiting for you
+  const endAgent = p.match(/^\/api\/agents\/([\w-]+)\/end$/);
+  if (endAgent && req.method === 'POST') {
+    if (!ownPage(req)) return json(res, 403, { error: 'forbidden' });
+    const a = agents().find((x) => x.id === endAgent[1]);
+    if (!a || a.remote || !Number.isInteger(a.pid) || a.pid <= 1 || a.pid === process.pid) return json(res, 404, { error: 'gone' });
+    if (['busy', 'waiting', 'needs_input'].includes(a.status)) return json(res, 409, { error: 'That agent is working.' });
+    try { process.kill(a.pid, 'SIGTERM'); } catch (e) { return json(res, e.code === 'ESRCH' ? 404 : 500, { error: e.code === 'ESRCH' ? 'gone' : e.message }); }
+    await discovery.refresh().catch(() => {}); lastSig = ''; broadcast('state', state());
     return json(res, 200, { ok: true });
   }
   const ren = p.match(/^\/api\/agents\/([\w-]+)\/name$/);

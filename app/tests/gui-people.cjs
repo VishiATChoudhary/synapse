@@ -158,13 +158,32 @@ const menuText = () => ui(`[...document.querySelectorAll('.pop-menu button')].ma
   await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent.includes('Group by status')).click()`);
   await until(() => ui(`!!document.querySelector('[data-fold-toggle^="flat:"]')`), 'a status section');
   const section = await ui(`document.querySelector('[data-fold-toggle^="flat:"]').dataset.foldToggle.slice(5)`);
+  await sleep(700); // the rows' arrival from switching to Group by status has finished
   const sel = (inner) => `document.querySelector('[data-flat="${section}"] ${inner}')`;
   await ui(`${sel('.fold-toggle')}.click()`);
   await until(() => ui(`${sel('.flat-list')}.hidden && /\\d/.test(${sel('.count')}.textContent)`), 'the section folds and keeps its count');
   assert.ok(await ui(`JSON.parse(localStorage.getItem('synapse-collapsed')).includes('flat:${section}:closed')`));
   await ui(`${sel('.fold-toggle')}.click()`);
   await until(() => ui(`!${sel('.flat-list')}.hidden`), 'the section unfolds');
+  assert.ok(await ui(`[...document.querySelectorAll('[data-flat="${section}"] .session-node')].every((n) => n.getAnimations().every((an) => !an.effect.getKeyframes().some((k) => k.transform && k.transform !== 'none')))`), 'opening a section slides no row in from the top');
   console.log('PASS folding: People and the status sections fold from their headings and stay folded');
+
+  // hovering a row offers ✓ (settle) and archive; each one toggles back
+  await ui(`document.getElementById('group-by').click()`);
+  await ui(`[...document.querySelectorAll('.pop-menu button')].find((b) => b.textContent.includes('Group by project')).click()`);
+  const rowId = await ui(`[...document.querySelectorAll('.session-row')].find((r) => r.getAttribute('aria-current') !== 'page').dataset.agent`);
+  const row = (inner = '') => `document.querySelector('.session-row[data-agent=${JSON.stringify(rowId)}]${inner}')`;
+  assert.deepEqual(await ui(`[...${row()}.querySelectorAll('[data-row-act]')].map((b) => b.getAttribute('aria-label'))`), ['Settle', 'Archive']);
+  await ui(`${row(' [data-row-act="settle"]')}.click()`);
+  await until(() => ui(`!!document.querySelector('[data-shelf="settled"]')?.contains(${row()})`), 'settled into the Settled shelf');
+  assert.ok(await ui(`location.hash.includes('agent=') ? !location.hash.includes(${JSON.stringify(encodeURIComponent(rowId))}) : true`), 'settling did not open it');
+  await ui(`${row(' [data-row-act="settle"]')}.click()`);
+  await until(() => ui(`!document.querySelector('[data-shelf="settled"]')?.contains(${row()})`), 'brought back');
+  await ui(`${row(' [data-row-act="archive"]')}.click()`);
+  await until(() => ui(`!!document.querySelector('[data-shelf="archived"]')?.contains(${row()})`), 'archived');
+  await ui(`${row(' [data-row-act="archive"]')}.click()`);
+  await until(() => ui(`!document.querySelector('[data-shelf="archived"]')?.contains(${row()})`), 'unarchived');
+  console.log('PASS row actions: ✓ settles and archive archives from the row, each toggles back, without opening the agent');
 
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);
 })().catch(async (e) => {

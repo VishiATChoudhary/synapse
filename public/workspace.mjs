@@ -242,6 +242,7 @@ const ICONS = {
   activity: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
   'folder-plus': '<path d="M3 7V5a2 2 0 0 1 2-2h4l3 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M12 10v6m-3-3h6"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>',
   terminal: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7.5 9.5 3 2.5-3 2.5M13 15h4"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/><path d="M14 3v5h5"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18"/>',
@@ -323,7 +324,7 @@ function initialize() {
     const aliases = new Map(desktop.sessions.filter((s) => s.backendId).map((s) => [s.backendId, s.id]));
     const owned = desktop.sessions.filter((s) => !s.drawer).map((s) => {
       const original = existing.get(s.backendId);
-      return { ...original, ...s, owned: true, lastActivity: Math.max(s.lastActivity || 0, original?.lastActivity || 0), preview: original?.preview || (s.exited ? 'Session ended' : 'Ready for your next prompt') };
+      return { ...original, ...s, owned: true, usedAt: original?.lastActivity || 0, lastActivity: Math.max(s.lastActivity || 0, original?.lastActivity || 0), preview: original?.preview || (s.exited ? 'Session ended' : 'Ready for your next prompt') };
     });
     return { ...next, agents: [...owned, ...next.agents.filter((a) => !aliases.has(a.id))],
       edges: next.edges.map((e) => ({ ...e, from: aliases.get(e.from) || e.from, to: aliases.get(e.to) || e.to })) };
@@ -334,7 +335,7 @@ function initialize() {
       const message = event.data;
       const owns = (id) => desktop?.sessions.some((s) => s.id === id && s.pane === pane.dataset.paneKey);
       if (message?.type === 'synapse:desktop-bootstrap') {
-        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later'].map((key) => [key, getStorage(key, null)]));
+        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled'].map((key) => [key, getStorage(key, null)]));
         pane.contentWindow.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, location.origin);
       }
       if (message?.type === 'synapse:desktop-ready') sendPaneState(pane);
@@ -426,6 +427,7 @@ function initialize() {
       else if (message.key === 'k') openSearch();
       else if (message.key === 'n' && !message.shift) connectAgent();
       else if (message.key === 't') showNew(null, 'shell');
+      else if (message.shift && (message.key === 'w' || message.key === 's')) moveSelection(message.key === 'w' ? -1 : 1);
     }
     if (message?.type === 'synapse:canvas-action') sendCanvas(message.action);
   });
@@ -587,10 +589,10 @@ function initialize() {
   let snoozed = readJSON('synapse-snoozed', {}), archived = readJSON('synapse-archived', {});
   const doneSet = new Map(Array.isArray(doneSaved) ? doneSaved.map((id) => [id, Date.now()]) : Object.entries(doneSaved).filter(([, t]) => Number.isFinite(t)));
   const lastStatus = new Map(), missingSince = new Map(), busySince = new Map(); // busySince: when an agent last turned busy
-  const saveMarks = () => { setStorage('synapse-snoozed', JSON.stringify(snoozed)); setStorage('synapse-done', JSON.stringify(Object.fromEntries(doneSet))); setStorage('synapse-archived', JSON.stringify(archived)); setStorage('synapse-kept', JSON.stringify(unarchivedAt)); };
+  const saveMarks = () => { setStorage('synapse-snoozed', JSON.stringify(snoozed)); setStorage('synapse-done', JSON.stringify(Object.fromEntries(doneSet))); setStorage('synapse-archived', JSON.stringify(archived)); setStorage('synapse-kept', JSON.stringify(unarchivedAt)); setStorage('synapse-settled', JSON.stringify(settledAt)); };
   // Tidying up on its own, each step configurable (sidebar filter menu → Tidy up): a finished agent shows Done
-  // until it is a day old, then Idle; unused for 3 days it moves to Archived; a week unused, a session this app
-  // started is closed and its marks are dropped. 0 turns a step off.
+  // until it is a day old, then Idle; unused for 3 days it moves to Archived; a week unused it is ended (a session
+  // of ours closes, one in your own terminal has its process ended) and its marks are dropped. 0 turns a step off.
   const HOUR = 3_600_000, DAY = 24 * HOUR;
   const TIDY_DEFAULT = { idle: DAY, archive: 3 * DAY, close: 7 * DAY };
   let tidy = { ...TIDY_DEFAULT, ...readJSON('synapse-tidy', {}) };
@@ -598,9 +600,12 @@ function initialize() {
   // once it is free, never typed into a busy terminal (where it could land in a permission menu)
   const queued = readJSON('synapse-queue', {}); // session -> [{ id, text, at }]
   const flushing = new Map(); // session -> when its next queued prompt was sent, until it turns busy
+  const stoppedAt = new Map(); // session -> when Stop was pressed: its queue holds for a few seconds
   const saveQueue = () => { for (const k of Object.keys(queued)) if (!queued[k]?.length) delete queued[k]; setStorage('synapse-queue', JSON.stringify(queued)); };
-  const unarchivedAt = readJSON('synapse-kept', {}); // unarchived by hand: left alone for another full period
-  const usedAt = (a) => a.lastActivity || 0;
+  const unarchivedAt = readJSON('synapse-kept', {});
+  const settledAt = readJSON('synapse-settled', {}); // settled by hand (the row's ✓), until it works again // unarchived by hand: left alone for another full period
+  // last real use: for a session of ours its conversation's time when known (a restart must not count as use)
+  const usedAt = (a) => (a.owned ? a.usedAt || a.lastActivity : a.lastActivity) || 0;
   const expiring = new Set();
   const needsYou = (a) => ['waiting', 'needs_input'].includes(a.status);
   function trackStates() {
@@ -610,16 +615,20 @@ function initialize() {
       lastStatus.set(a.id, a.status);
       if (a.status === 'busy' && was !== 'busy' && was !== undefined) busySince.set(a.id, Date.now());
       if (a.status === 'busy' || needsYou(a)) flushing.delete(a.id);
-      if (queued[a.id]?.length && a.owned && !a.exited && a.status !== 'busy' && !needsYou(a) && (!flushing.has(a.id) || Date.now() - flushing.get(a.id) > 15_000)) sendQueued(a.id);
+      if (queued[a.id]?.length && a.owned && !a.exited && a.status !== 'busy' && !needsYou(a) && !(Date.now() - (stoppedAt.get(a.id) || 0) < 4000) && (!flushing.has(a.id) || Date.now() - flushing.get(a.id) > 15_000)) sendQueued(a.id);
       if (was === 'busy' && a.status !== 'busy' && !needsYou(a)) { doneSet.set(a.id, Date.now()); changed = true; }
       if (a.status === 'busy' && doneSet.delete(a.id)) changed = true;
+      if ((a.status === 'busy' || needsYou(a)) && settledAt[a.id] !== undefined) { delete settledAt[a.id]; changed = true; }
       const finished = doneSet.get(a.id);
       if (finished && tidy.idle && Date.now() - finished > tidy.idle) { doneSet.delete(a.id); changed = true; }
       const busy = a.status === 'busy' || needsYou(a), idleFor = Date.now() - Math.max(usedAt(a), finished || 0, unarchivedAt[a.id] || 0);
       if (!busy && tidy.archive && idleFor > tidy.archive && archived[a.id] === undefined && a.id !== selectedId && usedAt(a)) { archived[a.id] = Date.now(); delete snoozed[a.id]; doneSet.delete(a.id); changed = true; }
-      if (!busy && embedded && a.owned && !a.exited && tidy.close && idleFor > tidy.close && usedAt(a) && !expiring.has(a.id) && a.id !== selectedId) {
+      if (!busy && !a.remote && !a.exited && tidy.close && idleFor > tidy.close && usedAt(a) && !expiring.has(a.id) && a.id !== selectedId) {
         expiring.add(a.id);
-        desktopCall('expire', { id: a.id }).then((r) => { if (r?.closed) forget(a.id); }).catch(() => {}).finally(() => expiring.delete(a.id));
+        // ours: the app closes it; one in your own terminal: its process is ended (the terminal stays)
+        const end = a.owned ? (embedded ? desktopCall('expire', { id: a.id }) : Promise.resolve(null))
+          : api(`/api/agents/${encodeURIComponent(a.id)}/end`, { method: 'POST' }).then(() => ({ closed: true }));
+        end.then((r) => { if (r?.closed) forget(a.id); }).catch(() => {}).finally(() => expiring.delete(a.id));
       }
       const until = snoozed[a.id];
       if (until !== undefined && (needsYou(a) || (until && Date.now() >= until) || (!until && doneSet.has(a.id)))) { delete snoozed[a.id]; changed = true; }
@@ -634,6 +643,7 @@ function initialize() {
     for (const id of Object.keys(snoozed)) if (!live.has(id) && !String(id).startsWith('desktop-')) { delete snoozed[id]; changed = true; }
     for (const id of Object.keys(archived)) if (!live.has(id) && Date.now() - archived[id] > 7 * 86_400_000) { delete archived[id]; changed = true; }
     for (const id of Object.keys(unarchivedAt)) if (!live.has(id) && Date.now() - unarchivedAt[id] > 30 * DAY) { delete unarchivedAt[id]; changed = true; }
+    for (const id of Object.keys(settledAt)) if (!live.has(id) && Date.now() - settledAt[id] > 30 * DAY) { delete settledAt[id]; changed = true; }
     if (changed) saveMarks();
   }
   async function sendQueued(id, item = queued[id]?.[0]) {
@@ -662,9 +672,20 @@ function initialize() {
     queued[id] = list.filter((q) => q !== item); saveQueue(); renderQueue();
     if (b.dataset.queueEdit) { const input = $('message-input'); input.value = [item.text, input.value].filter((t) => t.trim()).join('\n'); resizeComposer(); updateComposer(); input.focus(); }
   });
+  function settle(id, on) {
+    if (on) { settledAt[id] = Date.now(); doneSet.delete(id); delete snoozed[id]; } else delete settledAt[id];
+    saveMarks(); renderSidebar();
+  }
+  $('project-list').addEventListener('click', (event) => {
+    const act = event.target.closest('[data-row-act]'); if (!act) return;
+    event.preventDefault(); event.stopPropagation();
+    const id = act.closest('.session-row')?.dataset.agent; if (!id) return;
+    if (act.dataset.rowAct === 'settle') settle(id, settledAt[id] === undefined);
+    else archive(id, archived[id] === undefined);
+  }, true);
   // a session closed for being unused: its marks, draft and cached conversation go too
   function forget(id) {
-    doneSet.delete(id); delete snoozed[id]; delete archived[id]; delete unarchivedAt[id]; delete queued[id]; saveQueue(); recentCache.delete(id);
+    doneSet.delete(id); delete snoozed[id]; delete archived[id]; delete unarchivedAt[id]; delete settledAt[id]; delete queued[id]; saveQueue(); recentCache.delete(id);
     if (drafts[id] !== undefined) { delete drafts[id]; setStorage('synapse-drafts', JSON.stringify(drafts)); }
     saveMarks();
   }
@@ -675,10 +696,10 @@ function initialize() {
     openModal('Tidy up', `<p class="dialog-copy">How long agents stay where they are before Synapse moves them along. Agents that are working or waiting for you are never touched.</p>
       <label class="field-label" for="tidy-idle">Done turns to Idle after</label>${select('tidy-idle', tidy.idle, [[HOUR, '1 hour'], [6 * HOUR, '6 hours'], [DAY, '1 day'], [3 * DAY, '3 days'], never])}
       <label class="field-label" for="tidy-archive">Unused agents go to Archived after</label>${select('tidy-archive', tidy.archive, [[DAY, '1 day'], [3 * DAY, '3 days'], [7 * DAY, '1 week'], [14 * DAY, '2 weeks'], never])}
-      <label class="field-label" for="tidy-close">Sessions this app started close after</label>${select('tidy-close', tidy.close, [[3 * DAY, '3 days'], [7 * DAY, '1 week'], [14 * DAY, '2 weeks'], [30 * DAY, '30 days'], never])}
-      <p class="field-hint">Closing ends the agent's process and clears its marks and draft here. Its conversation stays on disk and can be resumed from Past chats. Sessions running in your own terminals are only archived, never closed.</p>`, 'Save', async () => {
+      <label class="field-label" for="tidy-close">Idle agents end after</label>${select('tidy-close', tidy.close, [[3 * DAY, '3 days'], [7 * DAY, '1 week'], [14 * DAY, '2 weeks'], [30 * DAY, '30 days'], never])}
+      <p class="field-hint">Closing ends the agent's process and clears its marks and draft here. An agent in one of your own terminals is ended there and the terminal stays open. Its conversation stays on disk and can be resumed from Past chats. Friends' agents are never touched.</p>`, 'Save', async () => {
       tidy = { idle: Number($('tidy-idle').value), archive: Number($('tidy-archive').value), close: Number($('tidy-close').value) };
-      setStorage('synapse-tidy', JSON.stringify(tidy)); renderSidebar(); toast('Saved.');
+      setStorage('synapse-tidy', JSON.stringify(tidy)); renderSidebar();
     });
   }
   const stateOf = (a) => (needsYou(a) ? 'needs' : a.status === 'busy' ? 'working' : doneSet.has(a.id) ? 'done' : a.exited ? 'ended' : 'idle');
@@ -696,16 +717,18 @@ function initialize() {
   }
   const byTrigger = (x, y) => triggerAt(y.a) - triggerAt(x.a) || String(x.a.id).localeCompare(String(y.a.id));
   // rows slide from where they were to where they are (FLIP); one that moved up glows once
+  let foldingNow = false; // a section folding or opening: its rows appear in place, nothing slides
   function flipStart() {
-    if (groupBy !== 'status' || matchMedia('(prefers-reduced-motion: reduce)').matches) return null;
+    if (groupBy !== 'status' || foldingNow || matchMedia('(prefers-reduced-motion: reduce)').matches) return null;
     const at = new Map();
-    for (const [id, node] of sessionElements) if (node.isConnected) at.set(id, node.getBoundingClientRect().top);
+    // only rows on screen: a folded row measures as top 0 and would seem to come from the top
+    for (const [id, node] of sessionElements) if (node.isConnected && node.getClientRects().length) at.set(id, node.getBoundingClientRect().top);
     return at;
   }
   function flipEnd(before) {
     if (!before?.size) return;
     for (const [id, node] of sessionElements) {
-      if (!node.isConnected) continue;
+      if (!node.isConnected || !node.getClientRects().length) continue;
       if (!before.has(id)) { node.animate([{ opacity: 0, transform: 'translateY(-6px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'ease-out' }); continue; }
       const dy = before.get(id) - node.getBoundingClientRect().top;
       if (Math.abs(dy) < 2) continue;
@@ -740,7 +763,7 @@ function initialize() {
         { label: 'Send a message…', icon: 'message', run: () => messageAgent(agent) },
         ...(others.length && !agent.remote ? [{ label: 'Start a plan with…', icon: 'check', run: () => planWith(agent) }] : []),
         { label: 'Read its context', icon: 'panel-right', run: () => { navigate('session', agent.id); inspectorOpen = true; setStorage('synapse-inspector', 'open'); inspectorFile = null; inspectorSignature = ''; syncInspector(); } },
-        { label: 'Copy its handle', icon: 'copy', run: () => navigator.clipboard.writeText(agent.remote ? `${agent.name}@${agent.remote.handle || agent.remote.owner}` : agent.name).then(() => toast(`Copied ${agent.name}: use it with synapse read, send or link.`), () => toast(agent.name)) },
+        { label: 'Copy its handle', icon: 'copy', run: () => navigator.clipboard.writeText(agent.remote ? `${agent.name}@${agent.remote.handle || agent.remote.owner}` : agent.name).catch(() => toast(agent.name)) },
       ] : []),
       ...(mine ? [{ heading: 'Friends' }, { label: 'Share with a friend…', icon: 'users', run: () => { friendPreset = { who: null, agent: agent.backendId || agent.id }; addConnection('share'); } }] : []),
       '-',
@@ -759,8 +782,6 @@ function initialize() {
     saveMarks();
     if (on && selectedId === id) { const next = state.agents.find((a) => a.id !== id && !archived[a.id]); navigate(next ? 'session' : 'overview', next?.id || null); }
     renderSidebar();
-    const a = byId.get(id);
-    toast(on ? `Archived ${a ? titleOf(a) : 'session'}. It keeps running; find it under Archived.` : 'Back in the list.', on ? () => archive(id, false) : undefined);
   }
   const backend = (a) => a.backendId || a.id;
   const agentOptions2 = (omit) => state.agents.filter((a) => a.id !== omit && (!a.owned || a.backendId) && !a.remote)
@@ -780,7 +801,7 @@ function initialize() {
       const text = $('agent-note').value.trim(); if (!text) throw new Error('Write a message first.');
       if (agent.owned) await desktopCall('submit', { id: agent.id, text });
       else await api(`/api/agents/${encodeURIComponent(agent.id)}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
-      { const stale = recentCache.get(agent.id); if (stale) stale.activity = -1; } toast('Sent.');
+      { const stale = recentCache.get(agent.id); if (stale) stale.activity = -1; } 
     });
   }
   function planWith(agent) {
@@ -842,7 +863,7 @@ function initialize() {
     const shown = (entry) => !hits || hits.has(entry.agent.id) || entry.children.some(shown);
     const prune = (entry) => ({ ...entry, children: entry.children.filter(shown).map(prune) });
     // Settled: sessions that ended or rested a day fold into one row at the bottom, so the list shows current work
-    const settled = (a) => !hits && a.id !== selectedId && !doneSet.has(a.id) && (a.exited || (!['busy', 'waiting', 'needs_input'].includes(a.status) && Date.now() - (a.lastActivity || 0) > 86_400_000));
+    const settled = (a) => !hits && (settledAt[a.id] !== undefined || (a.id !== selectedId && !doneSet.has(a.id) && (a.exited || (!['busy', 'waiting', 'needs_input'].includes(a.status) && Date.now() - (a.lastActivity || 0) > 86_400_000))));
     const settledTree = (entry) => settled(entry.agent) && entry.children.every(settledTree);
     const snoozedTree = (entry) => !hits && isSnoozed(entry.agent) && entry.children.every((c) => isSnoozed(c.agent) || settledTree(c));
     const archivedTree = (entry) => !hits && isArchived(entry.agent) && entry.children.every((c) => isArchived(c.agent) || archivedTree(c));
@@ -852,7 +873,7 @@ function initialize() {
       let node = sessionElements.get(agent.id);
       if (!node) {
         node = document.createElement('div'); node.className = 'session-node';
-        node.innerHTML = '<button type="button" class="session-row"><span class="session-kind" aria-hidden="true"></span><span class="session-text"><span class="session-name"></span><span class="session-sub"></span></span><span class="session-meta"><span class="state-pill"></span><span class="status-dot" aria-hidden="true"></span><span class="session-time"></span></span></button><div class="session-children"></div>';
+        node.innerHTML = '<button type="button" class="session-row"><span class="session-kind" aria-hidden="true"></span><span class="session-text"><span class="session-name"></span><span class="session-sub"></span></span><span class="session-meta"><span class="state-pill"></span><span class="status-dot" aria-hidden="true"></span><span class="session-time"></span><span class="row-actions"><span class="row-act" role="button" tabindex="-1" data-row-act="settle"></span><span class="row-act" role="button" tabindex="-1" data-row-act="archive"></span></span></span></button><div class="session-children"></div>';
         node.firstElementChild.dataset.agent = agent.id;
         sessionElements.set(agent.id, node);
       }
@@ -869,19 +890,38 @@ function initialize() {
       // the second line says who: the agent's name, or its tool when the name is just a generated one
       const who = label === agent.name ? '' : GENERATED.test(agent.name || '') ? kindName(agent) : agent.name;
       const shared = (friends?.links || []).some((l) => l.local && (l.local.id === agent.backendId || l.local.id === agent.id));
-      const sub = [place, who].filter(Boolean).join(' · ');
-      const placeDir = place && agent.worktreePath ? agent.worktreePath : place ? agent.cwd : '';
-      const subHtml = `${shared ? `<span class="shared-mark" title="Shared with a friend">${icon('users')}</span>` : ''}${placeDir && avatarSrc(placeDir) ? `<img class="sub-avatar" alt="" loading="lazy" referrerpolicy="no-referrer" src="${escapeHtml(avatarSrc(placeDir))}" data-avatar-dir="${escapeHtml(placeDir)}">` : ''}${escapeHtml(sub)}`;
-      if (row.dataset.sub !== subHtml) {
-        row.dataset.sub = subHtml; row.querySelector('.session-sub').innerHTML = subHtml;
-        row.querySelector('.sub-avatar')?.addEventListener('error', (e) => { avatarMiss.add(e.target.dataset.avatarDir); e.target.remove(); });
+      // second line: the agent's tool (its logo) and who it is; left: the project's GitHub owner picture
+      const sub = [place, who || kindName(agent)].filter(Boolean).join(' · ');
+      const logo = LOGOS.has(agent.kind) ? agent.kind : '';
+      const subHtml = `${shared ? `<span class="shared-mark" title="Shared with a friend">${icon('users')}</span>` : ''}${logo ? `<span class="sub-kind" data-logo="${escapeHtml(logo)}" aria-hidden="true"></span>` : ''}${escapeHtml(sub)}`;
+      if (row.dataset.sub !== subHtml) { row.dataset.sub = subHtml; row.querySelector('.session-sub').innerHTML = subHtml; }
+      row.classList.add('titled');
+      const kindEl = row.querySelector('.session-kind'), orgDir = agent.remote ? '' : agent.worktreePath || agent.cwd || '';
+      const org = String(orgDir).startsWith('/') ? avatarSrc(orgDir) : '';
+      if (kindEl.dataset.org !== org || kindEl.dataset.kind !== (agent.kind || '')) {
+        kindEl.dataset.org = org; kindEl.dataset.kind = agent.kind || '';
+        kindEl.classList.toggle('org', !!org);
+        kindEl.dataset.logo = org ? '' : logo;
+        kindEl.textContent = org ? '' : initials(agent);
+        if (org) {
+          const img = document.createElement('img'); img.alt = ''; img.loading = 'lazy'; img.referrerPolicy = 'no-referrer'; img.src = org;
+          // no picture for this project: the agent's own logo, as before
+          img.onerror = () => { avatarMiss.add(orgDir); kindEl.dataset.org = ''; kindEl.classList.remove('org'); kindEl.dataset.logo = logo; kindEl.textContent = initials(agent); };
+          kindEl.append(img);
+        }
       }
-      row.classList.toggle('titled', !!(sub || shared));
-      row.querySelector('.session-kind').textContent = initials(agent);
-      row.querySelector('.session-kind').dataset.kind = agent.kind || '';
-      row.querySelector('.session-kind').dataset.logo = LOGOS.has(agent.kind) ? agent.kind : '';
       // a resting agent shows how long ago it last worked; one with a state shows that instead
       row.querySelector('.session-time').textContent = ['working', 'needs', 'done'].includes(st) || agent.exited ? '' : relativeTime(agent.lastActivity);
+      // on hover: ✓ settles it (or brings it back), the box archives it (or brings it back)
+      const isSettled = settledAt[agent.id] !== undefined, isArch = archived[agent.id] !== undefined;
+      const acts = `${isSettled}|${isArch}`;
+      if (row.dataset.acts !== acts) {
+        row.dataset.acts = acts;
+        const [settle, arch] = row.querySelectorAll('.row-act');
+        settle.innerHTML = icon(isSettled ? 'arrow-up' : 'check'); settle.title = isSettled ? 'Bring back from Settled' : 'Settle'; settle.setAttribute('aria-label', settle.title);
+        arch.innerHTML = icon(isArch ? 'arrow-up' : 'archive'); arch.title = isArch ? 'Unarchive' : 'Archive'; arch.setAttribute('aria-label', arch.title);
+        settle.hidden = isArch;
+      }
       row.title = `${label}${label === agent.name ? '' : ` · ${agent.name}`} · ${kindName(agent)} · ${activityLabel(agent)}${agent.remote ? ` · ${agent.remote.owner}'s machine` : ''}${agent.owned && groupBy === 'project' ? ' · Drag to reorder' : ''}`;
       node.dataset.depth = depth;
       sortHandle(node, row, 'session', agent.id, agent.owned && groupBy === 'project' && !place);
@@ -1084,7 +1124,7 @@ function initialize() {
   }
   $('project-list').addEventListener('pointerdown', (event) => {
     const handle = event.target.closest('[data-sort-handle]'), item = handle?.closest('[data-sort-kind]');
-    if (!item || event.button !== 0 || sidebarDrag) return;
+    if (!item || event.button !== 0 || sidebarDrag || event.target.closest('[data-row-act]')) return; // a row's own icons are clicks, never drags
     const list = $('project-list'), x0 = event.clientX, y0 = event.clientY;
     let lifted = false, ended = false, frame, items, rects, from, to, step, scroll0;
     let point = { x: x0, y: y0 }, previousY = null;
@@ -1199,6 +1239,11 @@ function initialize() {
     if (paneKey && nextView === 'session' && id !== selectedId) { persistDraft(); parent.postMessage({ type: 'synapse:pane-navigate', id }, location.origin); return; }
     persistDraft();
     recentController?.abort(); recentTarget = null; recentRequest++;
+    // another agent or page: its content eases in instead of snapping
+    if (nextView !== view || (nextView === 'session' && id !== selectedId)) {
+      const area = document.querySelector('.content-area');
+      area.classList.remove('switching'); void area.offsetWidth; area.classList.add('switching');
+    }
     view = nextView; selectedId = nextView === 'session' ? id : selectedId;
     tab = defaultTab(byId.get(selectedId)); limit = 60;
     if (nextView === 'session') {
@@ -1429,7 +1474,7 @@ function initialize() {
     if (act === 'details') { inspectorFile = null; syncInspector(); }
     else if (act === 'back') { inspectorFile.stack.pop(); const prev = inspectorFile.stack.at(-1); openFile(prev.path, prev.cwd, { back: true }); }
     else if (act === 'mode') { inspectorFile.mode = event.target.textContent === 'Source' ? 'source' : 'rendered'; renderInspector(); }
-    else if (act === 'copy') navigator.clipboard.writeText(path).then(() => toast('Path copied.'), () => toast(path));
+    else if (act === 'copy') navigator.clipboard.writeText(path).catch(() => toast(path));
     else if (path) api('/api/file/open', { method: 'POST', body: JSON.stringify({ path, reveal: act === 'reveal' }) }).catch((error) => toast(error.message));
   });
 
@@ -1607,9 +1652,18 @@ function initialize() {
     const agent = byId.get(selectedId), cached = recentCache.get(selectedId), list = $('message-list'), scroller = $('thread-scroll');
     if (!agent) return;
     if (!cached) {
-      list.innerHTML = '<div class="thread-loading"><span class="spinner" aria-hidden="true"></span>Loading conversation…</div>';
-      list.dataset.signature = ''; scroller.setAttribute('aria-busy', 'true'); return;
+      // not loaded yet: the last conversation stays, dimmed, for a moment; only a slow load shows the spinner
+      list.dataset.signature = ''; scroller.setAttribute('aria-busy', 'true');
+      if (list.dataset.waitingFor === selectedId) return;
+      list.dataset.waitingFor = selectedId; list.dataset.shownFor = '';
+      const showLoading = () => { list.classList.remove('stale'); list.innerHTML = '<div class="thread-loading"><span class="spinner" aria-hidden="true"></span>Loading conversation…</div>'; };
+      if (!list.querySelector('[data-message-key]')) showLoading();
+      else { list.classList.add('stale'); const id = selectedId; setTimeout(() => { if (list.dataset.waitingFor === id && !recentCache.has(id)) showLoading(); }, 350); }
+      return;
     }
+    // a newly opened agent eases in once its conversation is here, at its latest message
+    const arriving = list.dataset.shownFor !== selectedId;
+    if (arriving) { list.dataset.shownFor = selectedId; list.dataset.waitingFor = ''; list.classList.remove('stale', 'entering'); void list.offsetWidth; list.classList.add('entering'); reset = true; }
     scroller.setAttribute('aria-busy', 'false');
     const data = cached.data, records = messageRecords(data);
     if (tab === 'conversation' && typeof data.terminal === 'string') {
@@ -1745,6 +1799,40 @@ function initialize() {
     return result;
   }
 
+  // Pointing at an agent loads its conversation, so opening it is instant (and the keys below load the next one)
+  const prefetching = new Set();
+  async function prefetchRecent(id) {
+    const agent = byId.get(id);
+    if (!agent || id === selectedId || prefetching.has(id) || agent.remote) return;
+    const cached = recentCache.get(id);
+    if (cached && cached.activity === agent.lastActivity && cached.revision === state.messageRevision) return;
+    prefetching.add(id);
+    const activity = agent.lastActivity, revision = state.messageRevision;
+    try {
+      const data = agent.owned && !agent.backendId ? await desktopCall('output', { id })
+        : await api(`/api/agents/${encodeURIComponent(agent.backendId || id)}/recent?limit=60`);
+      if (agent.owned && !data.messages?.length && !data.chat?.length) Object.assign(data, await desktopCall('output', { id }));
+      if (id !== selectedId || !recentCache.has(id)) recentCache.set(id, { data, activity, revision, limit: 60, backend: agent.backendId, transcript: agent.transcript });
+      if (recentCache.size > 30) recentCache.delete(recentCache.keys().next().value);
+      if (id === selectedId && view === 'session') renderTimeline();
+    } catch {} finally { prefetching.delete(id); }
+  }
+  let hoverTimer = 0;
+  $('project-list').addEventListener('pointerover', (event) => {
+    const id = event.target.closest('.session-row')?.dataset.agent;
+    clearTimeout(hoverTimer); if (id) hoverTimer = setTimeout(() => prefetchRecent(id), 60);
+  });
+  // ⌘⇧W / ⌘⇧S: the agent above or below in the list as it is shown (folded sections are skipped)
+  function moveSelection(step) {
+    const rows = [...$('project-list').querySelectorAll('.session-row')].filter((row) => row.offsetParent);
+    if (!rows.length) return;
+    const at = rows.findIndex((row) => row.dataset.agent === selectedId && view === 'session');
+    const next = rows[at < 0 ? (step > 0 ? 0 : rows.length - 1) : Math.max(0, Math.min(rows.length - 1, at + step))];
+    if (!next || (at >= 0 && next === rows[at])) return;
+    navigate('session', next.dataset.agent);
+    next.scrollIntoView({ block: 'nearest' });
+    const after = rows[rows.indexOf(next) + step]; if (after) prefetchRecent(after.dataset.agent);
+  }
   async function loadRecent(force = false) {
     const agent = byId.get(selectedId); if (view !== 'session' || !agent || (!paneKey && paneFrames.size && !$('split-view').hidden)) return;
     const cached = recentCache.get(agent.id), revision = state.messageRevision, activity = agent.lastActivity;
@@ -1787,6 +1875,8 @@ function initialize() {
     if (waitingNow ? approvalFor !== agent.id : approvalFor) paintApproval();
     $('message-input').setAttribute('aria-label', agent ? `Message ${agent.name}` : 'Message this agent');
     composerPaint?.();
+    // working: Stop interrupts it (Escape, how Claude Code and Codex stop a turn); typing still queues the next prompt
+    $('stop-agent').hidden = !(embedded && agent?.owned && !agent.exited && agent.status === 'busy');
     $('send-message').disabled = !agent || agent.exited || !connected || sending || (!$('message-input').value.trim() && !attachments.get(selectedId)?.length);
     $('composer').setAttribute('aria-busy', String(sending));
     if ($('send-message').dataset.sending !== String(sending)) { $('send-message').dataset.sending = String(sending); $('send-message').innerHTML = sending ? '<span class="spinner" aria-hidden="true"></span>' : icon('arrow-up'); }
@@ -1821,7 +1911,6 @@ function initialize() {
       if (holding) return; // queued: nothing new in the conversation yet
       const stale = recentCache.get(id); if (stale) stale.activity = -1;
       if (selectedId === id) { await loadRecent(true); $('thread-scroll').scrollTop = $('thread-scroll').scrollHeight; }
-      toast(byId.get(id)?.owned ? 'Prompt sent to your session.' : 'Message queued. The agent will pick it up on its next prompt or inbox check.');
     } catch (error) {
       if (selectedId === id) { $('send-error').textContent = error.message; $('send-error').hidden = false; $('message-input').setAttribute('aria-invalid', 'true'); }
       else toast(error.message);
@@ -1934,23 +2023,39 @@ function initialize() {
   const defaultTab = (agent) => (embedded && agent?.owned && agent.kind === 'shell' ? 'terminal' : 'conversation');
   let drawerId = null, drawerCwd = null;
   const drawerShells = new Map(); // folder -> the drawer shell there, kept while it runs
+  // the drawer slides open and shut; its terminal joins once it is open (a terminal resized every frame stutters)
+  let drawerAnim = null, drawerClosing = false;
+  function slideDrawer(open) {
+    const el = $('term-drawer'), h = el.scrollHeight;
+    drawerAnim?.cancel();
+    el.style.overflow = 'hidden';
+    drawerAnim = el.animate(open ? [{ height: '0px', opacity: 0 }, { height: `${h}px`, opacity: 1 }] : [{ height: `${h}px`, opacity: 1 }, { height: '0px', opacity: 0 }],
+      { duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 200, easing: 'cubic-bezier(.2, .8, .2, 1)' });
+    const anim = drawerAnim;
+    return anim.finished.then(() => true, () => false).finally(() => { if (drawerAnim === anim) { drawerAnim = null; el.style.overflow = ''; } });
+  }
   async function openDrawer(quiet = false) {
     const agent = byId.get(selectedId); if (!embedded || !agent?.cwd) return;
-    const cwd = agent.cwd;
+    const cwd = agent.cwd, slide = $('term-drawer').hidden || drawerClosing;
+    drawerClosing = false;
     drawerCwd = cwd; $('term-drawer').hidden = false; $('open-terminal').setAttribute('aria-expanded', 'true');
     $('term-drawer-folder').textContent = cwd.replace(/^\/Users\/[^/]+/, '~');
     $('drawer-host').style.height = `${Math.max(120, Math.min(innerHeight - 220, Number(getStorage('synapse-drawer-h')) || 260))}px`;
+    const sliding = slide ? slideDrawer(true) : null;
     let id = drawerShells.get(cwd);
     if (!id || !desktop?.sessions.some((s) => s.id === id && !s.exited)) {
       try { id = (await desktopCall('new-session', { cwd, kind: 'shell', drawer: true })).id; drawerShells.set(cwd, id); desktop = await desktopCall('state'); }
       catch (e) { if (!quiet) toast(e.message); toggleDrawer(false); return; }
     }
-    if (drawerCwd !== cwd) return; // the selection moved on while it started
+    if (sliding) await sliding;
+    if (drawerCwd !== cwd || drawerClosing) return; // the selection moved on, or it was shut, while it started
     drawerId = id; syncDocks(quiet ? false : 'drawer');
   }
-  function toggleDrawer(open = $('term-drawer').hidden) {
+  function toggleDrawer(open = $('term-drawer').hidden || drawerClosing) {
     if (open) return openDrawer();
-    $('term-drawer').hidden = true; drawerId = drawerCwd = null; $('open-terminal').setAttribute('aria-expanded', 'false'); syncDocks();
+    drawerId = drawerCwd = null; drawerClosing = true; syncDocks(); // the terminal leaves first, then the drawer slides shut
+    $('open-terminal').setAttribute('aria-expanded', 'false');
+    slideDrawer(false).then((done) => { if (done && drawerClosing) { drawerClosing = false; $('term-drawer').hidden = true; } });
     if (tab !== 'terminal') $('message-input').focus();
   }
   $('term-drawer-grip').addEventListener('pointerdown', (event) => {
@@ -1973,7 +2078,7 @@ function initialize() {
       .map((el) => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height }; });
     const want = {
       main: session && agent.owned && tab === 'terminal' ? { id: agent.id, rect: dockRect($('term-host')), covers } : null,
-      drawer: session && drawerId && !$('term-drawer').hidden ? { id: drawerId, rect: dockRect($('drawer-host')), covers } : null,
+      drawer: session && drawerId && !$('term-drawer').hidden && !drawerAnim ? { id: drawerId, rect: dockRect($('drawer-host')), covers } : null,
     };
     for (const place of ['main', 'drawer']) {
       const w = want[place]?.rect ? want[place] : null, sig = w ? JSON.stringify(w) : '';
@@ -2453,6 +2558,12 @@ function initialize() {
     if (recall) recall.shown = input.value;
   });
   $('composer').addEventListener('submit', sendMessage);
+  $('stop-agent').onclick = async () => {
+    const id = selectedId; $('stop-agent').disabled = true;
+    try { await desktopCall('keys', { id, key: 'escape' }); stoppedAt.set(id, Date.now()); } // prompts already queued wait a few seconds after a stop
+    catch (e) { toast(e.message); }
+    finally { setTimeout(() => { $('stop-agent').disabled = false; }, 800); }
+  };
   $('message-input').addEventListener('input', () => {
     resizeComposer(); updateComposer(); $('send-error').hidden = true; $('message-input').removeAttribute('aria-invalid');
     if (paneKey) persistDraft();
@@ -2708,13 +2819,22 @@ function initialize() {
     if (button.id === 'group-by') return groupMenu();
     if (button.dataset.foldToggle) {
       const key = `${button.dataset.foldToggle}:closed`;
-      collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
-      setStorage('synapse-collapsed', JSON.stringify([...collapsed])); renderSidebar(); return;
+      const opening = collapsed.delete(key); if (!opening) collapsed.add(key);
+      setStorage('synapse-collapsed', JSON.stringify([...collapsed]));
+      foldingNow = true; try { renderSidebar(); } finally { foldingNow = false; }
+      // the opened list fades in where it is
+      const list = button.closest('.flat-group, .people-group')?.querySelector('.flat-list, .people-list');
+      if (opening && list && !matchMedia('(prefers-reduced-motion: reduce)').matches) list.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
+      return;
     }
     if (button.dataset.settledToggle) {
       const key = `${button.dataset.settledToggle === '1' ? 'settled' : button.dataset.settledToggle}:open`;
-      collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
-      setStorage('synapse-collapsed', JSON.stringify([...collapsed])); renderSidebar(); return;
+      const opening = !collapsed.delete(key); if (opening) collapsed.add(key);
+      setStorage('synapse-collapsed', JSON.stringify([...collapsed]));
+      foldingNow = true; try { renderSidebar(); } finally { foldingNow = false; }
+      const list = button.closest('.settled-group')?.querySelector('.settled-list');
+      if (opening && list && !matchMedia('(prefers-reduced-motion: reduce)').matches) list.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
+      return;
     }
     if (button.dataset.worktreeToggle) {
       const key = button.dataset.worktreeToggle; collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
@@ -2728,7 +2848,7 @@ function initialize() {
     if (button.dataset.friendDeny) return answerFriend(button, 'deny');
     if (button.dataset.friendCancel) return answerFriend(button, 'cancel');
     if (button.hasAttribute('data-copy-code')) { if (await copyText(button.closest('.code-block').querySelector('code').textContent)) { button.textContent = 'Copied'; setTimeout(() => { if (button.isConnected) button.textContent = 'Copy code'; }, 2000); } return; }
-    if (button.hasAttribute('data-copy-message')) { const message = renderedMessages.get(button.closest('[data-message-key]').dataset.messageKey); if (message && await copyText(message.text)) toast('Message copied.'); return; }
+    if (button.hasAttribute('data-copy-message')) { const message = renderedMessages.get(button.closest('[data-message-key]').dataset.messageKey); if (message && await copyText(message.text)) { button.innerHTML = icon('check'); setTimeout(() => { button.innerHTML = icon('copy'); }, 1200); } return; } // the button itself says it worked
     const action = button.dataset.action;
     if (action === 'connect') connectAgent();
     if (action === 'desktop-terminal') runDesktop('terminal', { id: selectedId });
@@ -2758,6 +2878,7 @@ function initialize() {
       const cwd = byId.get(selectedId)?.cwd || desktop?.projects[0]?.worktrees[0]?.path;
       if (kind && cwd) { event.preventDefault(); runDesktop('new-session', { cwd, kind }); } return;
     }
+    if ((event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && ['w', 's'].includes(key) && !paneKey) { event.preventDefault(); moveSelection(key === 'w' ? -1 : 1); return; }
     if (embedded && (event.metaKey || event.ctrlKey)) {
       if (key === 'n') { event.preventDefault(); if (event.shiftKey) runDesktop('worktree', { key: byId.get(selectedId)?.projectKey || desktop?.projects[0]?.key }); else connectAgent(); return; }
       if (key === 't') { event.preventDefault(); showNew(null, 'shell'); return; }
@@ -2811,7 +2932,8 @@ function initialize() {
   if (embedded) parent.postMessage({ type: 'synapse:desktop-ready' }, '*');
   // the live work line's clock
   setInterval(() => { for (const el of document.querySelectorAll('.work-fold.live .work-time[data-since]')) { const since = Number(el.dataset.since); el.textContent = since ? duration(Math.max(0, Date.now() - since)) : ''; } }, 1000);
-  if (embedded && !paneKey) { setInterval(() => syncDocks(), 200); addEventListener('resize', () => syncDocks()); }
+  // docked terminals follow the page every frame (a sidebar sliding, a window resizing); only changes are sent
+  if (embedded && !paneKey) { const follow = () => { syncDocks(); requestAnimationFrame(follow); }; requestAnimationFrame(follow); }
 }
 
 // other pages (the file viewer) import the helpers above without starting a workspace
@@ -2825,7 +2947,7 @@ if (typeof document !== 'undefined' && document.getElementById('workspace')) {
         const origin = new URLSearchParams(location.search).has('pane') ? location.origin : 'null';
         if (event.source !== parent || event.origin !== origin || event.data?.type !== 'synapse:desktop-bootstrap') return;
         clearTimeout(timer); removeEventListener('message', receive);
-        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later'];
+        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled'];
         for (const key of keys) {
           try {
             const value = event.data.preferences?.[key];

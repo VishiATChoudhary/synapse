@@ -100,6 +100,20 @@ const queue = () => ui(`[...document.querySelectorAll('#prompt-queue .queued-tex
   await ui(`document.querySelector('#prompt-queue [data-queue-now]').click()`);
   await until(() => typed().includes('urgent'), 'Send now types it right away');
   console.log('PASS queue: held while it waits on a question, sent one at a time in order once free; Send now skips the line');
+
+  // Stop: shown while it works, sends Escape (how Claude Code and Codex interrupt a turn); gone once it is idle
+  await until(() => ui(`!document.getElementById('stop-agent').hidden`), 'Stop while it works');
+  const before = typed().length;
+  await ui(`document.getElementById('stop-agent').click()`);
+  await until(() => typed().slice(before).includes('\x1b'), 'Stop sends Escape to the agent');
+  set(0, 'idle');
+  await until(() => ui(`document.getElementById('stop-agent').hidden`), 'no Stop when idle');
+  // sending says nothing: no pop-up
+  await send('quiet one');
+  await until(() => typed().includes('quiet one'), 'sent straight away while idle, even right after Stop', 3000);
+  await sleep(500);
+  assert.equal(await ui(`document.getElementById('toast').hidden`), true, 'no pop-up after sending');
+  console.log('PASS stop and quiet send: Stop interrupts a working agent; sending shows no pop-up');
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);
 })().catch(async (e) => {
   failed = true; console.error(e); console.error('page errors:', errors);
