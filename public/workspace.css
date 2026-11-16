@@ -975,3 +975,22 @@ body.sorting .session-row .row-actions { display: none; }
 .session-kind.org { background: none; -webkit-mask: none; mask: none; box-shadow: none; overflow: hidden; border-radius: 4px; }
 .session-kind.org img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .sub-kind { display: inline-block; width: 12px; height: 12px; flex: none; vertical-align: -2px; margin-inline-end: 5px; color: var(--color-muted); background-size: 12px; -webkit-mask-size: 12px; mask-size: 12px; }
+
+/* Typing and sending: the box grows with its text, the send button wakes up as soon as there is something to
+   send, your prompt rises into the conversation the moment you send it, and new entries ease in. */
+.composer textarea { field-sizing: content; caret-color: var(--color-focus); }
+.composer { transition: border-color 160ms ease, box-shadow 200ms ease; }
+.composer:focus-within { box-shadow: var(--shadow-composer), 0 0 0 3px color-mix(in srgb, var(--color-focus) 10%, transparent); }
+.send-button { transition: opacity 140ms ease, transform 160ms cubic-bezier(.2, .9, .3, 1.3); }
+.send-button:disabled { transform: scale(.88); }
+.send-button.ready { animation: send-ready 260ms cubic-bezier(.2, .9, .3, 1.4); }
+.send-button:active:not(:disabled) { transform: scale(.9); }
+@keyframes send-ready { 0% { transform: scale(.88); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
+.message.user.rise { animation: prompt-rise 340ms cubic-bezier(.16, 1, .3, 1) both; transform-origin: 100% 100%; }
+.message.user.sent-now .message-foot { opacity: .55; }
+@keyframes prompt-rise { from { opacity: 0; transform: translateY(26px) scale(.96); } to { opacity: 1; transform: none; } }
+.fresh-in { animation: entry-in 260ms ease-out both; }
+@keyframes entry-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .message.user.rise, .fresh-in, .send-button.ready { animation: none; }
+}

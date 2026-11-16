@@ -137,6 +137,43 @@ const queue = () => ui(`[...document.querySelectorAll('#prompt-queue .queued-tex
   set(0, 'idle');
   await until(() => ui(`!document.querySelector('.work-fold.live') && !!document.querySelector('.work-fold:not(.live)')`), 'the live line ends once it is idle', 8000);
   console.log('PASS conversation: a pasted image shows as a picture; the live line becomes "Worked for" once the agent is idle');
+
+  // sending: the prompt shows at once (before the agent's transcript has it) and becomes that entry without blinking
+  const file = path.join(dir, `${sessionId}.jsonl`);
+  await sleep(4500); // past the pause after Stop
+  await send('hello from the test');
+  assert.equal(await ui(`[...document.querySelectorAll('.message.user.sent-now')].some((m) => m.textContent.includes('hello from the test'))`), true, 'shown the moment it is sent');
+  assert.equal(await ui(`document.querySelector('#message-input').value`), '', 'the box empties at once');
+  await ui(`[...document.querySelectorAll('.message.user.sent-now')].find((m) => m.textContent.includes('hello from the test')).__mark = 1`);
+  if (process.env.SEND_SHOT) { await ui(`document.querySelector('#message-input').focus(); document.querySelector('#message-input').value = 'typing the next one'; document.querySelector('#message-input').dispatchEvent(new Event('input', { bubbles: true }))`); await sleep(400); fs.writeFileSync(process.env.SEND_SHOT, (await win.webContents.capturePage()).toPNG()); await ui(`document.querySelector('#message-input').value = ''; document.querySelector('#message-input').dispatchEvent(new Event('input', { bubbles: true }))`); }
+  await until(() => typed().includes('hello from the test'), 'typed into the agent');
+  fs.appendFileSync(file, line({ type: 'user', timestamp: new Date().toISOString(), message: { role: 'user', content: 'hello from the test' } }, 90) + '\n');
+  await until(() => ui(`![...document.querySelectorAll('.message.user.sent-now')].some((m) => m.textContent.includes('hello from the test')) && [...document.querySelectorAll('.message.user')].some((m) => m.__mark === 1 && m.textContent.includes('hello from the test'))`), 'the shown prompt became its transcript entry, same element');
+  assert.equal(await ui(`[...document.querySelectorAll('.message.user')].filter((m) => m.textContent.includes('hello from the test')).length`), 1, 'shown once');
+  console.log('PASS send: the prompt shows at once and the box empties; it turns into its transcript entry without a second copy');
+
+  // typing: a keystroke is cheap, and the send button wakes up with the first character
+  const cost = await ui(`(() => { const i = document.querySelector('#message-input'); const t0 = performance.now(); for (let n = 0; n < 200; n++) { i.value += 'x'; i.dispatchEvent(new Event('input', { bubbles: true })); void i.offsetHeight; } const ms = (performance.now() - t0) / 200; const on = !document.getElementById('send-message').disabled; i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); return { ms, on }; })()`);
+  console.log(`keystroke: ${cost.ms.toFixed(3)} ms`);
+  assert.ok(cost.on, 'send button on while there is text');
+  assert.ok(cost.ms < 4, `a keystroke costs ${cost.ms} ms`);
+
+  // the whole history: 600 more entries; scrolling up loads them all, keeping what you read in place
+  const older = [];
+  for (let i = 0; i < 300; i++) older.push({ type: 'user', timestamp: new Date(t0 - (400 - i) * 60_000).toISOString(), message: { role: 'user', content: `old prompt ${i}` } }, { type: 'assistant', timestamp: new Date(t0 - (400 - i) * 60_000 + 1000).toISOString(), message: { role: 'assistant', content: [{ type: 'text', text: `old answer ${i}` }] } });
+  fs.writeFileSync(file, older.map((o, i) => line(o, 1000 + i)).join('\n') + '\n' + fs.readFileSync(file, 'utf8'));
+  await ui(`document.querySelector('#message-input').value = 'x'; document.querySelector('#message-input').dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('#message-input').value = ''`);
+  await until(async () => { await ui(`document.getElementById('thread-scroll').scrollTop = document.getElementById('thread-scroll').scrollHeight; document.getElementById('thread-scroll').dispatchEvent(new Event('scroll'))`); return ui(`[...document.querySelectorAll('.message')].some((m) => m.textContent.includes('old answer 299'))`); }, 'the newest old entries show');
+  for (let n = 0; n < 40 && !(await ui(`[...document.querySelectorAll('.message')].some((m) => m.textContent.includes('old prompt 0'))`)); n++) {
+    // at the top: the first entry there is what you are reading; it must stay where it is once older ones load
+    const before = await ui(`(() => { const s = document.getElementById('thread-scroll'); s.scrollTop = 0; const el = [...document.querySelectorAll('#message-list > [data-message-key]')].find((m) => m.getBoundingClientRect().bottom > s.getBoundingClientRect().top); return { key: el?.dataset.messageKey, top: el?.getBoundingClientRect().top }; })()`);
+    await sleep(700);
+    const after = await ui(`(() => { const el = document.querySelector('[data-message-key="${before.key}"]'); return el ? el.getBoundingClientRect().top : null; })()`);
+    const top = await ui(`document.getElementById('thread-scroll').scrollTop`);
+    if (top > 0 && after != null) assert.ok(Math.abs(after - before.top) < 60, `kept in place: ${before.top} -> ${after}`);
+  }
+  assert.ok(await ui(`[...document.querySelectorAll('.message')].some((m) => m.textContent.includes('old prompt 0'))`), 'the first prompt of a 600-entry history is reachable');
+  console.log('PASS history: scrolling up loads the whole conversation, page by page');
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);
 })().catch(async (e) => {
   failed = true; console.error(e); console.error('page errors:', errors);

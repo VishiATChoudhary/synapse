@@ -402,8 +402,9 @@ async function handleRequest(req, res) {
   if (recent && req.method === 'GET') {
     const a = agents().find((x) => x.id === recent[1]);
     if (!a) return json(res, 404, { error: 'gone' });
-    const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit')) || 14));
-    const { messages } = readAgentMessages(a, null, { tailBytes: 600_000 });
+    const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit')) || 14));
+    // the window widens until it holds one more than asked (so "more" is known) or the whole transcript
+    const { messages } = readAgentMessages(a, null, { tailBytes: 600_000, minMessages: limit + 1 });
     const chat = readJSON(FILES.messages, []).filter((m) => m.from === a.id || m.to === a.id).slice(-100);
     return json(res, 200, {
       messages: messages.slice(-limit).map((m) => ({ ...m, text: m.text.slice(0, 16_000) })),

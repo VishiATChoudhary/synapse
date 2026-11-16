@@ -471,6 +471,8 @@ function initialize() {
   let storedCollapsed;
   try { storedCollapsed = JSON.parse(getStorage('synapse-collapsed', '[]')); } catch {}
   const collapsed = new Set(Array.isArray(storedCollapsed) ? storedCollapsed : []);
+  const outgoing = new Map(); // session -> prompts just sent, shown at once until the transcript has them
+  let sendingSlow = false, olderAnchor = null, loadingOlder = false; // the history above, loaded as you scroll up
   let sending = false, recentController, recentRequest = 0, recentTarget, recentDirty = false, limit = 60;
   let source, stateFrame = 0, pendingState, toastTimer, draftTimer, flowTimer;
   let composerPaint = null; // set once the composer's highlighting exists; drafts loaded before then repaint on input
@@ -1645,7 +1647,12 @@ function initialize() {
   }
 
   function messageRecords(data) {
-    const conversation = (data.messages || []).map((message, index) => ({ ...message, type: 'transcript', time: new Date(message.ts).getTime() || 0, key: `transcript-${message.ts}-${index}-${hash(message.text)}` }));
+    // keyed by content, not position: loading older entries (or a new one pushing the window) keeps every element
+    const seen = new Map();
+    const conversation = (data.messages || []).map((message) => {
+      const base = `transcript-${message.ts}-${hash(message.text)}`, n = seen.get(base) || 0; seen.set(base, n + 1);
+      return { ...message, type: 'transcript', time: new Date(message.ts).getTime() || 0, key: n ? `${base}-${n}` : base };
+    });
     const messages = (data.chat || []).map((message) => ({ ...message, type: 'shared', time: message.t, key: message.id || `shared-${message.t}-${hash(message.text)}`, human: message.from === 'synapse-user' }));
     return (tab === 'messages' ? messages : [...conversation, ...messages.filter((message) => message.human)]).sort((a, b) => a.time - b.time);
   }
@@ -1681,7 +1688,7 @@ function initialize() {
     }
     $('message-count').textContent = data.chat?.length || 0;
     $('messages-tab').setAttribute('aria-label', `Messages (${data.chat?.length || 0})`);
-    const signature = JSON.stringify([selectedId, tab, limit, records.map((record) => [record.key, record.delivered]), data.hasMore, agent.name, agent.status, busySince.get(agent.id) || 0]); // status: the live line ends when it stops
+    const signature = JSON.stringify([selectedId, tab, limit, records.map((record) => [record.key, record.delivered]), data.hasMore, agent.name, agent.status, busySince.get(agent.id) || 0, (outgoing.get(agent.id) || []).map((o) => o.key)]); // status: the live line ends when it stops
     if (list.dataset.signature === signature && !reset) return;
     const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 90, previousTop = scroller.scrollTop;
     list.dataset.signature = signature;
@@ -1697,15 +1704,32 @@ function initialize() {
     if (!dateHeader) { dateHeader = document.createElement('p'); dateHeader.className = 'thread-date'; }
     dateHeader.textContent = date && new Date(date).toDateString() !== new Date().toDateString() ? new Date(date).toLocaleDateString(undefined, { month: 'long', day: 'numeric' }) : 'Today';
     desired.push(dateHeader);
-    if (tab === 'conversation' && data.hasMore && limit < 200) {
+    if (tab === 'conversation' && data.hasMore) {
       const load = document.createElement('button'); load.className = 'text-button'; load.dataset.action = 'load-older'; load.textContent = 'Load earlier messages'; desired.push(load);
     }
+    // a prompt shown when it was sent becomes its transcript entry (the same element: nothing blinks)
+    const out = (outgoing.get(agent.id) || []).filter((o) => Date.now() - o.at < 60_000);
+    const claimed = new Set();
+    const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
+    const sentAfter = (o) => records.filter((r) => r.type === 'transcript' && r.role === 'user' && !claimed.has(r.key) && r.time >= o.at - 3000);
+    // its own text first; then (an agent may rewrite a prompt, e.g. pasted images) the first prompt after it was sent
+    for (const pass of [(o, r) => norm(r.text) === norm(o.text) || norm(r.text).startsWith(norm(o.text).slice(0, 200)), () => true]) for (const o of [...out]) {
+      const hit = sentAfter(o).find((r) => pass(o, r));
+      if (!hit) continue;
+      claimed.add(hit.key); out.splice(out.indexOf(o), 1);
+      const el = existing.get(o.key);
+      if (el && !existing.has(hit.key)) { existing.delete(o.key); el.dataset.messageKey = hit.key; existing.set(hit.key, el); }
+    }
+    if (out.length) outgoing.set(agent.id, out); else outgoing.delete(agent.id);
     const fresh = [], items = [];
     for (const message of records) {
       const user = message.role === 'user' || message.human, tool = message.tool;
       const messageSignature = `${message.key}:${message.delivered}:${agent.name}`;
       let element = existing.get(message.key);
-      if (!element) { element = document.createElement(tool ? 'details' : 'article'); element.dataset.messageKey = message.key; }
+      if (!element) {
+        element = document.createElement(tool ? 'details' : 'article'); element.dataset.messageKey = message.key;
+        if (!reset) element.dataset.enter = '1'; // new while you watch: it eases in
+      }
       if (element.dataset.signature !== messageSignature) {
         element.dataset.signature = messageSignature;
         fresh.push(element);
@@ -1713,11 +1737,11 @@ function initialize() {
         if (tool) {
           // one quiet line per tool call; opening it shows the full call when the line had to clip it
           const t = toolSummary(message.text) || { verb: 'Used a tool', icon: 'tool', what: message.text.replace(/^\[|\]$/g, '') };
-          element.className = 'tool-message';
+          element.className = `tool-message${element.dataset.enter ? ' fresh-in' : ''}`;
           element.innerHTML = `<summary>${toolRow(t)}${icon('chevron-right')}</summary><pre>${escapeHtml(message.text.replace(/^\[|\]$/g, ''))}</pre>`;
         } else {
           const peer = message.type === 'shared' && !message.human;
-          element.className = `message ${user ? 'user' : peer ? 'peer' : 'assistant'}`;
+          element.className = `message ${user ? 'user' : peer ? 'peer' : 'assistant'}${element.dataset.enter ? ' fresh-in' : ''}`;
           const sender = peer ? byId.get(message.from) || { kind: '' } : agent;
           const delivery = message.human ? `<span class="queued-label">${icon(message.delivered ? 'check' : 'clock')}${message.delivered ? 'Picked up by agent' : 'Queued for next prompt'}</span>` : '';
           // replies read as plain prose under your prompt; only agent-to-agent notes say who wrote them
@@ -1729,12 +1753,51 @@ function initialize() {
       }
       items.push({ message, element });
     }
-    desired.push(...foldWork(items, existing, agent));
+    const folded = foldWork(items, existing, agent);
+    if (out.length) {
+      // just sent: your prompt sits at the bottom, with the live line under it
+      const live = folded.findIndex((el) => el.dataset.messageKey === 'live:next');
+      const tail = live >= 0 ? folded.splice(live, 1) : [];
+      folded.push(...out.map((o) => outgoingBubble(o, existing)), ...tail);
+    }
+    desired.push(...folded);
     syncChildren(list, desired);
     if (fresh.length) linkFiles(fresh, agent.cwd);
-    if (reset || nearBottom) { scroller.scrollTop = scroller.scrollHeight; $('jump-latest').hidden = true; }
+    // older entries came in above: keep what you were reading where it was
+    const anchorEl = olderAnchor && !reset && Date.now() - olderAnchor.at < 15_000 && records[0]?.key !== olderAnchor.firstKey && list.querySelector(`[data-message-key="${CSS.escape(olderAnchor.key)}"]`);
+    if (anchorEl) { scroller.scrollTop = previousTop + anchorEl.getBoundingClientRect().top - olderAnchor.top; olderAnchor = null; }
+    else if (reset || nearBottom) { scroller.scrollTop = scroller.scrollHeight; $('jump-latest').hidden = true; }
     else { scroller.scrollTop = previousTop; $('jump-latest').hidden = false; }
   }
+
+  function outgoingBubble(o, existing) {
+    let el = existing.get(o.key);
+    if (el) return el;
+    el = document.createElement('article'); el.className = 'message user sent-now rise'; el.dataset.messageKey = o.key;
+    const pics = sentImages(o.text);
+    const thumbs = pics.images.length ? `<div class="message-images">${pics.images.map((p) => `<button type="button" data-file="${escapeHtml(p)}" title="${escapeHtml(p)}"><img alt="" src="/api/file/raw?${new URLSearchParams({ path: p })}"></button>`).join('')}</div>` : '';
+    el.innerHTML = `${thumbs}${pics.text.trim() ? `<div class="message-body md">${messageBody(pics.text, true, false)}</div>` : ''}<footer class="message-foot"><time>${new Date(o.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time></footer>`;
+    return el;
+  }
+
+  // The whole history, a page at a time: scrolling near the top loads the entries before (as does the button)
+  async function loadOlder() {
+    const cached = recentCache.get(selectedId);
+    if (loadingOlder || !cached?.data?.hasMore || tab !== 'conversation') return;
+    loadingOlder = true;
+    const scroller = $('thread-scroll');
+    // the entry you are reading stays put once the ones before it are in
+    const top = scroller.getBoundingClientRect().top, el = [...$('message-list').querySelectorAll(':scope > [data-message-key]')].find((e) => e.getBoundingClientRect().bottom > top);
+    olderAnchor = el ? { key: el.dataset.messageKey, top: el.getBoundingClientRect().top, firstKey: messageRecords(cached.data)[0]?.key, at: Date.now() } : null;
+    limit = Math.min(5000, Math.max(limit, cached.limit || 0) + 150);
+    try { await loadRecent(true); } finally { loadingOlder = false; }
+  }
+  $('thread-scroll').addEventListener('scroll', () => { if ($('thread-scroll').scrollTop < 400) loadOlder(); }, { passive: true });
+  // an entry eases in once: moved later (into a fold, or out of the live line) it does not play again
+  $('message-list').addEventListener('animationend', (event) => {
+    const el = event.target;
+    if (el.classList?.contains('fresh-in') || el.classList?.contains('rise')) { el.classList.remove('fresh-in', 'rise'); delete el.dataset.enter; }
+  });
 
   // Like a chat app's "Worked for 2m": in each finished turn, the tool calls and the agent's notes between them
   // (its running commentary) fold into one row above the final answer. The turn still running is a single live
@@ -1882,12 +1945,18 @@ function initialize() {
     composerPaint?.();
     // working: Stop interrupts it (Escape, how Claude Code and Codex stop a turn); typing still queues the next prompt
     $('stop-agent').hidden = !(embedded && agent?.owned && !agent.exited && agent.status === 'busy');
-    $('send-message').disabled = !agent || agent.exited || !connected || sending || (!$('message-input').value.trim() && !attachments.get(selectedId)?.length);
+    paintSend();
     $('composer').setAttribute('aria-busy', String(sending));
-    if ($('send-message').dataset.sending !== String(sending)) { $('send-message').dataset.sending = String(sending); $('send-message').innerHTML = sending ? '<span class="spinner" aria-hidden="true"></span>' : icon('arrow-up'); }
+    if ($('send-message').dataset.sending !== String(sendingSlow)) { $('send-message').dataset.sending = String(sendingSlow); $('send-message').innerHTML = sendingSlow ? '<span class="spinner" aria-hidden="true"></span>' : icon('arrow-up'); }
   }
 
+  function paintSend() {
+    const agent = byId.get(selectedId), button = $('send-message');
+    const on = !!agent && !agent.exited && connected && !sending && !!($('message-input').value.trim() || attachments.get(selectedId)?.length);
+    if (button.disabled === on) { button.disabled = !on; if (on) { button.classList.remove('ready'); void button.offsetWidth; button.classList.add('ready'); } }
+  }
   function resizeComposer() {
+    if (CSS.supports('field-sizing', 'content')) return; // the box grows with its text by itself
     const input = $('message-input'); input.style.height = 'auto'; input.style.height = `${Math.max(44, Math.min(input.scrollHeight, 200))}px`;
   }
 
@@ -1897,29 +1966,46 @@ function initialize() {
     const id = selectedId, images = attachments.get(id) || [], typed = $('message-input').value.trim(), original = $('message-input').value;
     const text = [typed, images.map(quotePath).join(' ')].filter(Boolean).join(' ');
     if (!text) return;
-    sending = true; updateComposer(); $('send-error').hidden = true;
+    sending = true; $('send-error').hidden = true;
+    const slow = setTimeout(() => { sendingSlow = true; updateComposer(); }, 700); // the button only spins when it is slow
+    updateComposer();
+    const agent = byId.get(id), holding = agent.owned && (agent.status === 'busy' || needsYou(agent) || queued[id]?.length || flushing.has(id));
+    // sent straight in: the prompt shows in the conversation at once and the box empties; an error puts it back
+    const now = agent.owned && !holding ? { key: `out:${Date.now().toString(36)}`, text, at: Date.now() } : null;
+    if (now) {
+      outgoing.set(id, [...(outgoing.get(id) || []), now]);
+      $('message-input').value = ''; drafts[id] = ''; persistDraft(); resizeComposer(); attachments.delete(id); renderAttachments(); updateComposer();
+      renderTimeline(); $('thread-scroll').scrollTo({ top: $('thread-scroll').scrollHeight, behavior: 'smooth' });
+    }
     try {
-      const agent = byId.get(id), tagged = [...taggedAgents(text).values()].filter((a) => (!a.owned || a.backendId) && (!agent.owned || agent.backendId)); // a session Synapse has not matched to its agent yet can't be linked
+      const tagged = [...taggedAgents(text).values()].filter((a) => (!a.owned || a.backendId) && (!agent.owned || agent.backendId)); // a session Synapse has not matched to its agent yet can't be linked
       if (tagged.length) {
         const linked = new Set(relations(id).filter((p) => p.reads && p.shares).map((p) => p.agent.id));
         for (const other of tagged.filter((a) => !linked.has(a.id))) { await createEdge(other.id, id); await createEdge(id, other.id); }
         if (tagged.some((a) => !linked.has(a.id))) await reloadState();
       }
-      const holding = agent.owned && (agent.status === 'busy' || needsYou(agent) || queued[id]?.length || flushing.has(id));
       if (holding) { queued[id] = [...(queued[id] || []), { id: `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, text, at: Date.now() }]; saveQueue(); renderQueue(); }
       else if (agent.owned) await desktopCall('submit', { id, text });
       else await api(`/api/agents/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
-      attachments.delete(id); if (selectedId === id) renderAttachments();
-      if (selectedId === id && $('message-input').value === original) { $('message-input').value = ''; drafts[id] = ''; persistDraft(); resizeComposer(); }
-      else { drafts[id] = drafts[id] === original ? '' : drafts[id]; }
+      if (!now) { // (a prompt shown at once emptied the box when it was sent)
+        attachments.delete(id); if (selectedId === id) renderAttachments();
+        if (selectedId === id && $('message-input').value === original) { $('message-input').value = ''; drafts[id] = ''; persistDraft(); resizeComposer(); }
+        else { drafts[id] = drafts[id] === original ? '' : drafts[id]; }
+      }
       // keep showing the conversation while it reloads: dropping it would blank the list and jump to the top
       if (holding) return; // queued: nothing new in the conversation yet
       const stale = recentCache.get(id); if (stale) stale.activity = -1;
-      if (selectedId === id) { await loadRecent(true); $('thread-scroll').scrollTop = $('thread-scroll').scrollHeight; }
+      if (selectedId === id) { await loadRecent(true); $('thread-scroll').scrollTo({ top: $('thread-scroll').scrollHeight, behavior: 'smooth' }); }
     } catch (error) {
+      if (now) {
+        outgoing.set(id, (outgoing.get(id) || []).filter((o) => o !== now));
+        if (!$('message-input').value) { $('message-input').value = original; drafts[id] = original; resizeComposer(); }
+        if (images.length && !attachments.get(id)?.length) attachments.set(id, images);
+        if (selectedId === id) { renderAttachments(); renderTimeline(); }
+      }
       if (selectedId === id) { $('send-error').textContent = error.message; $('send-error').hidden = false; $('message-input').setAttribute('aria-invalid', 'true'); }
       else toast(error.message);
-    } finally { sending = false; updateComposer(); }
+    } finally { clearTimeout(slow); sending = sendingSlow = false; updateComposer(); }
   }
 
   function openModal(title, content, submitLabel, submit) {
@@ -2520,7 +2606,11 @@ function initialize() {
   }
   const paintComposer = () => { paintMirror(); paintMentionBar(); paintMentionPop(); };
   composerPaint = () => { paintMirror(); paintMentionBar(); };
-  $('message-input').addEventListener('input', () => { if ($('message-input').value.includes('@')) freshFriends().then(paintComposer); paintComposer(); });
+  let composerFrame = 0;
+  $('message-input').addEventListener('input', () => {
+    if ($('message-input').value.includes('@')) freshFriends().then(paintComposer);
+    if (!composerFrame) composerFrame = requestAnimationFrame(() => { composerFrame = 0; paintComposer(); });
+  });
   $('message-input').addEventListener('scroll', () => { mirror.scrollTop = $('message-input').scrollTop; });
   $('message-input').addEventListener('click', paintMentionPop);
   $('message-input').addEventListener('blur', () => setTimeout(() => { if (!mentionBox.contains(document.activeElement)) mentionBox.hidden = true; }, 120));
@@ -2569,8 +2659,9 @@ function initialize() {
     catch (e) { toast(e.message); }
     finally { setTimeout(() => { $('stop-agent').disabled = false; }, 800); }
   };
+  // a keystroke does only what it must: the box's size is CSS, the send button's state; the rest waits for the frame
   $('message-input').addEventListener('input', () => {
-    resizeComposer(); updateComposer(); $('send-error').hidden = true; $('message-input').removeAttribute('aria-invalid');
+    resizeComposer(); paintSend(); $('send-error').hidden = true; $('message-input').removeAttribute('aria-invalid');
     if (paneKey) persistDraft();
     else { clearTimeout(draftTimer); draftTimer = setTimeout(persistDraft, 250); }
   });
@@ -2876,7 +2967,7 @@ function initialize() {
     if (action === 'show-messages') { persistDraft(); tab = 'messages'; renderMain(true); }
     if (action === 'show-all') { filter = 'all'; renderOverview(); }
     if (action === 'retry-conversation') loadRecent(true);
-    if (action === 'load-older') { limit = Math.min(200, limit + 60); loadRecent(true); }
+    if (action === 'load-older') loadOlder();
   });
   document.addEventListener('keydown', (event) => {
     const editing = event.target.matches('input, textarea, select, [contenteditable="true"]');
