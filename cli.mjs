@@ -14,6 +14,7 @@
 //   synapse todo [--mine|--done|--all]     the user's todos (open ones by default)
 //   synapse todo add <text...> [--agent a|none] [--linear]   add one, linked to you unless --agent says otherwise
 //   synapse todo done|open|rm <id>         tick, reopen or delete one; todo link <id> <agent|none> links it
+//   synapse waiting <what...> [--url u]  say what you wait on outside (checks, a deploy); waiting done clears it
 //   synapse linear sync                    bring in Linear issues assigned to you (once Linear is connected in the app)
 //   synapse saved [id]                     list archived chats (⌘S in the app), or print one
 //   synapse saved restore <id>             put an archived transcript back, byte for byte, to resume it
@@ -55,6 +56,7 @@ import * as remote from './remote.mjs';
 import * as account from './account.mjs';
 import * as saved from './saved.mjs';
 import * as todos from './todos.mjs';
+import * as waiting from './waiting.mjs';
 
 const [cmd, ...rest] = process.argv.slice(2);
 const flags = new Set(rest.filter((a) => a.startsWith('--')));
@@ -174,6 +176,11 @@ try {
       else if (['claim', 'done', 'reopen'].includes(sub)) out = plan.update(whoami(), { id, [sub]: Number(words[0]) });
       else if (sub === 'close') out = plan.update(whoami(), { id, close: true });
       else out = plan.list(whoami(), { id: sub });
+      break;
+    }
+    case 'waiting': {
+      const url = opt('--url'), words = args.filter((a) => a !== '--url' && a !== url);
+      out = words.join(' ') === 'done' ? { cleared: waiting.clear(whoami().id) } : { waiting: waiting.set(whoami().id, { what: words.join(' '), url }) };
       break;
     }
     case 'todo': case 'todos': {

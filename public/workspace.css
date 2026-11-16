@@ -1075,52 +1075,9 @@ body.sorting .session-row .row-actions { display: none; }
 /* leaving, the panel fades late, so it is seen sliding away rather than vanishing in place */
 .workspace.panels-ready[data-inspector='closed'] .inspector { transition-property: margin-inline-end, transform, opacity; transition-duration: var(--panel-dur), var(--panel-dur), 200ms; transition-timing-function: var(--panel-ease), var(--panel-ease), ease-in; transition-delay: 0s, 0s, 120ms; }
 
-/* ---------------------------------------------------------------- project stacks (status view, "Stack by project")
-   One project's agents in one state sit as a deck: the newest on top as a card, one or two cards peeking out under
-   it. Resting the pointer on the deck (or focusing into it, or selecting one of its agents) fans it out. */
-.stack { --stack-in: 120ms; --stack-out: 200ms; position: relative; margin: 4px 0 8px; padding: 0; border-radius: 12px; }
-.stack-label { display: flex; align-items: center; gap: 6px; padding: 2px 8px 4px; font-size: 11px; font-weight: 500; color: var(--color-muted); }
-.stack-badge { width: 14px; height: 14px; flex: none; display: inline-grid; place-items: center; border-radius: 4px; font-size: 7px; font-weight: 700;
-  color: color-mix(in oklch, var(--badge) 85%, var(--color-ink)); background: color-mix(in oklch, var(--badge) 20%, transparent); }
-.stack-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stack-count { margin-inline-start: auto; padding: 0 6px; border-radius: 999px; font-size: 10.5px; font-variant-numeric: tabular-nums; color: var(--color-secondary); background: var(--color-hover); transition: opacity 160ms var(--ease-out); }
 /* the top card and the cards under it */
-.stack-top { position: relative; isolation: isolate; padding-bottom: 0; transition: padding-bottom 260ms var(--ease-out) var(--stack-out); }
-.stack[data-depth='1'] .stack-top { padding-bottom: 5px; }
-.stack[data-depth='2'] .stack-top { padding-bottom: 9px; }
-.stack-top > .session-node > .session-row { position: relative; background: var(--color-paper); box-shadow: 0 0 0 1px var(--color-border), 0 1px 2px var(--color-shadow); }
-.stack-top > .session-node > .session-row[aria-current='page'] { background: var(--color-selected); }
-.stack-top::before, .stack-top::after { content: ''; position: absolute; z-index: -1; height: 30px; border-radius: var(--radius-sm); background: var(--color-panel); box-shadow: 0 0 0 1px var(--color-border);
-  transition: transform 300ms cubic-bezier(.32, .72, 0, 1) var(--stack-out), opacity 200ms var(--ease-out) var(--stack-out); }
-.stack-top::before { left: 6px; right: 6px; bottom: 4px; }
-.stack-top::after { left: 12px; right: 12px; bottom: 0; opacity: .7; }
-.stack[data-depth='1'] .stack-top::after { display: none; }
 /* the rest, folded under the top card */
-.stack-rest { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 320ms cubic-bezier(.32, .72, 0, 1) var(--stack-out); }
-.stack-rest-inner { min-height: 0; overflow: hidden; }
-.stack-rest .session-node { opacity: 0; transform: translateY(-14px) scale(.97); transform-origin: top center;
-  transition: transform 300ms cubic-bezier(.32, .72, 0, 1) var(--stack-out), opacity 160ms var(--ease-out) var(--stack-out); }
 /* fanned out */
-.stack:is(:hover, :has(:focus-visible), :has([aria-current='page'])) { --stack-out: 0ms; }
-.stack:is(:hover, :has(:focus-visible), :has([aria-current='page'])) .stack-top { padding-bottom: 0; transition-delay: var(--stack-in); }
-.stack:is(:hover, :has(:focus-visible), :has([aria-current='page'])) .stack-top::before,
-.stack:is(:hover, :has(:focus-visible), :has([aria-current='page'])) .stack-top::after { transform: translateY(-8px) scale(.96); opacity: 0; transition-delay: var(--stack-in); }
-.stack:is(:hover, :has(:focus-visible), :has([aria-current='page'])) .stack-top > .session-node > .session-row { box-shadow: none; background: none; }
-.stack:is(:hover, :has(:focus-visible), :has([aria-current='page'])) .stack-top > .session-node > .session-row[aria-current='page'] { background: var(--color-selected); }
-.stack:is(:hover, :has(:focus-visible), :has([aria-current='page'])) .stack-top > .session-node > .session-row:hover { background: var(--color-hover); }
-.stack:is(:hover, :has(:focus-visible), :has([aria-current='page'])) .stack-rest { grid-template-rows: 1fr; transition-delay: var(--stack-in); }
-.stack:is(:hover, :has(:focus-visible), :has([aria-current='page'])) .stack-rest .session-node { opacity: 1; transform: none; transition-delay: calc(var(--stack-in) + var(--i, 0) * 35ms); }
-.stack:is(:hover, :has(:focus-visible), :has([aria-current='page'])) .stack-count { opacity: .5; }
-.stack-top > .session-node > .session-row { transition: background 160ms, box-shadow 200ms var(--ease-out); }
-body.sidebar-sorting .stack-rest { transition: none; }
-@media (prefers-reduced-motion: reduce) { .stack *, .stack *::before, .stack *::after { transition: none !important; } }
-/* the cards under the top one: clearly cards, not a shadow */
-.stack-top::before, .stack-top::after { background: var(--color-paper); box-shadow: 0 0 0 1px var(--color-border-strong), 0 1px 2px var(--color-shadow); }
-.stack-top::before { left: 7px; right: 7px; bottom: 3px; }
-.stack-top::after { left: 14px; right: 14px; bottom: -2px; opacity: .85; }
-.stack[data-depth='1'] .stack-top { padding-bottom: 6px; }
-.stack[data-depth='2'] .stack-top { padding-bottom: 11px; }
-.stack[data-depth]:is(:hover, :has(:focus-visible), :has([aria-current='page'])) .stack-top { padding-bottom: 0; }
 
 /* An agent waiting on you: a small list on top of the box you type in. The question, then one quiet row per answer
    (its note in grey on the same line), a field for your own, and a few text links. Nothing louder than the chat. */
@@ -1197,3 +1154,16 @@ body.sidebar-sorting .stack-rest { transition: none; }
 @media (prefers-reduced-motion: reduce) { .tab-live, .live-dot { animation: none; } }
 .browser-ask.login p { display: flex; gap: 10px; align-items: flex-start; }
 .browser-ask.login p .icon { flex: none; width: 18px; height: 18px; margin-top: 1px; color: var(--color-accent-text); }
+
+/* ---------------------------------------------------------------- watching: an agent waiting on something outside
+   (checks, a deploy, a merge, a background job). Calm blue, so it reads as "fine, in hand", not as "needs you". */
+.state-pill.watching { display: inline-flex; color: color-mix(in oklch, var(--color-focus) 65%, var(--color-ink)); background: var(--color-focus-soft); }
+.state-pill.watching .icon { width: 11px; height: 11px; }
+.session-row[data-state='watching'] .session-sub { color: var(--color-secondary); }
+.watch-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; }
+.watch-row + .watch-row { border-top: 1px solid var(--color-border); }
+.watch-row > .icon { flex: none; width: 16px; height: 16px; margin-top: 2px; color: var(--color-focus); }
+.watch-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: var(--text-sm); line-height: 1.4; }
+.watch-text span { color: var(--color-ink); overflow-wrap: anywhere; }
+.watch-text small { color: var(--color-muted); font-size: var(--text-xs); }
+.watch-row .icon-button { flex: none; }

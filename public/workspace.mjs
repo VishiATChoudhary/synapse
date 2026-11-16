@@ -314,6 +314,7 @@ const ICONS = {
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/>',
   'pop-out': '<rect x="3" y="7" width="14" height="14" rx="2"/><path d="M10 3h11v11M21 3l-9 9"/>',
   'dock-in': '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M14 3v18M9 9l-3 3 3 3"/>',
+  eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9m-4 4 3 3m-6 0 2 2"/>',
   hand: '<path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12m0-1.5v-6a1.5 1.5 0 0 1 3 0V12m0-5.5a1.5 1.5 0 0 1 3 0V14a7 7 0 0 1-7 7h-.6a6 6 0 0 1-4.6-2.2L3.5 16a1.6 1.6 0 0 1 2.4-2l2.1 1.8"/>',
 };
@@ -328,7 +329,15 @@ const avatar = (agent) => `<span class="agent-avatar" data-logo="${LOGOS.has(age
 // a project's badge, like T3's: two letters on a tint of its colour
 const badgeText = (name) => { const words = String(name || '?').split(/[\s_.-]+/).filter(Boolean); return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] || '?').slice(0, 2)).toUpperCase(); };
 const hueOf = (text) => { let h = 0; for (const c of String(text)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
-const activityLabel = (agent) => agent.status === 'busy' ? 'Working' : ['waiting', 'needs_input'].includes(agent.status) ? 'Needs input' : agent.status === 'exited' ? 'Exited' : 'Idle';
+// what an agent waits on outside itself: what it said it waits for (synapse_waiting), its background tasks still
+// running, a scheduled wake-up still ahead
+const watchList = (agent) => [
+  ...(agent.waiting ? [{ kind: 'wait', text: agent.waiting.what, url: agent.waiting.url, since: agent.waiting.since }] : []),
+  ...(agent.background || []).map((t) => ({ kind: 'task', text: t.label, since: t.since })),
+  ...(agent.wake && agent.wake.at > Date.now() ? [{ kind: 'wake', text: agent.wake.reason || 'Checks again', at: agent.wake.at }] : []),
+];
+const watching = (agent) => !agent.exited && agent.status !== 'exited' && watchList(agent).length > 0;
+const activityLabel = (agent) => agent.status !== 'busy' && !['waiting', 'needs_input'].includes(agent.status) && watching(agent) ? 'Watching' : agent.status === 'busy' ? 'Working' : ['waiting', 'needs_input'].includes(agent.status) ? 'Needs input' : agent.status === 'exited' ? 'Exited' : 'Idle';
 // a spinner drawn again (the state refreshes every second) picks up where a shared clock is, instead of starting
 // over, so it turns smoothly however often its row is redrawn
 const spinPhase = (period = 900) => `animation-delay:-${Date.now() % period}ms`;
@@ -405,7 +414,7 @@ function initialize() {
       const message = event.data;
       const owns = (id) => desktop?.sessions.some((s) => s.id === id && s.pane === pane.dataset.paneKey);
       if (message?.type === 'synapse:desktop-bootstrap') {
-        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-stacks', 'synapse-inspector-tab'].map((key) => [key, getStorage(key, null)]));
+        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-inspector-tab'].map((key) => [key, getStorage(key, null)]));
         pane.contentWindow.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, location.origin);
       }
       if (message?.type === 'synapse:desktop-ready') sendPaneState(pane);
@@ -549,7 +558,7 @@ function initialize() {
   const outgoing = new Map(); // session -> prompts just sent, shown at once until the transcript has them
   let sendingSlow = false, olderAnchor = null, loadingOlder = false; // the history above, loaded as you scroll up
   let sending = false, recentController, recentRequest = 0, recentTarget, recentDirty = false, limit = 60;
-  let source, stateFrame = 0, pendingState, toastTimer, draftTimer, flowTimer;
+  let source, stateFrame = 0, stateTimer = 0, pendingState, toastTimer, draftTimer, flowTimer;
   let composerPaint = null; // set once the composer's highlighting exists; drafts loaded before then repaint on input
   let linear = { connected: false }, todoPick = null, todosSignature = '', showDone = false, askLater = 0; // todos
   const seenLive = new Set(), goneSince = new Map(); // agents seen running, and when one stopped being listed
@@ -674,8 +683,6 @@ function initialize() {
 
   // what a session is about: its transcript title (Claude's own, or your first prompt), unless you named it
   const titleOf = (agent) => (agent.autoName || !agent.title ? agent.name : agent.title);
-  // status view: a project's agents in the same state stack into one deck that fans out on hover
-  let stackProjects = getStorage('synapse-stacks') === 'on';
   let sidebarQuery = '', groupBy = ['project', 'status', 'recent'].includes(getStorage('synapse-group')) ? getStorage('synapse-group') : 'project';
   const GENERATED = /^(claude|codex|gemini|opencode|cursor-agent|cursor|amp|copilot|shell|agent|pi|kiro)(-\d+)?$/i;
   const readJSON = (key, fallback) => { try { return JSON.parse(getStorage(key, '')) ?? fallback; } catch { return fallback; } };
@@ -727,7 +734,7 @@ function initialize() {
       if ((a.status === 'busy' || needsYou(a)) && settledAt[a.id] !== undefined) { delete settledAt[a.id]; changed = true; }
       const finished = doneSet.get(a.id);
       if (finished && tidy.idle && Date.now() - finished > tidy.idle) { doneSet.delete(a.id); changed = true; }
-      const busy = a.status === 'busy' || needsYou(a), idleFor = Date.now() - Math.max(usedAt(a), finished || 0, unarchivedAt[a.id] || 0);
+      const busy = a.status === 'busy' || needsYou(a) || watching(a), idleFor = Date.now() - Math.max(usedAt(a), finished || 0, unarchivedAt[a.id] || 0);
       if (!busy && tidy.archive && idleFor > tidy.archive && archived[a.id] === undefined && a.id !== selectedId && usedAt(a)) { archived[a.id] = Date.now(); delete snoozed[a.id]; doneSet.delete(a.id); changed = true; }
       if (!busy && !a.remote && !a.exited && tidy.close && idleFor > tidy.close && usedAt(a) && !expiring.has(a.id) && a.id !== selectedId) {
         expiring.add(a.id);
@@ -808,7 +815,7 @@ function initialize() {
       setStorage('synapse-tidy', JSON.stringify(tidy)); renderSidebar();
     });
   }
-  const stateOf = (a) => (needsYou(a) ? 'needs' : a.status === 'busy' ? 'working' : doneSet.has(a.id) ? 'done' : a.exited ? 'ended' : 'idle');
+  const stateOf = (a) => (needsYou(a) ? 'needs' : a.status === 'busy' ? 'working' : watching(a) ? 'watching' : doneSet.has(a.id) ? 'done' : a.exited ? 'ended' : 'idle');
   const isSnoozed = (a) => snoozed[a.id] !== undefined && a.id !== selectedId;
   // Status view sorts by trigger: when each agent entered its current state. Output from a working agent does not
   // reorder anything; a row moves only when its agent starts, stops, finishes or needs you, and then it goes on top.
@@ -955,26 +962,6 @@ function initialize() {
     syncChildren(el.lastElementChild, nodes);
     return el;
   }
-  // a deck of one project's agents in one state: the newest on top, the others peeking out under it until hovered
-  const stackElements = new Map();
-  function stackNode(key, group, nodes) {
-    let el = stackElements.get(key);
-    if (!el) {
-      el = document.createElement('div'); el.className = 'stack'; el.dataset.stack = key;
-      el.innerHTML = '<div class="stack-label"><span class="stack-badge" aria-hidden="true"></span><span class="stack-name"></span><span class="stack-count"></span></div><div class="stack-top"></div><div class="stack-rest"><div class="stack-rest-inner"></div></div>';
-      stackElements.set(key, el);
-    }
-    const badge = el.querySelector('.stack-badge');
-    badge.textContent = badgeText(group.name); badge.style.setProperty('--badge', projectColor(group));
-    el.querySelector('.stack-name').textContent = group.name;
-    el.querySelector('.stack-count').textContent = nodes.length;
-    el.dataset.depth = String(Math.min(nodes.length - 1, 2)); // how many cards peek out
-    el.title = `${group.name} · ${nodes.length} agents`;
-    syncChildren(el.querySelector('.stack-top'), nodes.slice(0, 1));
-    nodes.slice(1).forEach((n, i) => n.style.setProperty('--i', i));
-    syncChildren(el.querySelector('.stack-rest-inner'), nodes.slice(1));
-    return el;
-  }
 
   function renderSidebar() {
     if (sidebarDrag || paneKey) return;
@@ -982,7 +969,6 @@ function initialize() {
     for (const a of state.agents) triggerAt(a); // note every state change, even in a group of one
     for (const id of triggered.keys()) if (!byId.has(id)) triggered.delete(id);
     const flip = flipStart();
-    const liveStacks = new Set();
     const groups = projectGroups(true), desired = [], live = new Set(), liveWorktrees = new Set(), settledRoots = [], snoozedRoots = [];
     // the search box filters the list as you type (fuzzy, like ⌘K); a fork stays under its parent
     const query = sidebarQuery.trim();
@@ -1011,14 +997,16 @@ function initialize() {
       dot.classList.remove('done', 'waiting');
       const pill = row.querySelector('.state-pill');
       pill.className = `state-pill ${st}`;
-      pill.innerHTML = st === 'needs' ? 'Needs you' : st === 'done' ? `${icon('check')}Done` : snoozed[agent.id] !== undefined ? `${icon('clock')}` : '';
+      const watchNote = st === 'watching' ? watchList(agent)[0] : null;
+      pill.title = watchNote ? watchNote.text : '';
+      pill.innerHTML = st === 'needs' ? 'Needs you' : st === 'watching' ? `${icon('eye')}Watching` : st === 'done' ? `${icon('check')}Done` : snoozed[agent.id] !== undefined ? `${icon('clock')}` : '';
       const label = titleOf(agent);
       row.querySelector('.session-name').textContent = label;
       // the second line says who: the agent's name, or its tool when the name is just a generated one
       const who = label === agent.name ? '' : GENERATED.test(agent.name || '') ? kindName(agent) : agent.name;
       const shared = (friends?.links || []).some((l) => l.local && (l.local.id === agent.backendId || l.local.id === agent.id));
       // second line: the agent's tool (its logo) and who it is; left: the project's GitHub owner picture
-      const sub = [place, who || kindName(agent)].filter(Boolean).join(' · ');
+      const sub = watchNote ? `${watchNote.kind === 'wake' ? 'Checks again' : 'Waiting'}: ${watchNote.kind === 'wake' ? watchNote.text : watchNote.text}` : [place, who || kindName(agent)].filter(Boolean).join(' · ');
       const logo = LOGOS.has(agent.kind) ? agent.kind : '';
       const subHtml = `${shared ? `<span class="shared-mark" title="Shared with a friend">${icon('users')}</span>` : ''}${logo ? `<span class="sub-kind" data-logo="${escapeHtml(logo)}" aria-hidden="true"></span>` : ''}${escapeHtml(sub)}`;
       if (row.dataset.sub !== subHtml) { row.dataset.sub = subHtml; row.querySelector('.session-sub').innerHTML = subHtml; }
@@ -1124,21 +1112,10 @@ function initialize() {
       }
       const recent = (x, y) => (y.a.lastActivity || 0) - (x.a.lastActivity || 0);
       if (groupBy === 'status') {
-        for (const [key, label] of [['needs', 'Needs you'], ['working', 'Working'], ['done', 'Done'], ['idle', 'Idle']]) {
+        for (const [key, label] of [['needs', 'Needs you'], ['working', 'Working'], ['watching', 'Watching'], ['done', 'Done'], ['idle', 'Idle']]) {
           const these = rows.filter((r) => statusKey(r.a) === key).sort(byTrigger);
           if (!these.length) continue;
-          if (!stackProjects || hits) { desired.push(flatSection(key, label, these.map((r) => sessionNode(r.entry, 0, r.place)))); continue; }
-          // stacked: a project with two or more agents here becomes one deck, placed where its first agent was
-          const byProject = new Map();
-          for (const r of these) { const k = r.a.projectKey || r.place; if (!byProject.has(k)) byProject.set(k, []); byProject.get(k).push(r); }
-          const nodes = [];
-          for (const [k, list] of byProject) {
-            if (list.length < 2) { nodes.push(sessionNode(list[0].entry, 0, list[0].place)); continue; }
-            const group = groups.find((g) => g.key === k) || { key: k, name: list[0].place, agents: list.map((r) => r.a) };
-            const stackKey = `${key}:${k}`; liveStacks.add(stackKey);
-            nodes.push(stackNode(stackKey, group, list.map((r) => sessionNode(r.entry, 0, ''))));
-          }
-          desired.push(flatSection(key, label, nodes, these.length));
+          desired.push(flatSection(key, label, these.map((r) => sessionNode(r.entry, 0, r.place))));
         }
       } else desired.push(flatSection('recent', 'Recent', rows.sort(recent).map((r) => sessionNode(r.entry, 0, r.place))));
       for (const g of groups) for (const w of g.worktrees) liveWorktrees.add(`worktree:${w.path}`);
@@ -1152,7 +1129,6 @@ function initialize() {
     if (archivedRoots.length) desired.push(shelf('archived', 'Archived', archivedRoots.sort(byRecent), ({ entry, place }) => sessionNode(entry, 0, place)));
     for (const [id, node] of sessionElements) if (!live.has(id)) { node.remove(); sessionElements.delete(id); }
     for (const [key, node] of worktreeElements) if (!liveWorktrees.has(key)) { node.remove(); worktreeElements.delete(key); }
-    for (const [key, node] of stackElements) if (!liveStacks.has(key)) { node.remove(); stackElements.delete(key); }
     for (const [key, section] of projectElements) if (!groups.some((group) => group.key === key)) { section.remove(); projectElements.delete(key); }
     if (!groups.length && !people) {
       const empty = document.createElement('p'); empty.className = 'sidebar-placeholder';
@@ -1225,7 +1201,6 @@ function initialize() {
     dropdown($('group-by'), [
       { label: 'Group by project', icon: mark('project'), run: set('project') },
       { label: 'Group by status', icon: mark('status'), run: set('status') },
-      ...(groupBy === 'status' ? [{ label: 'Stack by project', icon: stackProjects ? 'check' : '', run: () => { stackProjects = !stackProjects; setStorage('synapse-stacks', stackProjects ? 'on' : 'off'); renderSidebar(); } }] : []),
       { label: 'Most recent first', icon: mark('recent'), run: set('recent') },
       '-',
       { label: 'Tidy up…', icon: 'clock', run: tidyDialog },
@@ -1844,6 +1819,13 @@ function initialize() {
     $('browser-url').blur(); browserAct('go', { url });
   });
 
+  // Watching, on the details panel: each thing the agent waits on, since when, and a link when it gave one
+  function watchSection(agent) {
+    const list = watchList(agent);
+    if (!list.length || agent.exited) return '';
+    const when = (w) => w.kind === 'wake' ? `in ${relativeTime(Date.now() - (w.at - Date.now())) === 'now' ? 'a moment' : relativeTime(Date.now() - (w.at - Date.now()))}` : relativeTime(w.since) === 'now' ? 'since just now' : `for ${relativeTime(w.since)}`;
+    return `<section class="inspector-section watch-section"><div class="inspector-title-row"><h3 class="inspector-label">Watching</h3><span class="count">${list.length}</span></div>${list.map((w) => `<div class="watch-row">${icon(w.kind === 'wake' ? 'clock' : w.kind === 'task' ? 'terminal' : 'eye')}<div class="watch-text"><span>${escapeHtml(w.text)}</span><small>${w.kind === 'wake' ? 'Checks again' : w.kind === 'task' ? 'Running in the background' : 'Waiting'} ${when(w)}</small></div>${w.url ? `<a class="icon-button" href="${escapeHtml(w.url)}" target="_blank" rel="noopener" title="Open" aria-label="Open">${icon('external')}</a>` : ''}</div>`).join('')}</section>`;
+  }
   function renderInspector() {
     const agent = byId.get(selectedId); if (!agent) return;
     if (inspectorFile?.agent === selectedId) {
@@ -1857,11 +1839,12 @@ function initialize() {
     browserSignature = '';
     const peers = relations(agent.id), chat = recentCache.get(agent.id)?.data.chat || [];
     loadChanges(agent);
-    const signature = JSON.stringify([agent.id, agent.name, agent.status, agent.lastActivity, todosOf(agent), peers, chat.slice(-3), Math.floor(Date.now() / 60000), changeCache.get(agent.id)?.data, friends?.links?.length, friends?.outgoing?.length, friends?.incoming?.length]);
+    const signature = JSON.stringify([agent.id, agent.name, agent.status, agent.lastActivity, watchList(agent), todosOf(agent), peers, chat.slice(-3), Math.floor(Date.now() / 60000), changeCache.get(agent.id)?.data, friends?.links?.length, friends?.outgoing?.length, friends?.incoming?.length]);
     if (signature === inspectorSignature) return;
     inspectorSignature = signature;
     $('inspector').innerHTML = `${inspectorTabs(agent)}
       <section class="inspector-section"><div class="session-summary">${avatar(agent)}<div><strong>${escapeHtml(agent.name)}</strong><span class="session-provider">${escapeHtml(kindName(agent))}</span></div></div><div class="detail-row"><span>Status</span><span class="status-label">${status(agent)}${activityLabel(agent)}</span></div><div class="detail-row"><span>Last activity</span><span>${relativeTime(agent.lastActivity) === 'now' ? 'Just now' : `${relativeTime(agent.lastActivity)} ago`}</span></div><div class="folder-path">${icon('folder')}<span>${escapeHtml(agent.cwd)}</span></div></section>
+      ${watchSection(agent)}
       ${todoSection(agent)}
       ${changesSection(agent)}
       ${sharingSection(agent)}
@@ -2165,7 +2148,7 @@ function initialize() {
   });
   // ⌘⇧W / ⌘⇧S: the agent above or below in the list as it is shown (folded sections are skipped)
   function moveSelection(step) {
-    const rows = [...$('project-list').querySelectorAll('.session-row')].filter((row) => row.offsetParent && !row.closest('.project-group.folded:not(:hover):not(:has(:focus-visible))') && !(row.closest('.stack-rest') && !row.closest('.stack').matches(':hover, :has(:focus-visible), :has([aria-current="page"])')));
+    const rows = [...$('project-list').querySelectorAll('.session-row')].filter((row) => row.offsetParent && !row.closest('.project-group.folded:not(:hover):not(:has(:focus-visible))'));
     if (!rows.length) return;
     const at = rows.findIndex((row) => row.dataset.agent === selectedId && view === 'session');
     const next = rows[at < 0 ? (step > 0 ? 0 : rows.length - 1) : Math.max(0, Math.min(rows.length - 1, at + step))];
@@ -2856,7 +2839,11 @@ function initialize() {
     source.addEventListener('state', (event) => {
       try { pendingState = JSON.parse(event.data); }
       catch { return; }
-      if (!stateFrame) stateFrame = requestAnimationFrame(() => { stateFrame = 0; applyState(pendingState); });
+      // on the next frame; a window behind others gets no frames, so a timer applies it there
+      if (!stateFrame) {
+        const run = () => { if (!stateFrame) return; cancelAnimationFrame(stateFrame); clearTimeout(stateTimer); stateFrame = 0; applyState(pendingState); };
+        stateFrame = requestAnimationFrame(run); stateTimer = setTimeout(run, 250);
+      }
     });
     source.addEventListener('flow', (event) => {
       let flow; try { flow = JSON.parse(event.data); } catch { return; }
@@ -3501,7 +3488,7 @@ if (typeof document !== 'undefined' && document.getElementById('workspace')) {
         const origin = new URLSearchParams(location.search).has('pane') ? location.origin : 'null';
         if (event.source !== parent || event.origin !== origin || event.data?.type !== 'synapse:desktop-bootstrap') return;
         clearTimeout(timer); removeEventListener('message', receive);
-        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-stacks', 'synapse-inspector-tab'];
+        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-inspector-tab'];
         for (const key of keys) {
           try {
             const value = event.data.preferences?.[key];

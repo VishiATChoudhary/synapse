@@ -10,6 +10,7 @@ import * as plan from './plan.mjs';
 import * as remote from './remote.mjs';
 import * as account from './account.mjs';
 import * as todos from './todos.mjs';
+import * as waiting from './waiting.mjs';
 
 const INSTRUCTIONS = `Synapse connects you to other coding agents running on this machine (Claude, Codex, Gemini, ...),
 and to agents on friends' machines that they share with you (multiplayer; those show an "owner" and can only be read).
@@ -32,7 +33,9 @@ The user links agents on the Synapse canvas, or you can link yourself with synap
   synapse_todo_update done=true; synapse_todo_remove deletes one. Todos may come from Linear (they show its id).
 - synapse_browser drives a browser inside Synapse that the user watches and is signed in to. Use it for web tasks
   (checking a page, a signed-in dashboard, testing a web app); the user allows each new site once. To sign in, use
-  action login: the user's vault fills it after they approve; never ask the user for a password.`;
+  action login: the user's vault fills it after they approve; never ask the user for a password.
+- When you stop to wait for something outside (CI checks, a deploy, a review, a merge), call synapse_waiting with what
+  and a link, so the user sees you are watching it; done=true when it happened.`;
 
 const agentArg = { type: 'string', description: 'Agent name or id (prefix is fine)' };
 const TOOLS = [
@@ -104,6 +107,9 @@ const TOOLS = [
   { name: 'synapse_todo_remove', description: 'Delete a todo from the list (for one that is finished, prefer synapse_todo_update done=true).',
     inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     run: (me, a) => ({ removed: todos.show(todos.remove(a.id)) }) },
+  { name: 'synapse_waiting', description: 'Tell the user what you are waiting on outside yourself (checks on a pull request, a deploy, a review, a merge, a long job), so Synapse shows you as Watching with that note. Call it when you end a turn waiting on something like that; done=true clears it once it happened. It also clears when the user sends you a new prompt.',
+    inputSchema: { type: 'object', properties: { for: { type: 'string', description: 'What you wait for, short: "checks on PR #12 to pass"' }, url: { type: 'string', description: 'A link to it (the pull request, the deploy)' }, done: { type: 'boolean' } } },
+    run: (me, a) => (a.done ? { cleared: waiting.clear(me.id) } : { waiting: waiting.set(me.id, { what: a.for, url: a.url }) }) },
   { name: 'synapse_browser', description: `Use the browser inside the Synapse app. The user watches it next to your chat and is signed in to their sites there, so you can use their sessions (never ask for passwords). Each agent has its own tabs.
 Actions: open (url) opens a page; read gives the page's title, text and its numbered elements; click (ref) and type (ref, text, submit) act on an element by its number from the last read; press (key: Enter, Tab, Escape, ArrowDown...); scroll (direction up/down); back; forward; screenshot; login (user, optional) signs in with the user's saved login for the site, from their vault: Synapse fills it in after the user approves, and you never see the password (logins lists which users are saved for the site); new_tab (url); tabs; select_tab (tab); close_tab (tab); status.
 The first time you open a site, the user is asked to allow it: the call waits for their answer. If the user takes over the browser, actions fail until they hand it back. Only works while the Synapse app is open.`,

@@ -91,7 +91,7 @@ const broadcast = (event, data) => clients.forEach((c) => send(c, event, data));
 let lastSig = '';
 function broadcastState() {
   const s = state();
-  const sig = JSON.stringify([s.agents.map((a) => [a.id, a.status, a.name, a.lastActivity]), s.edges, s.messageRevision, s.talks, s.talkRequests, s.todos]);
+  const sig = JSON.stringify([s.agents.map((a) => [a.id, a.status, a.name, a.lastActivity, a.waiting, a.background, a.wake]), s.edges, s.messageRevision, s.talks, s.talkRequests, s.todos]);
   if (sig !== lastSig) { lastSig = sig; broadcast('state', s); }
 }
 const discoveryTimer = setInterval(async () => {
