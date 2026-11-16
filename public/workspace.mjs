@@ -567,7 +567,7 @@ function initialize() {
   let sendingSlow = false, olderAnchor = null, loadingOlder = false; // the history above, loaded as you scroll up
   let sending = false, recentController, recentRequest = 0, recentTarget, recentDirty = false, limit = 60;
   let source, stateFrame = 0, stateTimer = 0, pendingState, toastTimer, draftTimer, flowTimer;
-  let approvalTimer = null, approvalFor = null, approvalMiss = 0, approvalReading = false; // the options card: its poll, and which agent it is for
+  let approvalTimer = null, approvalFor = null, approvalMiss = 0, approvalReading = false, approvalPolling = null; // the options card: its poll, and which agent it is for
   let composerPaint = null; // set once the composer's highlighting exists; drafts loaded before then repaint on input
   let linear = { connected: false }, todoPick = null, todosSignature = '', showDone = false, askLater = 0; // todos
   const seenLive = new Set(), goneSince = new Map(); // agents seen running, and when one stopped being listed
@@ -1649,21 +1649,22 @@ function initialize() {
   // Approvals in the GUI: an owned session waiting for you shows its question and choices above the composer
   async function paintApproval() {
     const agent = byId.get(selectedId), card = $('approval-card');
+    approvalPolling = agent?.id || null;
     // a session that has not registered with Synapse yet (no backend id) may be stopped at a question of its own before
     // it starts (Claude Code: trust this folder?); its screen is watched so that shows here too
     const starting = embedded && agent?.owned && !agent.exited && !agent.backendId && agent.kind && agent.kind !== 'shell' && view === 'session';
     const waiting = starting || (embedded && agent?.owned && !agent.exited && ['waiting', 'needs_input'].includes(agent.status) && view === 'session');
     clearTimeout(approvalTimer);
-    if (!waiting) { if (!card.hidden && agent) $('message-input').placeholder = agent.owned ? 'Ask anything. @ agents, / commands' : `Message ${agent.name}…`; card.hidden = true; approvalFor = null; return; }
+    if (!waiting) { approvalPolling = null; if (!card.hidden && agent) $('message-input').placeholder = agent.owned ? 'Ask anything. @ agents, / commands' : `Message ${agent.name}…`; card.hidden = true; approvalFor = null; return; }
     let screen;
-    if (approvalReading) return; // one screen read at a time (renders call this often)
+    if (approvalReading) { approvalTimer = setTimeout(paintApproval, 300); return; } // one screen read at a time (renders call this often); look again after it
     approvalReading = true;
     try { screen = await desktopCall('screen', { id: agent.id }); } catch { card.hidden = true; if (starting) approvalTimer = setTimeout(paintApproval, 700); return; } finally { approvalReading = false; }
     if (selectedId !== agent.id) return;
     const p = parseApproval(screen.lines), sig = JSON.stringify(p);
     // still starting and not asking anything: no card, look again shortly
     // (a screen caught mid-redraw looks empty: the card goes only after two empty looks in a row)
-    if (starting && !['waiting', 'needs_input'].includes(agent.status) && !p.options?.length) { if (!card.hidden && approvalFor === agent.id && !approvalMiss++) { approvalTimer = setTimeout(paintApproval, 400); return; } approvalMiss = 0; card.hidden = true; approvalFor = null; card.dataset.sig = ''; updateComposer(); approvalTimer = setTimeout(paintApproval, 700); return; }
+    if (starting && !['waiting', 'needs_input'].includes(agent.status) && !p.options?.length) { if (!card.hidden && approvalFor === agent.id && !approvalMiss++) { approvalTimer = setTimeout(paintApproval, 400); return; } approvalMiss = 0; const shown = !card.hidden; card.hidden = true; approvalFor = null; card.dataset.sig = ''; if (shown) $('message-input').placeholder = 'Ask anything. @ agents, / commands'; approvalTimer = setTimeout(paintApproval, 700); return; }
     // the same prompt as before: leave the card (and anything typed into it) alone
     if (card.dataset.sig === sig && !card.hidden && approvalFor === agent.id) { approvalTimer = setTimeout(paintApproval, 1500); return; }
     approvalMiss = 0;
@@ -2225,7 +2226,7 @@ function initialize() {
     $('attach-files').hidden = !agent?.owned;
     if (agent?.owned) loadChanges(agent).then(paintChangesChip); else $('changes-chip').hidden = true;
     const waitingNow = agent?.owned && !agent.exited && (['waiting', 'needs_input'].includes(agent.status) || (!agent.backendId && agent.kind && agent.kind !== 'shell'));
-    if (waitingNow ? approvalFor !== agent.id : approvalFor) paintApproval();
+    if (waitingNow ? approvalFor !== agent.id && approvalPolling !== agent.id : approvalFor) paintApproval();
     $('message-input').setAttribute('aria-label', agent ? `Message ${agent.name}` : 'Message this agent');
     composerPaint?.();
     // working: Stop interrupts it (Escape, how Claude Code and Codex stop a turn); typing still queues the next prompt

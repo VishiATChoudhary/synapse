@@ -954,7 +954,10 @@ body:not(.desktop) .nav-arrow { display: none; }
 .row-act:hover { background: var(--color-hover); color: var(--color-ink); }
 .row-act svg { width: 14px; height: 14px; }
 .session-row:hover .row-actions, .session-row:focus-visible .row-actions { display: inline-flex; }
-.session-row:hover .session-time, .session-row:focus-visible .session-time, .session-row:hover .state-pill.done { display: none; }
+/* the actions sit over the time and state, which keep their room: the name never re-truncates on hover */
+.session-meta { position: relative; min-width: 46px; justify-content: flex-end; }
+.row-actions { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+.session-row:hover .session-time, .session-row:focus-visible .session-time, .session-row:hover .state-pill.done, .session-row:focus-visible .state-pill.done { visibility: hidden; }
 body.sorting .session-row .row-actions { display: none; }
 
 /* switching agents or pages: the new content eases in */

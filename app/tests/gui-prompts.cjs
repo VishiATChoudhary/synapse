@@ -70,7 +70,7 @@ const clearTyped = () => { try { fs.unlinkSync(path.join(ctl, 'typed-0')); } cat
   await until(async () => { await ui(`document.querySelector('.session-row[data-state="needs"], .session-row')?.click()`); return ui(`location.hash.startsWith('#agent=') && !document.getElementById('thread-view').hidden`); }, 'the session is open');
 
   // a question: title, question, every option with its description, your own answer, Chat about this
-  await until(async () => (await card())?.options.length === 4, 'the question card', 20000);
+  await until(async () => { const c = await card(); return c?.options.length === 4 && c.buttons.includes('Chat about it'); }, 'the question card', 20000); // (a screen caught while it draws fills in a moment later)
   let c = await card();
   assert.equal(c.text, 'Which color theme do you prefer?');
   assert.deepEqual(c.options, ['Light | Bright backgrounds with dark text. Clean and easy to read in daylight.', 'Dark | Dark backgrounds with light text. Easier on the eyes in low light.', 'High contrast | Maximum contrast between text and background. Best for readability and accessibility.', 'INPUT']);

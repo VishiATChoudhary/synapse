@@ -300,7 +300,40 @@ async function makeSession(s, { kind, title, question = null, parent = null, key
   return x;
 }
 
-synapse.pty.onData(({ id, data }) => { for (const s of M.slots) for (const x of s.sessions) if (x.pty === id) { x.updatedAt = Date.now(); x.term.write(data); } });
+synapse.pty.onData(({ id, data }) => { for (const s of M.slots) for (const x of s.sessions) if (x.pty === id) { x.updatedAt = Date.now(); x.term.write(data); watchTrust(x); } });
+
+// Claude Code and Codex ask whether to trust a folder they have not worked in before ("No, exit" is the default).
+// Agents started from Synapse trust their folder by themselves: for the first two minutes of a session, a trust
+// question on its screen is answered with its "Yes" option (arrow keys to it, then Enter), once.
+const TRUSTING = new Set(['claude', 'codex']);
+function watchTrust(x) {
+  if (x.trustUntil === undefined) x.trustUntil = TRUSTING.has(x.kind) ? Date.now() + 120_000 : 0;
+  if (!x.trustUntil || Date.now() > x.trustUntil || x.exited) return;
+  clearTimeout(x.trustTimer);
+  x.trustTimer = setTimeout(() => autoTrust(x), 250);
+}
+function trustAnswer(lines) {
+  const text = lines.join('\n');
+  if (!/trust (this|the (files|contents) (in|of) this) (folder|directory)|do you trust/i.test(text)) return null;
+  const options = lines.map((l, i) => ({ i, l: l.trim() })).filter((o) => /^(?:[❯›>]\s*)?(?:\d+[.)]\s*)?(?:yes|no)\b/i.test(o.l));
+  const yes = options.find((o) => /^(?:[❯›>]\s*)?(?:\d+[.)]\s*)?yes\b/i.test(o.l));
+  const at = options.find((o) => /^[❯›>]/.test(o.l));
+  if (!yes || !at) return null;
+  const move = options.indexOf(yes) - options.indexOf(at);
+  return (move > 0 ? '\x1b[B'.repeat(move) : '\x1b[A'.repeat(-move));
+}
+async function autoTrust(x) {
+  if (!x.trustUntil || x.exited) return;
+  const buffer = x.term.buffer.active, lines = [];
+  for (let i = buffer.viewportY; i < buffer.viewportY + x.term.rows; i++) lines.push(buffer.getLine(i)?.translateToString(true) || '');
+  const keys = trustAnswer(lines);
+  if (keys === null) return;
+  x.trustUntil = 0; // once
+  try {
+    if (keys) { await synapse.pty.write(x.pty, keys); await new Promise((r) => setTimeout(r, 150)); }
+    await synapse.pty.write(x.pty, '\r');
+  } catch {}
+}
 synapse.pty.onExit(({ id, code }) => {
   let crashed = false;
   for (const s of M.slots) for (const x of s.sessions) if (x.pty === id) { crashed ||= code !== 0 && ![129, 130, 143].includes(code) && x.kind !== 'shell'; x.exited = true; x.term.write(`\r\n\x1b[2m[exited ${code}]\x1b[0m\r\n`); }
