@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
-import { FILES, readJSON, listAgents, readAgentMessages, projectOf, projectOfAgent, transcriptFile, colorOf } from './lib.mjs';
+import { FILES, readJSON, listAgents, readAgentMessages, projectOf, projectOfAgent, transcriptFile, colorOf, unwrapPaste } from './lib.mjs';
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
@@ -71,6 +71,7 @@ export function transcriptTitle(file) {
     } else if (o.type === 'response_item' && o.payload?.role === 'user') {
       text = o.payload.content?.map((x) => x?.text).find(ownWords);
     } else if (o.type === 'event_msg' && o.payload?.type === 'user_message') text = o.payload.message;
+    if (text) text = unwrapPaste(text).trim();
     if (ownWords(text)) return clip(text);
   }
   return '';

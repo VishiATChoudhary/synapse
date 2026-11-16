@@ -1066,3 +1066,8 @@ button.approval-option:active { transform: scale(.99); }
 .approval-input .button { height: 28px; font-size: var(--text-sm); }
 .approval-input:focus-within { border-color: color-mix(in srgb, var(--color-focus) 50%, var(--color-border)); }
 .approval-choices .button .icon { width: 14px; height: 14px; }
+
+/* files you attached to a sent prompt: chips with their name, under the pictures, opening the file */
+.message-files { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-bottom: 6px; max-width: min(78%, 640px); }
+.message-files .attach-file { cursor: pointer; border: 1px solid var(--color-border-strong); }
+.message-files .attach-file:hover { border-color: color-mix(in srgb, var(--color-ink) 30%, transparent); }

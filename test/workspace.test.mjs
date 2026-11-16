@@ -192,6 +192,17 @@ test('approval prompts are read off the terminal screen as a question and number
   assert.deepEqual(parseApproval(['Press Enter to continue']).options, []);
 });
 
+test('a prompt sent as a paste reads as what was typed: Claude Code\'s pasted_content wrapper is dropped', async () => {
+  const { claudeMessage } = await import('../lib.mjs');
+  const wrapped = 'Of this what can we do?\n\n\n<pasted_content id="6b64">\nSend the logs.\nConfirm the timetable.\n</pasted_content id="6b64">\n';
+  assert.equal(claudeMessage({ type: 'user', message: { content: wrapped } }).text, 'Of this what can we do?\n\nSend the logs.\nConfirm the timetable.');
+  assert.equal(claudeMessage({ type: 'user', message: { content: [{ type: 'text', text: '<pasted_content id="d5ba">\n/Users/me/notes.md\n</pasted_content id="d5ba">' }] } }).text, '/Users/me/notes.md');
+  const dir = await mkdtemp(path.join(tmpdir(), 'synapse-paste-')), file = path.join(dir, 't.jsonl');
+  writeFileSync(file, JSON.stringify({ type: 'user', message: { content: '<pasted_content id="1">\nFix the login loop\n</pasted_content id="1">' } }));
+  assert.equal(transcriptTitle(file), 'Fix the login loop');
+  await rm(dir, { recursive: true, force: true });
+});
+
 test('agent prompts read from real Claude Code screens: questions, tabs, multi-select, permission, review, menus', () => {
   const screen = (name) => parseApproval(readFileSync(path.join(root, 'test/fixtures/prompts', `${name}.txt`), 'utf8').split('\n'));
   const short = (p) => p.options.map((o) => [o.key, o.label, ...(o.selected ? ['>'] : []), ...(o.checked !== undefined ? [o.checked ? 'x' : ' '] : []), ...(o.input ? ['input'] : []), ...(o.chat ? ['chat'] : [])]);

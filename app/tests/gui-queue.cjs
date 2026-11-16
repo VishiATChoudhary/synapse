@@ -125,7 +125,7 @@ const queue = () => ui(`[...document.querySelectorAll('#prompt-queue .queued-tex
   const line = (o, i) => JSON.stringify({ uuid: `u${i}`, sessionId, cwd: fixture, ...o });
   set(0, 'busy'); await sleep(800);
   fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), [
-    { type: 'user', timestamp: at(0), message: { role: 'user', content: `It says it's empty: ${png}` } },
+    { type: 'user', timestamp: at(0), message: { role: 'user', content: `<pasted_content id="ab12">\nIt says it's empty: ${png} ${path.join(fixture, 'notes.md')}\n</pasted_content id="ab12">` } },
     { type: 'assistant', timestamp: at(5), message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: png } }] } },
     { type: 'user', timestamp: at(6), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } },
     { type: 'assistant', timestamp: at(9), message: { role: 'assistant', content: [{ type: 'text', text: 'Done: the folder is empty.' }] } },
@@ -133,6 +133,8 @@ const queue = () => ui(`[...document.querySelectorAll('#prompt-queue .queued-tex
   await until(() => ui(`[...document.querySelectorAll('.message.user')].some((m) => m.querySelector('.message-images img'))`), 'the prompt shows its image');
   assert.equal(await ui(`[...document.querySelectorAll('.message.user')].find((m) => m.querySelector('.message-images'))?.querySelector('.message-body')?.textContent.trim()`), "It says it's empty:", 'the path is gone from the text');
   await until(() => ui(`document.querySelector('.message-images img').naturalWidth > 0`), 'the image loads');
+  assert.equal(await ui(`[...document.querySelectorAll('.message.user .message-files .attach-file')].map((b) => b.textContent).join()`), 'notes.md', 'an attached file shows as a chip with its name');
+  assert.ok(!(await ui(`document.getElementById('message-list').textContent`)).includes('pasted_content'), 'no paste wrapper shows');
   await until(() => ui(`!!document.querySelector('.work-fold.live')`), 'a live line while it works');
   set(0, 'idle');
   await until(() => ui(`!document.querySelector('.work-fold.live') && !!document.querySelector('.work-fold:not(.live)')`), 'the live line ends once it is idle', 8000);

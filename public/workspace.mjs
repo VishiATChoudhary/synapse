@@ -1855,9 +1855,9 @@ function initialize() {
           const delivery = message.human ? `<span class="queued-label">${icon(message.delivered ? 'check' : 'clock')}${message.delivered ? 'Picked up by agent' : 'Queued for next prompt'}</span>` : '';
           // replies read as plain prose under your prompt; only agent-to-agent notes say who wrote them
           // images you attached show as thumbnails, not as their paths
-          const pics = user ? sentImages(message.text) : { text: message.text, images: [] };
+          const pics = user ? sentImages(message.text) : { text: message.text, images: [], files: [] };
           const thumbs = pics.images.length ? `<div class="message-images">${pics.images.map((p) => `<button type="button" data-file="${escapeHtml(p)}" title="${escapeHtml(p)}"><img alt="${escapeHtml(p.split(/[\\/]/).pop())}" loading="lazy" src="/api/file/raw?${new URLSearchParams({ path: p })}"></button>`).join('')}</div>` : '';
-          element.innerHTML = `${peer ? `<header class="message-head">${avatar(sender)}<span>${escapeHtml(message.fromName)}</span>${icon('arrow-right')}<span>${escapeHtml(message.toName)}</span>${time ? `<time>${time}</time>` : ''}</header>` : ''}${thumbs}${pics.text.trim() ? `<div class="message-body md">${messageBody(pics.text, user, message.type === 'transcript')}</div>` : ''}<footer class="message-foot">${delivery}${!peer && time ? `<time>${time}</time>` : ''}<button class="icon-button" data-copy-message aria-label="Copy message" title="Copy message">${icon('copy')}</button></footer>`;
+          element.innerHTML = `${peer ? `<header class="message-head">${avatar(sender)}<span>${escapeHtml(message.fromName)}</span>${icon('arrow-right')}<span>${escapeHtml(message.toName)}</span>${time ? `<time>${time}</time>` : ''}</header>` : ''}${thumbs}${fileChips(pics.files)}${pics.text.trim() ? `<div class="message-body md">${messageBody(pics.text, user, message.type === 'transcript')}</div>` : ''}<footer class="message-foot">${delivery}${!peer && time ? `<time>${time}</time>` : ''}<button class="icon-button" data-copy-message aria-label="Copy message" title="Copy message">${icon('copy')}</button></footer>`;
         }
       }
       items.push({ message, element });
@@ -1885,7 +1885,7 @@ function initialize() {
     el = document.createElement('article'); el.className = 'message user sent-now rise'; el.dataset.messageKey = o.key;
     const pics = sentImages(o.text);
     const thumbs = pics.images.length ? `<div class="message-images">${pics.images.map((p) => `<button type="button" data-file="${escapeHtml(p)}" title="${escapeHtml(p)}"><img alt="" src="/api/file/raw?${new URLSearchParams({ path: p })}"></button>`).join('')}</div>` : '';
-    el.innerHTML = `${thumbs}${pics.text.trim() ? `<div class="message-body md">${messageBody(pics.text, true, false)}</div>` : ''}<footer class="message-foot"><time>${new Date(o.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time></footer>`;
+    el.innerHTML = `${thumbs}${fileChips(pics.files)}${pics.text.trim() ? `<div class="message-body md">${messageBody(pics.text, true, false)}</div>` : ''}<footer class="message-foot"><time>${new Date(o.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time></footer>`;
     return el;
   }
 
@@ -3041,8 +3041,18 @@ function initialize() {
       if (!images.includes(p)) images.push(p);
       return lead;
     });
-    return { text: images.length ? rest.replace(/[ \t]+$/gm, '') : rest, images };
+    // files you attached go at the end of the prompt, after what you typed: those become chips with their name
+    const files = [];
+    let body = rest.replace(/[ \t]+$/gm, '');
+    for (;;) {
+      const m = /(^|\s)(?:"((?:\/|~\/|[A-Za-z]:\\)[^"\n]+)"|((?:\/|~\/|[A-Za-z]:\\)\S+))\s*$/.exec(body);
+      const p = m && (m[2] || m[3]);
+      if (!p || !/[^\\/]\.[\w]{1,8}$/.test(p) || files.length >= 20) break;
+      files.unshift(p); body = body.slice(0, m.index + m[1].length).replace(/\s+$/, '');
+    }
+    return { text: images.length || files.length ? body : rest, images, files };
   }
+  const fileChips = (files) => (files?.length ? `<div class="message-files">${files.map((p) => `<button type="button" class="attach-file" data-file="${escapeHtml(p)}" title="${escapeHtml(p)}">${icon('file')}<span>${escapeHtml(p.split(/[\\/]/).pop())}</span></button>`).join('')}</div>` : '');
   function renderAttachments() {
     const list = attachments.get(selectedId) || [], row = $('attach-row');
     row.hidden = !list.length;

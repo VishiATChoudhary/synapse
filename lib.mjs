@@ -91,13 +91,17 @@ function claudeSlash(t) {
   return `${name.startsWith('/') ? name : `/${name}`}${args ? ` ${args}` : ''}`;
 }
 
+// Claude Code wraps text pasted into its prompt (and Synapse sends prompts as a paste) in
+// <pasted_content id="…"> … </pasted_content id="…">: keep what was pasted, drop the wrapper
+export const unwrapPaste = (t) => String(t ?? '').replace(/^[ \t]*<\\?\/?pasted_content(?: id="[^"]*")?>[ \t]*$/gm, '').replace(/\n{3,}/g, '\n\n');
+
 export function claudeMessage(e) {
   if (e.isMeta || e.isSidechain || e.isCompactSummary) return null;
   const content = e.message?.content;
   if (e.type === 'user') {
     const parts = typeof content === 'string' ? [content]
       : Array.isArray(content) ? content.filter((b) => b.type === 'text').map((b) => b.text) : [];
-    const text = parts.map((t) => claudeSlash(t) ?? t).filter((t) => !NOISE.test(t.trim())).join('\n').trim();
+    const text = parts.map((t) => claudeSlash(t) ?? t).filter((t) => !NOISE.test(t.trim())).map(unwrapPaste).join('\n').trim();
     return text ? { role: 'user', text, ts: e.timestamp } : null;
   }
   if (e.type === 'assistant' && Array.isArray(content)) {
