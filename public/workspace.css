@@ -1178,3 +1178,35 @@ body.sorting .session-row .row-actions { display: none; }
 .session-row.lean .session-kind { display: none; }
 .session-row.lean .session-sub { margin-top: 0; }
 .session-children .session-row.lean { min-height: 26px; padding-block: 3px; }
+
+/* ---------------------------------------------------------------- panel tabs: a sliding highlight, a soft swap */
+.inspector-tabs { position: relative; }
+.inspector-tabs button { position: relative; z-index: 1; background: none !important; box-shadow: none !important; transition: color 160ms var(--ease-out, ease-out); }
+.tab-glider { position: absolute; top: 2px; bottom: 2px; left: 2px; width: 0; border-radius: var(--radius-xs); background: var(--color-paper); box-shadow: 0 1px 2px var(--color-shadow), 0 0 0 1px var(--color-border); pointer-events: none; }
+.tab-glider.ready { transition: transform 260ms cubic-bezier(.32, .72, 0, 1), width 260ms cubic-bezier(.32, .72, 0, 1); }
+.tab-mark:empty { display: none; }
+.tab-count { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--color-selected); color: var(--color-secondary); font-size: 10.5px; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums; }
+.inspector-body.tab-in { animation: panel-tab-in 220ms var(--ease-out, ease-out); }
+@keyframes panel-tab-in { from { opacity: 0; transform: translateY(4px); } }
+.inspector.browser-mode .inspector-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* the panel eases to the browser's width and back */
+@media (min-width: 1280px) {
+  .workspace.panels-ready .inspector { transition: margin-inline-end var(--panel-dur) var(--panel-ease), transform var(--panel-dur) var(--panel-ease), opacity 240ms var(--ease-out), flex-basis var(--panel-dur) var(--panel-ease), width var(--panel-dur) var(--panel-ease); }
+}
+@media (prefers-reduced-motion: reduce) { .tab-glider.ready { transition: none !important; } .inspector-body.tab-in { animation: none; } }
+
+/* the Todos tab */
+.todo-tab { display: flex; flex-direction: column; gap: 2px; }
+.todo-tab-add { margin-bottom: 10px; }
+.todo-tab-add input { width: 100%; }
+.todo-empty { margin: 6px 2px 10px; }
+.todo-done-list { margin-top: 10px; }
+.todo-done-list summary { cursor: pointer; padding: 4px 2px; font-size: var(--text-sm); color: var(--color-muted); list-style: none; }
+.todo-done-list summary::-webkit-details-marker { display: none; }
+.todo-done-list summary::before { content: '›'; display: inline-block; margin-right: 6px; transition: transform 160ms; }
+.todo-done-list[open] summary::before { transform: rotate(90deg); }
+.todo-where { margin-top: 14px; font-size: var(--text-xs); }
+/* on the agent's own tab its name on every row says nothing: the text gets the room */
+.todo-tab .todo-chip { display: none; }
+.todo-tab .todo-row { align-items: flex-start; gap: 10px; padding: 6px 2px; }
+.todo-tab .todo-text { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }

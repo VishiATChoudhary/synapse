@@ -551,7 +551,9 @@ function initialize() {
   let sidebarOpen = !narrow.matches && getStorage('synapse-sidebar', 'open') === 'open';
   let inspectorOpen = wide.matches && getStorage('synapse-inspector', 'open') === 'open';
   // the panel's tabs: Details (the session) or Browser (the agent browser, agent-browser.mjs in the app)
-  let inspectorTab = getStorage('synapse-inspector-tab', 'details') === 'browser' ? 'browser' : 'details';
+  const PANEL_TABS = ['details', 'todos', 'browser'];
+  let inspectorTab = PANEL_TABS.includes(getStorage('synapse-inspector-tab', 'details')) ? getStorage('synapse-inspector-tab', 'details') : 'details';
+  let browserSettle = 0; // while the panel eases to its new width, the page waits to be placed
   let browserState = { agents: {}, asks: [] }, browserCovered = false, browserPlaced = '', browserSignature = '';
   // files pasted, dropped or attached in the composer, shown as chips (images as thumbnails) until sent (see insertPaths)
   const IMAGE = /\.(png|jpe?g|gif|webp|bmp|heic|tiff?)$/i;
@@ -1744,17 +1746,33 @@ function initialize() {
   const browserKey = (agent) => agent?.backendId || agent?.id;
   const browserOf = (agent) => browserState.agents?.[browserKey(agent)] || null;
   const asksOf = (agent) => (browserState.asks || []).filter((q) => q.agent === browserKey(agent));
-  function inspectorTabs(agent) {
-    const b = browserOf(agent), live = b?.driving && !b.paused, asking = asksOf(agent).length;
-    return `<div class="inspector-heading inspector-tabbar"><div class="inspector-tabs" role="tablist" aria-label="Panel">
-      <button role="tab" data-inspector-tab="details" aria-selected="${inspectorTab === 'details'}">Details</button>
-      <button role="tab" data-inspector-tab="browser" aria-selected="${inspectorTab === 'browser'}">Browser${asking ? '<span class="tab-badge" title="Waiting for you">1</span>' : live ? '<span class="tab-live" title="The agent is using it"></span>' : ''}</button>
-    </div><button class="icon-button" data-action="close-inspector" aria-label="Close panel" title="Close">${icon('x')}</button></div>`;
+  // The panel's head (its tabs) stays put while its body changes, so the tab highlight slides from one tab to the
+  // next and the new body fades in; the body is all a tab redraws.
+  let shownTab = null;
+  function inspectorBody(agent) {
+    const pane = $('inspector');
+    if (!pane.querySelector(':scope > .inspector-tabbar')) {
+      pane.innerHTML = `<div class="inspector-heading inspector-tabbar"><div class="inspector-tabs" role="tablist" aria-label="Panel"><span class="tab-glider" aria-hidden="true"></span>${PANEL_TABS.map((t) => `<button role="tab" data-inspector-tab="${t}"><span>${t[0].toUpperCase()}${t.slice(1)}</span><span class="tab-mark"></span></button>`).join('')}</div><button class="icon-button" data-action="close-inspector" aria-label="Close panel" title="Close">${icon('x')}</button></div><div class="inspector-body" id="inspector-body"></div>`;
+      shownTab = null;
+    }
+    const b = browserOf(agent), live = b?.driving && !b.paused, asking = asksOf(agent).length, open = agentTodos(agent).filter((t) => !t.done).length;
+    const marks = { details: '', todos: open ? `<span class="tab-count">${open}</span>` : '', browser: asking ? '<span class="tab-badge" title="Waiting for you">1</span>' : live ? '<span class="tab-live" title="The agent is using it"></span>' : '' };
+    for (const btn of pane.querySelectorAll('[data-inspector-tab]')) {
+      const t = btn.dataset.inspectorTab, mark = btn.querySelector('.tab-mark');
+      btn.setAttribute('aria-selected', String(t === inspectorTab));
+      if (mark.innerHTML !== marks[t]) mark.innerHTML = marks[t];
+    }
+    const on = pane.querySelector(`[data-inspector-tab="${inspectorTab}"]`), glider = pane.querySelector('.tab-glider');
+    if (on && glider) requestAnimationFrame(() => { glider.style.transform = `translateX(${on.offsetLeft - 2}px)`; glider.style.width = `${on.offsetWidth}px`; glider.classList.toggle('ready', shownTab !== null); });
+    const body = $('inspector-body');
+    if (shownTab !== inspectorTab) { if (shownTab !== null) { body.classList.remove('tab-in'); void body.offsetWidth; body.classList.add('tab-in'); } shownTab = inspectorTab; }
+    return body;
   }
   function renderBrowser(agent) {
     const b = browserOf(agent), asks = asksOf(agent);
     const signature = JSON.stringify([agent.id, b, asks, inspectorTab]);
-    if (signature === browserSignature && $('inspector').querySelector('.browser-pane')) { placeBrowser(); return; }
+    const panelBody = inspectorBody(agent);
+    if (signature === browserSignature && panelBody.querySelector('.browser-pane')) { placeBrowser(); return; }
     browserSignature = signature; inspectorSignature = '';
     const keep = $('browser-url') && document.activeElement === $('browser-url') ? $('browser-url').value : null;
     const tab = b?.tabs.find((t) => t.id === b.active), url = tab?.url && tab.url !== 'about:blank' ? tab.url : '';
@@ -1770,7 +1788,7 @@ function initialize() {
     const driving = b?.paused ? `<div class="browser-status paused">${icon('hand')}<span>You have the browser. ${name} waits.</span><button class="button" data-browser="resume">Hand back</button></div>`
       : b?.driving ? `<div class="browser-status live"><span class="live-dot"></span><span>${name} is using the browser</span><button class="button secondary" data-browser="pause">Take over</button></div>`
       : b?.tabs.length ? `<div class="browser-status"><span>${name} can use this browser.</span><button class="text-button" data-browser="pause">Take over</button></div>` : '';
-    $('inspector').innerHTML = `${inspectorTabs(agent)}<div class="browser-pane">
+    panelBody.innerHTML = `<div class="browser-pane">
       ${tabs || b?.tabs?.length ? `<div class="browser-tabs">${tabs}<button class="icon-button" data-browser="new-tab" aria-label="New tab" title="New tab">${icon('plus')}</button></div>` : ''}
       <div class="browser-bar"><button class="icon-button" data-browser="back" aria-label="Back" title="Back"${b?.canBack ? '' : ' disabled'}>${icon('arrow-left')}</button><button class="icon-button" data-browser="forward" aria-label="Forward" title="Forward"${b?.canForward ? '' : ' disabled'}>${icon('arrow-right')}</button><button class="icon-button" data-browser="reload" aria-label="Reload" title="Reload"${tab ? '' : ' disabled'}>${icon('refresh')}</button>
         <form id="browser-go" class="browser-go"><input id="browser-url" class="field" spellcheck="false" autocomplete="off" placeholder="Search or enter address" aria-label="Address" value="${escapeHtml(keep ?? url)}"></form>
@@ -1785,7 +1803,7 @@ function initialize() {
   function placeBrowser() {
     if (!embedded || paneKey) return;
     const agent = byId.get(selectedId), slot = $('browser-slot');
-    const visible = slot && agent && !$('inspector').hidden && inspectorTab === 'browser' && view === 'session' && !browserCovered && !document.querySelector('dialog[open], .pop-menu, .approval-card:not([hidden]) .ask-menu') && !asksOf(agent).length && document.visibilityState === 'visible';
+    const visible = slot && agent && !$('inspector').hidden && inspectorTab === 'browser' && view === 'session' && !browserCovered && !document.querySelector('dialog[open], .pop-menu, .approval-card:not([hidden]) .ask-menu') && !asksOf(agent).length && document.visibilityState === 'visible' && Date.now() >= browserSettle;
     const r = visible ? slot.getBoundingClientRect() : null;
     const bounds = r && r.width > 40 && r.height > 40 ? { x: r.left, y: r.top, width: r.width, height: r.height } : null;
     const key = browserKey(agent) || '';
@@ -1825,7 +1843,7 @@ function initialize() {
   const browserAct = (action, args = {}) => desktopCall('browser-user', { agent: browserKey(byId.get(selectedId)), action, args }).catch((e) => toast(e.message));
   document.addEventListener('click', (event) => {
     const t = event.target.closest('[data-inspector-tab]');
-    if (t) { inspectorTab = t.dataset.inspectorTab === 'browser' ? 'browser' : 'details'; setStorage('synapse-inspector-tab', inspectorTab); inspectorSignature = ''; browserSignature = ''; syncInspector(); return; }
+    if (t) { if (t.dataset.inspectorTab === inspectorTab) return; inspectorTab = PANEL_TABS.includes(t.dataset.inspectorTab) ? t.dataset.inspectorTab : 'details'; setStorage('synapse-inspector-tab', inspectorTab); inspectorSignature = ''; browserSignature = ''; browserSettle = Date.now() + 360; syncInspector(); setTimeout(placeBrowser, 380); return; }
     const a = event.target.closest('[data-browser-answer]');
     if (a) { desktopCall('browser-answer', { id: a.dataset.ask, choice: a.dataset.browserAnswer }).catch((e) => toast(e.message)); return; }
     const v = event.target.closest('#browser-vault');
@@ -1852,6 +1870,21 @@ function initialize() {
     const when = (w) => w.kind === 'wake' ? `in ${relativeTime(Date.now() - (w.at - Date.now())) === 'now' ? 'a moment' : relativeTime(Date.now() - (w.at - Date.now()))}` : relativeTime(w.since) === 'now' ? 'since just now' : `for ${relativeTime(w.since)}`;
     return `<section class="inspector-section watch-section"><div class="inspector-title-row"><h3 class="inspector-label">Watching</h3><span class="count">${list.length}</span></div>${list.map((w) => `<div class="watch-row">${icon(w.kind === 'wake' ? 'clock' : w.kind === 'task' ? 'terminal' : 'eye')}<div class="watch-text"><span>${escapeHtml(w.text)}</span><small>${w.kind === 'wake' ? 'Checks again' : w.kind === 'task' ? 'Running in the background' : 'Waiting'} ${when(w)}</small></div>${w.url ? `<a class="icon-button" href="${escapeHtml(w.url)}" target="_blank" rel="noopener" title="Open" aria-label="Open">${icon('external')}</a>` : ''}</div>`).join('')}</section>`;
   }
+  // Todos: what is left to do with this agent. They are the same todos as on the Todos page, linked to this agent.
+  function renderTodosTab(agent) {
+    const mine = agentTodos(agent), open = mine.filter((t) => !t.done), done = mine.filter((t) => t.done);
+    const signature = JSON.stringify(['todos', agent.id, todosOf(agent), mine.map((t) => [t.agent?.name, t.linear?.identifier]), inspectorTab]);
+    const body = inspectorBody(agent);
+    if (signature === inspectorSignature && body.querySelector('.todo-tab')) return;
+    const keep = document.activeElement?.closest?.('.todo-tab form') ? document.activeElement.value : null;
+    inspectorSignature = signature;
+    body.innerHTML = agent.remote ? `<p class="inspector-note">Todos are for agents on this machine.</p>` : `<section class="todo-tab">
+      <form class="todo-add mini todo-tab-add" data-todo-add-for="${escapeHtml(agent.id)}" autocomplete="off"><input maxlength="500" placeholder="Add a todo…" aria-label="New todo for this agent"></form>
+      ${open.length ? open.map(todoRow).join('') : '<p class="inspector-note todo-empty">Nothing to do yet. What should this agent get done?</p>'}
+      ${done.length ? `<details class="todo-done-list"><summary>${done.length} done</summary>${done.map(todoRow).join('')}</details>` : ''}
+      <p class="inspector-note todo-where">These also show on the Todos page.</p></section>`;
+    if (keep !== null) { const i = body.querySelector('.todo-tab-add input'); i.value = keep; i.focus(); }
+  }
   function renderInspector() {
     const agent = byId.get(selectedId); if (!agent) return;
     if (inspectorFile?.agent === selectedId) {
@@ -1862,16 +1895,16 @@ function initialize() {
     inspectorFile = null; $('inspector').classList.remove('file-mode'); delete $('inspector').dataset.filePath;
     $('inspector').classList.toggle('browser-mode', inspectorTab === 'browser');
     if (inspectorTab === 'browser') { renderBrowser(agent); return; }
+    if (inspectorTab === 'todos') { renderTodosTab(agent); return; }
     browserSignature = '';
     const peers = relations(agent.id), chat = recentCache.get(agent.id)?.data.chat || [];
     loadChanges(agent);
     const signature = JSON.stringify([agent.id, agent.name, agent.status, agent.lastActivity, watchList(agent), todosOf(agent), peers, chat.slice(-3), Math.floor(Date.now() / 60000), changeCache.get(agent.id)?.data, friends?.links?.length, friends?.outgoing?.length, friends?.incoming?.length]);
     if (signature === inspectorSignature) return;
     inspectorSignature = signature;
-    $('inspector').innerHTML = `${inspectorTabs(agent)}
+    inspectorBody(agent).innerHTML = `
       <section class="inspector-section"><div class="session-summary">${avatar(agent)}<div><strong>${escapeHtml(agent.name)}</strong><span class="session-provider">${escapeHtml(kindName(agent))}</span></div></div><div class="detail-row"><span>Status</span><span class="status-label">${status(agent)}${activityLabel(agent)}</span></div><div class="detail-row"><span>Last activity</span><span>${relativeTime(agent.lastActivity) === 'now' ? 'Just now' : `${relativeTime(agent.lastActivity)} ago`}</span></div><div class="folder-path">${icon('folder')}<span>${escapeHtml(agent.cwd)}</span></div></section>
       ${watchSection(agent)}
-      ${todoSection(agent)}
       ${changesSection(agent)}
       ${sharingSection(agent)}
       <section class="inspector-section"><div class="inspector-title-row"><h3 class="inspector-label">Connected agents</h3><span class="count">${peers.length}</span></div>${peers.map((peer) => `<div class="connection-row">${avatar(peer.agent)}<button class="connection-info" data-agent="${escapeHtml(peer.agent.id)}"><strong>${escapeHtml(peer.agent.name)}</strong><span>${icon(peer.reads && peer.shares ? 'arrows' : peer.reads ? 'arrow-left' : 'arrow-right')}${peer.reads && peer.shares ? 'Two-way context' : peer.reads ? 'Reads context from' : 'Shares context with'}</span></button><button class="icon-button unlink-button" data-remove-links="${peer.edges.map((edge) => escapeHtml(edge.id)).join(',')}" aria-label="Disconnect ${escapeHtml(peer.agent.name)}" title="Disconnect">${icon('unlink')}</button></div>`).join('')}<button class="add-context" data-action="add-connection">${icon('plus')}Add connection</button><p class="inspector-note">Linked agents can share context and message each other across tools.</p></section>
@@ -2311,7 +2344,8 @@ function initialize() {
   // open todos are done. With Linear connected, issues assigned to you come in, and ticking one moves it there too.
   function todoList() { return state?.todos || []; }
   function agentOfTodo(t) { return t.agent ? state.agents.find((a) => a.id === t.agent.id || a.backendId === t.agent.id) : null; }
-  function todosOf(agent) { return todoList().filter((t) => t.agent && (t.agent.id === agent.id || t.agent.id === agent.backendId)).map((t) => [t.id, t.text, t.done]); }
+  function agentTodos(agent) { return todoList().filter((t) => t.agent && (t.agent.id === agent.id || t.agent.id === agent.backendId)); }
+  function todosOf(agent) { return agentTodos(agent).map((t) => [t.id, t.text, t.done]); } // (a signature)
   function todoRef(a) { return { id: a.backendId || a.id, name: titleOf(a) }; }
   const todoCall = (path, method, body) => api(path, { method, ...(body ? { body: JSON.stringify(body) } : {}) });
   async function refreshLinear() { try { linear = await api('/api/linear'); } catch {} todosSignature = ''; if (view === 'todos') renderTodos(); }

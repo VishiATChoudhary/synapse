@@ -117,7 +117,18 @@ const linear = http.createServer(async (req, res) => {
   await ui(`document.querySelector('[data-todo-agent]').click()`);
   await until(() => ui(`location.hash.startsWith('#agent=')`), 'the chip opens the agent');
   await ui(`if (document.getElementById('inspector').hidden) document.querySelector('[data-action="toggle-inspector"], #toggle-inspector')?.click()`);
-  await until(() => ui(`[...document.querySelectorAll('.todo-section .todo-text')].map((e) => e.textContent).join('|') === 'Fix the tests'`), 'the panel shows its open todo', 10000).catch(async (e) => { console.log('panel', await ui(`document.getElementById('inspector').hidden + ' ' + (document.querySelector('.todo-section')?.textContent || 'none')`)); throw e; });
+  await until(() => ui(`!!document.querySelector('[data-inspector-tab="todos"]')`), 'panel tabs');
+  await ui(`document.querySelector('[data-inspector-tab="todos"]').click()`);
+  await until(() => ui(`[...document.querySelectorAll('.todo-tab > .todo-row .todo-text')].map((e) => e.textContent).join('|') === 'Fix the tests'`), 'the Todos tab shows its open todo', 10000);
+  assert.equal(await ui(`document.querySelector('[data-inspector-tab="todos"] .tab-count')?.textContent`), '1', 'the tab counts open todos');
+  // added on the tab: linked to this agent, and on the Todos page too
+  await ui(`(() => { const i = document.querySelector('.todo-tab-add input'); i.value = 'Ship the tab'; i.form.requestSubmit(); })()`);
+  await until(() => todosFile().some((t) => t.text === 'Ship the tab' && t.agent?.id), 'added from the tab, linked to the agent');
+  await until(() => ui(`[...document.querySelectorAll('.todo-tab > .todo-row .todo-text')].some((e) => e.textContent === 'Ship the tab')`), 'shows on the tab');
+  if (process.env.SHOT_DIR) { await sleep(500); fs.writeFileSync(path.join(process.env.SHOT_DIR, 'todos-tab.png'), (await win.webContents.capturePage()).toPNG()); }
+  await ui(`document.getElementById('todos-nav').click()`);
+  await until(() => rows().then((r) => r.some((x) => x.text === 'Ship the tab' && x.agent)), 'and on the Todos page, with its agent');
+  await ui(`history.back()`);
   console.log('PASS agent panel: its open todos');
 
   // the agent ends: asked which todos are done
