@@ -3955,7 +3955,22 @@ async function desktopAction(action, args) {
       return { id: `desktop-${top(s).key}` };
     }
     case 'close': { const { s, x } = ownSession(args.id); requestCloseSession(s, x.id); return; }
-    case 'add-project': return promptProject();
+    // the GUI's own add-workspace dialog (public/workspace.mjs) asks for these; the terminal view keeps promptProject
+    case 'add-project': if (workspaceOpen && workspaceLive) { workspacePost({ type: 'synapse:add-project' }); return; } return promptProject();
+    case 'project-library': { let library = []; try { library = await synapse.project.library(); } catch {} return { home: M.home || '', library }; }
+    case 'project-add': {
+      const mode = String(args.mode || ''), value = String(args.value || '').trim();
+      if (mode !== 'pick' && !value) throw new Error(mode === 'clone' ? 'Paste a repository URL.' : mode === 'new' ? 'Name the workspace.' : 'Enter a folder.');
+      if (mode === 'clone') onCloneLine = (line) => workspacePost({ type: 'synapse:clone-progress', line });
+      let dir;
+      try { dir = mode === 'pick' ? await synapse.project.pick() : mode === 'clone' ? await synapse.project.clone(value) : mode === 'new' ? await synapse.project.create(value) : await synapse.project.add(value); }
+      finally { onCloneLine = null; }
+      if (!dir) return null;
+      await refresh();
+      const wt = worktreeOf(dir); if (wt) M.open.add(wt.project.key);
+      syncWorkspace(true);
+      return { dir };
+    }
     case 'worktree': {
       const p = M.projects.find((p) => p.key === args.key);
       if (!p) throw new Error('Choose an open project.');

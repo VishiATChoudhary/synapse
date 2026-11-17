@@ -513,6 +513,8 @@ function initialize() {
     }
     if (message?.type === 'synapse:desktop-navigate') navigate(message.view === 'back' || (message.toggle && view === message.view) ? byId.has(selectedId) ? 'session' : 'overview' : message.view, message.id || selectedId);
     if (message?.type === 'synapse:activity-progress') activityView.progress(message.progress);
+    if (message?.type === 'synapse:add-project' && !paneKey) { addProject(); return; }
+    if (message?.type === 'synapse:clone-progress') { const hint = $('ws-hint'); if (hint && cloning) hint.textContent = message.line; return; }
     if (message?.type === 'synapse:update' && !paneKey) { update = message.update || {}; renderUpdateCard(); return; }
     if (message?.type === 'synapse:desktop-key') {
       if (message.key === 'j') toggleDrawer();
@@ -2544,6 +2546,92 @@ function initialize() {
     if (event.target.closest('[data-update-go]')) desktopCall('update').catch((e) => toast(e.message));
   });
 
+  // ---- Add a workspace: one you had before, a clone, a folder, or a new repo. Once it is in, the new session screen
+  // opens on it, so you can start an agent there right away.
+  const WS_TABS = [
+    ['library', 'Your workspaces', 'Search by name or path', 'Open'],
+    ['clone', 'Clone', 'https://github.com/owner/repo', 'Clone'],
+    ['open', 'Folder', '~/code/repo', 'Add'],
+    ['new', 'New', 'my-project', 'Create'],
+  ];
+  const WS_HINTS = {
+    library: 'Workspaces in ~/.synapse/workspaces. The ones in your sidebar are marked.',
+    clone: 'Clones into ~/.synapse/workspaces. GitHub, GitLab or any git URL.',
+    open: 'Any repo, worktree or folder on this Mac.',
+    new: 'Makes ~/.synapse/workspaces/<name> as a new git repo.',
+  };
+  let wsMode = null, wsLibrary = [], wsHome = '', wsPick = 0, cloning = false;
+  async function addProject(mode) {
+    if (!embedded) return toast('Add workspaces in the Synapse app.');
+    try { const r = await desktopCall('project-library'); wsLibrary = r?.library || []; wsHome = r?.home || ''; } catch { wsLibrary = []; }
+    wsMode = mode || (wsLibrary.some((w) => !w.added) ? 'library' : 'clone'); wsPick = 0;
+    openModal('Add a workspace', `<div class="ws-add">
+      <div class="segmented-control ws-tabs" role="tablist" aria-label="How to add it">${WS_TABS.map(([k, label]) => `<button type="button" role="tab" data-ws-tab="${k}">${label}</button>`).join('')}</div>
+      <div class="ws-input"><input class="field" id="ws-value" spellcheck="false" autocomplete="off"><button type="button" class="button secondary" id="ws-browse">${icon('folder-plus')}Choose…</button></div>
+      <div class="ws-list" id="ws-list" role="listbox" aria-label="Your workspaces"></div>
+      <p class="ws-hint" id="ws-hint"></p>
+    </div>`, 'Open', submitWorkspace);
+    $('action-dialog').classList.add('ws-dialog');
+    $('action-dialog').addEventListener('close', () => $('action-dialog').classList.remove('ws-dialog'), { once: true });
+    $('dialog-content').querySelector('.ws-tabs').addEventListener('click', (event) => { const b = event.target.closest('[data-ws-tab]'); if (b && !cloning) setWsMode(b.dataset.wsTab); });
+    $('ws-browse').onclick = async () => { try { const r = await desktopCall('project-add', { mode: 'pick' }); if (r?.dir) { $('action-dialog').close(); openWorkspace(r.dir); } } catch (e) { $('dialog-error').textContent = e.message; $('dialog-error').hidden = false; } };
+    $('ws-value').addEventListener('input', () => { if (wsMode === 'library') { wsPick = 0; renderWsList(); } });
+    $('ws-value').addEventListener('keydown', (event) => {
+      if (wsMode !== 'library') return;
+      const rows = [...$('ws-list').querySelectorAll('.ws-row')];
+      if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && rows.length) { event.preventDefault(); wsPick = (wsPick + (event.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length; renderWsList(); }
+    });
+    $('ws-list').addEventListener('click', (event) => { const row = event.target.closest('.ws-row'); if (!row) return; wsPick = Number(row.dataset.i); $('action-form').requestSubmit(); });
+    setWsMode(wsMode);
+  }
+  function setWsMode(mode) {
+    wsMode = mode;
+    const [, label, placeholder, submit] = WS_TABS.find(([k]) => k === mode);
+    for (const b of document.querySelectorAll('[data-ws-tab]')) { b.setAttribute('aria-pressed', String(b.dataset.wsTab === mode)); b.setAttribute('aria-selected', String(b.dataset.wsTab === mode)); }
+    const input = $('ws-value');
+    input.value = ''; input.placeholder = placeholder; input.setAttribute('aria-label', label); input.type = mode === 'library' ? 'search' : 'text';
+    $('ws-browse').hidden = mode !== 'open';
+    $('ws-list').hidden = mode !== 'library';
+    $('ws-hint').textContent = WS_HINTS[mode]; $('ws-hint').classList.remove('busy');
+    $('dialog-submit').textContent = submit; $('dialog-error').hidden = true;
+    if (mode === 'library') { wsPick = 0; renderWsList(); }
+    input.focus();
+  }
+  const wsMatches = () => { const q = ($('ws-value')?.value || '').trim().toLowerCase(); return wsLibrary.filter((w) => [w.label, w.name, w.path].some((v) => v?.toLowerCase().includes(q))); };
+  function renderWsList() {
+    const list = wsMatches();
+    if (wsPick >= list.length) wsPick = 0;
+    const short = (p) => wsHome && p.startsWith(wsHome) ? `~${p.slice(wsHome.length)}` : p;
+    $('ws-list').innerHTML = list.length ? list.map((w, i) => {
+      const name = w.label || w.name;
+      return `<button type="button" class="ws-row${i === wsPick ? ' on' : ''}" role="option" aria-selected="${i === wsPick}" data-i="${i}"><span class="ws-badge" style="--badge:oklch(70% 0.13 ${hueOf(w.path)})">${escapeHtml(name.slice(0, 1).toUpperCase())}</span><span class="ws-name">${escapeHtml(name)}</span><span class="ws-path">${escapeHtml(short(w.path))}</span>${w.added ? '<span class="ws-tag">In sidebar</span>' : ''}</button>`;
+    }).join('') : `<p class="ws-empty">${wsLibrary.length ? 'No workspace matches.' : 'Nothing here yet. Clone a repo, add a folder or start a new one.'}</p>`;
+    $('ws-list').querySelector('.ws-row.on')?.scrollIntoView({ block: 'nearest' });
+    $('dialog-submit').disabled = !list.length;
+  }
+  async function submitWorkspace() {
+    if (wsMode === 'library') {
+      const w = wsMatches()[wsPick]; if (!w) throw new Error('Pick a workspace.');
+      if (!w.added) await desktopCall('project-add', { mode: 'open', value: w.path });
+      openWorkspace(w.path); return;
+    }
+    const value = $('ws-value').value.trim();
+    if (wsMode === 'clone') { cloning = true; $('ws-hint').textContent = 'Cloning…'; $('ws-hint').classList.add('busy'); }
+    try {
+      const r = await desktopCall('project-add', { mode: wsMode, value });
+      if (r?.dir) openWorkspace(r.dir);
+    } finally { cloning = false; $('ws-hint')?.classList.remove('busy'); }
+  }
+  // the new session screen on the workspace, once the app has told us about it
+  function openWorkspace(dir) {
+    const started = Date.now();
+    const go = () => {
+      if (worktreeList().some((w) => w.path === dir)) return showNew(dir);
+      if (Date.now() - started < 4000) setTimeout(go, 100); else toast(`Added ${dir.split('/').pop()}`);
+    };
+    go();
+  }
+
   // ---- New session, like T3: "What should we do in <project>?" with the project and agent as pickers,
   // and the first message typed right there. Enter starts the agent with that message.
   const newDraft = { cwd: null, kind: getStorage('synapse-new-kind') || null };
@@ -2551,7 +2639,7 @@ function initialize() {
   // kind: open the screen on that agent (⌘T: a shell), otherwise the last one picked
   function showNew(cwd, kind = null) {
     const list = worktreeList();
-    if (!list.length) { desktopCall('add-project').catch((e) => toast(e.message)); return; }
+    if (!list.length) { addProject(); return; }
     const current = byId.get(selectedId);
     const want = cwd || current?.cwd;
     newDraft.cwd = list.find((w) => w.path === want)?.path || list.find((w) => want?.startsWith(`${w.path}/`))?.path || (list.some((w) => w.path === newDraft.cwd) ? newDraft.cwd : list[0].path);
@@ -2584,7 +2672,7 @@ function initialize() {
   $('new-project').onclick = () => {
     const seen = new Set();
     const items = worktreeList().filter((w) => w.home && !seen.has(w.projectKey) && seen.add(w.projectKey)).map((w) => ({ label: w.project, icon: w.path === newDraft.cwd || newDraft.cwd?.startsWith(`${w.path}`) ? 'check' : null, run: () => { newDraft.cwd = w.path; renderNew(); $('new-input').focus(); } }));
-    dropdown($('new-project'), [...items, '-', { label: 'Add a project…', icon: 'plus', run: () => desktopCall('add-project').catch((e) => toast(e.message)) }], (() => { const r = $('new-project').getBoundingClientRect(); return { x: r.left, y: r.bottom + 6 }; })());
+    dropdown($('new-project'), [...items, '-', { label: 'Add a workspace…', icon: 'plus', run: () => addProject() }], (() => { const r = $('new-project').getBoundingClientRect(); return { x: r.left, y: r.bottom + 6 }; })());
   };
   $('new-branch').onclick = () => {
     const w = worktreeList().find((x) => x.path === newDraft.cwd); if (!w) return;
@@ -2688,7 +2776,7 @@ function initialize() {
     if (embedded && desktop && !paneKey) return showNew(typeof cwd === 'string' ? cwd : null);
     if (embedded && desktop) {
       const worktrees = desktop.projects.flatMap((p) => p.worktrees.map((w) => ({ ...w, project: p.label })));
-      if (!worktrees.length) { desktopCall('add-project').catch((e) => toast(e.message)); return; }
+      if (!worktrees.length) { addProject(); return; }
       const options = worktrees.map((w) => `<option value="${escapeHtml(w.path)}">${escapeHtml(w.project)} · ${escapeHtml(w.branch || w.name)}</option>`).join('');
       const profiles = Object.entries(desktop.profiles).map(([k, p]) => `<option value="${escapeHtml(k)}">${escapeHtml(p.label || k)}</option>`).join('');
       openModal('New session', `<p class="dialog-copy">Start an agent or shell in one of your projects. It stays running when you switch views.</p><label class="field-label" for="session-folder">Project / worktree</label><select class="field" id="session-folder">${options}</select><label class="field-label" for="agent-kind">Agent</label><select class="field" id="agent-kind">${profiles}</select><p class="field-hint">Uses the CLI installed on this Mac and its existing sign-in. Commands can be edited in Settings.</p>`, 'Start session', async () => {
@@ -2834,7 +2922,7 @@ function initialize() {
       if (home) add(`New session in ${p.label}`, 'compose', () => connectAgent(home.path));
       add(`New worktree in ${p.label}`, 'branch', () => runDesktop('worktree', { key: p.key }));
     }
-    if (embedded) add('Add project', 'folder-plus', () => runDesktop('add-project'));
+    if (embedded) add('Add project', 'folder-plus', () => addProject());
     if (agent) {
       add(`Rename "${titleOf(agent)}"`, 'edit', renameAgent);
       if (agent.owned) {
@@ -3191,7 +3279,7 @@ function initialize() {
     }
     return result;
   }).catch((e) => toast(e.message));
-  $('add-project').onclick = () => runDesktop('add-project');
+  $('add-project').onclick = () => addProject();
   $('desktop-account').onclick = () => runDesktop('account');
   $('open-terminal').onclick = () => toggleDrawer();
   $('term-drawer-close').onclick = () => toggleDrawer(false);
