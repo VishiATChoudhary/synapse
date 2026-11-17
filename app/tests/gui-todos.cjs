@@ -55,7 +55,7 @@ const typed = () => { try { return fs.readFileSync(path.join(ctl, 'typed-0'), 'u
 const send = (text) => ui(`(() => { const i = document.querySelector('#message-input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('#composer').requestSubmit(); })()`);
 const queue = () => ui(`[...document.querySelectorAll('#prompt-queue .queued-text')].map((e) => e.textContent)`);
 const key = (k) => ui(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', metaKey: true, bubbles: true }))`);
-const rows = () => ui(`[...document.querySelectorAll('#todo-list .todo-row')].map((r) => ({ id: r.dataset.todo, text: r.querySelector('.todo-text').textContent, done: r.classList.contains('done'), agent: r.querySelector('.todo-chip:not(.empty) > span:last-child')?.textContent || null, linear: r.querySelector('.todo-linear')?.textContent || null }))`);
+const rows = () => ui(`[...document.querySelectorAll('#todo-list .todo-row')].map((r) => ({ id: r.dataset.todo, text: r.querySelector('.todo-text').textContent, done: r.classList.contains('done'), agent: (r.closest('.todo-group')?.querySelector('button.todo-group-head .todo-group-name') || r.querySelector('.todo-who > span:last-child'))?.textContent || null, linear: r.querySelector('.todo-linear')?.textContent || null }))`);
 const todosFile = () => { try { return JSON.parse(fs.readFileSync(path.join(state, 'todos.json'), 'utf8')); } catch { return []; } };
 
 // a stand-in for Linear
@@ -92,7 +92,7 @@ const linear = http.createServer(async (req, res) => {
   await until(() => ui(`!document.getElementById('todos-view').hidden`), 'Todos page');
   await ui(`document.getElementById('todo-agent-pick').click()`);
   await until(() => ui(`document.querySelectorAll('.pop-menu button').length > 1`), 'agent picker');
-  const agentName = await ui(`document.querySelectorAll('.pop-menu button')[1].textContent.split(' · ')[0]`);
+  const agentName = await ui(`document.querySelectorAll('.pop-menu button')[1].querySelector(':scope > span:not(.agent-avatar)').firstChild.textContent`);
   await ui(`document.querySelectorAll('.pop-menu button')[1].click()`);
   await ui(`(() => { const i = document.getElementById('todo-input'); i.value = 'Write the docs'; document.getElementById('todo-add').requestSubmit(); })()`);
   await until(async () => (await rows()).some((r) => r.text === 'Write the docs' && r.agent), 'added, linked to the agent');
@@ -104,6 +104,15 @@ const linear = http.createServer(async (req, res) => {
   await until(() => { const id = todosFile()[0].agent.id; try { execFileSync('node', [path.join(root, 'cli.mjs'), 'todo', 'add', 'Fix', 'the', 'tests', '--agent', id], { env: process.env, stdio: 'pipe' }); return true; } catch { return false; } }, 'the CLI adds a todo for the agent');
   await until(async () => (await rows()).some((r) => r.text === 'Fix the tests' && r.agent), 'an agent added a todo');
   assert.equal(await ui(`document.getElementById('todo-count').textContent`), '2');
+  if (process.env.TODO_PAGE_SHOT) { // through CDP: capturePage is blank while the window is covered
+    await ui(`document.querySelector('[data-todo-pick-clear]')?.click()`); await sleep(100);
+    await ui(`(() => { const i = document.getElementById('todo-input'); i.value = 'Ship the release'; document.getElementById('todo-add').requestSubmit(); })()`);
+    await until(async () => (await rows()).some((r) => r.text === 'Ship the release'), 'an unlinked todo');
+    await sleep(500); const d = win.webContents.debugger; d.attach('1.3');
+    fs.writeFileSync(process.env.TODO_PAGE_SHOT, Buffer.from((await d.sendCommand('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+    await ui(`document.querySelector('.todo-row:last-of-type')?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))`);
+    d.detach();
+  }
   // tick one
   const docs = (await rows()).find((r) => r.text === 'Write the docs');
   await ui(`document.querySelector('[data-todo-check="${docs.id}"]').click()`);

@@ -2391,13 +2391,28 @@ function initialize() {
     const open = todoList().filter((t) => !t.done).length;
     $('todo-count').hidden = !open; $('todo-count').textContent = open > 99 ? '99+' : String(open);
   }
-  function todoRow(t) {
-    const a = agentOfTodo(t);
-    const chip = t.agent ? `<button type="button" class="todo-chip${a ? '' : ' gone'}" data-todo-agent="${escapeHtml(t.id)}" title="${a ? `Open ${escapeHtml(titleOf(a))}` : `${escapeHtml(t.agent.name)} has ended`}">${a ? avatar(a) : icon('user')}<span>${escapeHtml(a ? titleOf(a) : t.agent.name)}</span></button>`
-      : `<button type="button" class="todo-chip empty" data-todo-link="${escapeHtml(t.id)}">${icon('plus')}<span>Link agent</span></button>`;
+  // a todo; in a group the header already names its agent, elsewhere a quiet line says who has it
+  function todoRow(t, { grouped = false } = {}) {
+    const a = agentOfTodo(t), id = escapeHtml(t.id);
+    const who = grouped ? (t.agent ? '' : `<button type="button" class="todo-assign" data-todo-link="${id}">${icon('user')}<span>Assign</span></button>`)
+      : t.agent ? `<button type="button" class="todo-who${a ? '' : ' gone'}" data-todo-agent="${id}" title="${a ? `Open ${escapeHtml(titleOf(a))}` : `${escapeHtml(t.agent.name)} has ended`}">${a ? avatar(a) : icon('user')}<span>${escapeHtml(a ? titleOf(a) : t.agent.name)}</span></button>` : '';
     const lin = t.linear ? `<a class="todo-linear" href="${escapeHtml(t.linear.url)}" target="_blank" rel="noopener" title="Open in Linear">${escapeHtml(t.linear.identifier)}</a>` : '';
     const by = t.by && t.by !== 'you' && t.by !== 'Linear' ? `<span class="todo-by">by ${escapeHtml(t.by)}</span>` : '';
-    return `<div class="todo-row${t.done ? ' done' : ''}" data-todo="${escapeHtml(t.id)}"><button type="button" class="todo-check" data-todo-check="${escapeHtml(t.id)}" aria-pressed="${t.done}" aria-label="${t.done ? 'Mark not done' : 'Mark done'}">${icon('check')}</button><span class="todo-text">${escapeHtml(t.text)}</span>${by}${lin}${chip}<button type="button" class="icon-button todo-more" data-todo-more="${escapeHtml(t.id)}" aria-label="More" title="More">${icon('more')}</button></div>`;
+    return `<div class="todo-row${t.done ? ' done' : ''}" data-todo="${id}"><button type="button" class="todo-check" data-todo-check="${id}" aria-pressed="${t.done}" aria-label="${t.done ? 'Mark not done' : 'Mark done'}">${icon('check')}</button><span class="todo-text">${escapeHtml(t.text)}</span>${by}${lin}${who}<button type="button" class="icon-button todo-more" data-todo-more="${id}" aria-label="More" title="More">${icon('more')}</button></div>`;
+  }
+  // open todos by who has them: yours first, then each agent's under a header with its name and project
+  function todoGroups(open) {
+    const groups = new Map([['', { todos: [] }]]);
+    for (const t of open) {
+      const a = agentOfTodo(t), key = t.agent ? (a?.id || `gone:${t.agent.id}`) : '';
+      if (!groups.has(key)) groups.set(key, { agent: a, ref: t.agent, todos: [] });
+      groups.get(key).todos.push(t);
+    }
+    return [...groups.entries()].filter(([, g]) => g.todos.length).map(([key, g]) => {
+      const head = !key ? `<div class="todo-group-head mine">${icon('user')}<span class="todo-group-name">Yours</span><span class="count">${g.todos.length}</span></div>`
+        : `<button type="button" class="todo-group-head${g.agent ? '' : ' gone'}" ${g.agent ? `data-todo-open="${escapeHtml(g.agent.id)}" title="Open ${escapeHtml(titleOf(g.agent))}"` : `title="${escapeHtml(g.ref.name)} has ended" disabled`}>${g.agent ? avatar(g.agent) : icon('user')}<span class="todo-group-name">${escapeHtml(g.agent ? titleOf(g.agent) : g.ref.name)}</span>${g.agent?.project ? `<span class="todo-group-meta">${escapeHtml(g.agent.project)}</span>` : g.agent ? '' : '<span class="todo-group-meta">ended</span>'}<span class="count">${g.todos.length}</span></button>`;
+      return `<section class="todo-group">${head}${g.todos.map((t) => todoRow(t, { grouped: true })).join('')}</section>`;
+    }).join('');
   }
   function renderTodos() {
     const all = todoList(), open = all.filter((t) => !t.done).sort((a, b) => b.createdAt - a.createdAt), done = all.filter((t) => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
@@ -2406,12 +2421,14 @@ function initialize() {
     todosSignature = sig;
     const picked = todoPick && agentOfTodo({ agent: todoPick });
     if (todoPick && !picked) todoPick = null; // the picked agent ended
-    $('todo-agent-pick').innerHTML = picked ? `${avatar(picked)}<span>${escapeHtml(titleOf(picked))}</span>` : `${icon('user')}<span>No agent</span>`;
+    $('todo-agent-pick').classList.toggle('on', !!picked);
+    $('todo-agent-pick').title = picked ? `New todos go to ${titleOf(picked)}` : 'Give new todos to an agent';
+    $('todo-agent-pick').innerHTML = picked ? `${avatar(picked)}<span>${escapeHtml(titleOf(picked))}</span><span class="todo-pick-clear" data-todo-pick-clear role="button" aria-label="Keep new todos for yourself" title="Keep them for yourself">${icon('x')}</span>` : `${icon('user')}<span>Assign</span>`;
     $('linear-box').innerHTML = linear.connected
       ? `<span class="linear-state${linear.error ? ' error' : ''}" title="${escapeHtml(linear.error || (linear.syncedAt ? `Synced ${relativeTime(linear.syncedAt)} ago` : 'Not synced yet'))}"><span class="linear-mark"></span>Linear${linear.name ? ` · ${escapeHtml(linear.name)}` : ''}</span><button type="button" class="button secondary" data-linear="sync">Sync</button><button type="button" class="icon-button" data-linear="menu" aria-label="Linear settings" title="Linear settings">${icon('more')}</button>`
       : `<button type="button" class="button secondary" data-linear="connect"><span class="linear-mark"></span>Connect Linear</button>`;
-    $('todo-list').innerHTML = (open.length ? open.map(todoRow).join('') : `<p class="todo-empty">Nothing to do. Add a todo above, or ask an agent to note one.</p>`)
-      + (done.length ? `<button type="button" class="todo-done-toggle" data-todo-done-toggle aria-expanded="${showDone}">${icon(showDone ? 'chevron-down' : 'chevron-right')}Done <span class="count">${done.length}</span></button>${showDone ? done.slice(0, 200).map(todoRow).join('') : ''}` : '');
+    $('todo-list').innerHTML = (open.length ? todoGroups(open) : `<p class="todo-empty">Nothing to do. Add a todo above, or ask an agent to note one.</p>`)
+      + (done.length ? `<button type="button" class="todo-done-toggle" data-todo-done-toggle aria-expanded="${showDone}">${icon(showDone ? 'chevron-down' : 'chevron-right')}Done <span class="count">${done.length}</span></button>${showDone ? `<div class="todo-done-rows">${done.slice(0, 200).map((t) => todoRow(t)).join('')}</div>` : ''}` : '');
   }
   function todoSection(agent) {
     const mine = todoList().filter((t) => t.agent && (t.agent.id === agent.id || t.agent.id === agent.backendId));
@@ -2422,7 +2439,8 @@ function initialize() {
   async function todoAction(fn) { try { await fn(); } catch (e) { toast(e.message); } }
   function pickAgent(anchor, current, choose) {
     const agents = state.agents.filter((a) => !a.remote && !a.exited && a.kind !== 'shell').sort((x, y) => (y.lastActivity || 0) - (x.lastActivity || 0)).slice(0, 25);
-    dropdown(anchor, [{ label: 'No agent', icon: current ? '' : 'check', run: () => choose(null) }, '-', ...agents.map((a) => ({ label: `${titleOf(a)} · ${a.project || kindName(a)}`, icon: current && (current === a.id || current === backend(a)) ? 'check' : '', run: () => choose(a) }))]);
+    dropdown(anchor, [{ label: 'Yours (no agent)', icon: 'user', check: !current, run: () => choose(null) }, '-', { heading: 'Give it to' },
+      ...agents.map((a) => ({ label: titleOf(a), hint: a.project || kindName(a), avatar: avatar(a), check: !!current && (current === a.id || current === backend(a)), run: () => choose(a) }))]);
   }
   function todoMenu(anchor, t) {
     dropdown(anchor, [
@@ -2436,6 +2454,9 @@ function initialize() {
     ]);
   }
   document.addEventListener('click', (event) => {
+    if (event.target.closest('[data-todo-pick-clear]')) { event.preventDefault(); todoPick = null; todosSignature = ''; renderTodos(); return; }
+    const open = event.target.closest('[data-todo-open]');
+    if (open) { event.preventDefault(); navigate('session', open.dataset.todoOpen); return; }
     const el = event.target.closest('[data-todo-check], [data-todo-more], [data-todo-agent], [data-todo-link], [data-todo-done-toggle], [data-linear], #todo-agent-pick');
     if (!el) return;
     event.preventDefault();
@@ -3304,7 +3325,8 @@ function initialize() {
       if (item.heading) { el.append(Object.assign(document.createElement('div'), { className: 'pop-heading', textContent: item.heading })); continue; }
       const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'menuitem');
       b.className = item.danger ? 'danger' : '';
-      b.innerHTML = `${item.icon ? icon(item.icon) : '<span class="pop-gap"></span>'}<span>${escapeHtml(item.label)}</span>${item.keys ? `<kbd>${escapeHtml(item.keys)}</kbd>` : ''}`;
+      b.innerHTML = `${item.avatar || (item.icon ? icon(item.icon) : '<span class="pop-gap"></span>')}<span>${escapeHtml(item.label)}${item.hint ? `<small class="pop-hint">${escapeHtml(item.hint)}</small>` : ''}</span>${item.check ? icon('check') : ''}${item.keys ? `<kbd>${escapeHtml(item.keys)}</kbd>` : ''}`;
+      if (item.avatar) b.classList.add('with-avatar');
       if (item.action) b.dataset.sessionAction = item.action;
       b.onclick = () => { closeMenu(); item.run(); };
       el.append(b);
