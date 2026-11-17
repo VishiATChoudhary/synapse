@@ -33,6 +33,7 @@
     "app/preload.cjs",
     "app/agent-browser.mjs",
     "app/vault.mjs",
+    "app/logins.mjs",
     "app/browser-preload.cjs",
     "app/worktrees.mjs",
     "app/updater.mjs",

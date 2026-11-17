@@ -2029,7 +2029,7 @@ function canvasMenu({ hit, agent, group, x, y, hiddenCount }, r = $('#canvas-fra
 // Settings: a window of its own, sections on the left (with a search across all of them), the chosen one on the right.
 // Every change saves to ~/.synapse/app.json as it is made.
 const SETTINGS_PANES = [
-  ['general', 'General', '◐'], ['notifications', 'Notifications', '◔'], ['agents', 'Agents', '✳'], ['workspaces', 'Workspaces', '▤'],
+  ['general', 'General', '◐'], ['notifications', 'Notifications', '◔'], ['agents', 'Agents', '✳'], ['workspaces', 'Workspaces', '▤'], ['logins', 'Logins', '⚿'],
   ['appearance', 'Appearance', '◑'], ['shortcuts', 'Shortcuts', '⌘'], ['phone', 'Phone', '◫'], ['people', 'People & agent talk', '◎'],
 ];
 async function openSettings(start) {
@@ -2137,6 +2137,43 @@ async function openSettings(start) {
         row('Link workspaces', 'Symlink workspaces added from elsewhere into ~/.synapse/workspaces, so the library can bring them back.', toggle(!!s.autoSymlink, async (on) => { await synapse.settings.set({ autoSymlink: on }); toast(on ? 'New workspaces get linked into ~/.synapse/workspaces' : 'Workspaces are no longer linked. Existing links stay.'); })),
         row('Safe worktree deletion', 'Deleting a worktree first commits its uncommitted changes (untracked files too) to its branch, so nothing is lost. Ignored files go with the folder.', toggle(s.safeWorktreeDelete !== false, async (on) => { M.safeDelete = (await synapse.settings.set({ safeWorktreeDelete: on })).safeWorktreeDelete; toast(on ? 'Deleting a worktree saves its changes to the branch first' : 'Worktrees with uncommitted changes ask before they are deleted'); }))),
       group('Past chats', card(row('Chats from before Synapse', 'Import your Claude Code and Codex chats and pick them up here. ⇧⌘H', button('Browse', () => { close(); openPastChats(); })), importRows({ remove: true }))));
+
+    // ---- Logins: website logins the Synapse browser signs in with (app/logins.mjs). You approve each sign-in; the
+    // password goes from here into the page, never to the agent.
+    const loginList = el('div', 'login-list');
+    const drawLogins = async () => {
+      let list = [];
+      try { list = await synapse.logins.list(); } catch (e) { loginList.replaceChildren(el('p', 'set-desc set-pad', e.message)); return; }
+      if (!list.length) { loginList.replaceChildren(el('p', 'login-empty', 'No logins yet. Add one above, and agents can sign in to that site in the Synapse browser.')); return; }
+      loginList.replaceChildren(...list.sort((x, y) => x.site.localeCompare(y.site) || x.user.localeCompare(y.user)).map((l) => {
+        const r = el('div', 'login-row'), badge = el('span', 'login-badge', (l.site[0] || '?').toUpperCase());
+        const text = el('div', 'login-text'); text.append(el('div', 'login-site', l.site), el('div', 'login-user', l.user));
+        r.append(badge, text);
+        if (l.source === 'vault') { const tag = el('span', 'login-tag', 'Vault'); tag.title = 'From your vault (vault login ls). Change it there.'; r.append(tag); }
+        else r.append(button('Remove', async () => { try { await synapse.logins.remove(l.base); toast(`Removed the login for ${l.site}`); drawLogins(); } catch (e) { toast(e.message, true); } }));
+        return r;
+      }));
+    };
+    const loginForm = el('form', 'login-form'); loginForm.autocomplete = 'off';
+    const field = (label, type, placeholder, auto) => { const w = el('label', 'login-field'); const i = el('input', 'set-input'); i.type = type; i.placeholder = placeholder; i.autocomplete = auto; i.spellcheck = false; w.append(el('span', 'login-label', label), i); return [w, i]; };
+    const [siteBox, siteIn] = field('Site', 'text', 'github.com', 'off');
+    const [userBox, userIn] = field('Username or email', 'text', 'you@example.com', 'off');
+    const [passBox, passIn] = field('Password', 'password', '••••••••', 'new-password');
+    const saveLogin = el('button', 'set-btn primary', 'Save login'); saveLogin.type = 'submit';
+    const loginNote = el('p', 'login-note', 'Encrypted on this Mac. Agents never see it: Synapse fills it into the page after you approve.');
+    loginForm.append(siteBox, userBox, passBox, saveLogin);
+    loginForm.onsubmit = async (e) => {
+      e.preventDefault(); saveLogin.disabled = true;
+      try {
+        const saved = await synapse.logins.add({ site: siteIn.value, username: userIn.value, password: passIn.value });
+        passIn.value = ''; siteIn.value = ''; userIn.value = ''; toast(`Saved the login for ${saved.site}`); drawLogins(); siteIn.focus();
+      } catch (err) { toast(err.message, true); }
+      finally { saveLogin.disabled = false; }
+    };
+    drawLogins();
+    pane('logins', 'Agents sign in with these in the Synapse browser. You approve each sign-in, and the password goes into the page, never to the agent.',
+      group('Add a login', card(loginForm, loginNote)),
+      group('Saved logins', loginList));
 
     // ---- Appearance, shortcuts, phone, people: drawn by their own helpers
     const looks = el('div', 'looks'); drawLooks(looks);

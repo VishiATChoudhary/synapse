@@ -1,7 +1,7 @@
 // Synapse desktop: Electron main process.
 // Owns the PTYs, reads Synapse state from ~/.synapse through lib.mjs, watches fork requests
 // filed by the prompt hook, and pushes everything to the renderer over IPC.
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, screen, shell, systemPreferences } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage, screen, shell, systemPreferences } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -23,6 +23,7 @@ import { createDiscovery } from '../discovery.mjs';
 import * as chats from './history.mjs';
 import { createAgentBrowser } from './agent-browser.mjs';
 import * as vault from './vault.mjs';
+import { createLogins } from './logins.mjs';
 import headless from '@xterm/headless';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -904,7 +905,21 @@ const handle = (ch, fn) => ipcMain.handle(ch, async (event, a) => {
 handle('state', async () => { await discovery.refresh(); return state(); });
 // the agent browser (agent-browser.mjs): the panel places it, you drive it from the panel or its own window
 // an agent opened a page: its panel shows the browser (Settings > Agents can turn that off)
-const agentBrowser = createAgentBrowser({ dataDir: DATA, root: ROOT, vault, packaged: app.isPackaged, getWin: () => win,
+// logins the browser can sign in with: the ones added in Settings > Logins (logins.mjs), then the vault's (vault.mjs)
+// tests (unpackaged only) use a stand-in for the Keychain-backed encryption, so they never touch the real Keychain
+const testCrypto = !app.isPackaged && process.env.SYNAPSE_LOGINS_TEST_CRYPTO === '1'
+  ? { isEncryptionAvailable: () => true, encryptString: (t) => Buffer.from(`test:${t}`), decryptString: (b) => String(b).replace(/^test:/, '') } : null;
+const logins = createLogins({ file: path.join(DATA, 'logins.json'), safeStorage: testCrypto || safeStorage });
+const signIns = {
+  available: () => true,
+  logins: () => [...logins.list(), ...vault.logins().map((l) => ({ ...l, source: 'vault' }))],
+  loginsFor: (url) => [...logins.loginsFor(url), ...vault.loginsFor(url)],
+  secret: (base, opts) => logins.has(base) ? logins.secret(base) : vault.secret(base, opts),
+};
+handle('logins:list', () => signIns.logins());
+handle('logins:add', ({ site, username, password }) => logins.add({ site, username, password }));
+handle('logins:remove', ({ base }) => logins.remove(String(base || '')));
+const agentBrowser = createAgentBrowser({ dataDir: DATA, root: ROOT, vault: signIns, packaged: app.isPackaged, getWin: () => win,
   onAgentOpened: (id) => { if (config().showBrowser !== false) win?.webContents.send('agent-browser:show', { agent: id }); }, agentName: (id) => listAgents().find((a) => a.id === id)?.name || 'Agent' });
 const agentId = (v) => { const id = String(v || ''); if (!id || id.length > 200) throw new Error('Pick an agent.'); return id; };
 handle('agent-browser:state', () => agentBrowser.snapshot());

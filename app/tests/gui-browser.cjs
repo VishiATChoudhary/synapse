@@ -39,7 +39,7 @@ fs.writeFileSync(path.join(state, 'workspace-ui.json'), JSON.stringify({ 'synaps
 const vaultHome = path.join(fixture, 'vault'); fs.mkdirSync(vaultHome);
 fs.writeFileSync(path.join(vaultHome, 'index.json'), JSON.stringify({ SHOP_EXAMPLE_PASSWORD: { type: 'login', site: 'shop.example', user: 'ada@shop.example' }, SHOP_EXAMPLE_USERNAME: { type: 'login', site: 'shop.example', user: 'ada@shop.example' }, OTHER_ORG_PASSWORD: { type: 'login', site: 'other.org', user: 'x' } }));
 fs.writeFileSync(path.join(fixture, 'fake-vault.json'), JSON.stringify({ SHOP_EXAMPLE: { username: 'ada@shop.example', password: 'pw-Secret-123' } }));
-Object.assign(process.env, { VAULT_HOME: vaultHome, SYNAPSE_VAULT_FAKE: path.join(fixture, 'fake-vault.json') });
+Object.assign(process.env, { VAULT_HOME: vaultHome, SYNAPSE_VAULT_FAKE: path.join(fixture, 'fake-vault.json'), SYNAPSE_LOGINS_TEST_CRYPTO: '1' });
 Object.assign(process.env, { SYNAPSE_HOME: state, SYNAPSE_CLAUDE_HOME: claudeHome, SYNAPSE_CLOUD: 'http://127.0.0.1:9', SYNAPSE_DESKTOP_VIEW: 'gui', SHELL: '/bin/zsh' });
 for (const key of Object.keys(process.env)) if (key.startsWith('SYNAPSE_SHOT') || key === 'SYNAPSE_DEBUG' || key === 'SYNAPSE_DEMO') delete process.env[key];
 process.chdir(fixture);
@@ -246,6 +246,37 @@ const shot = async (w, name) => { if (process.env.SHOT_DIR) { await sleep(700); 
   await act('open', { url: `${url}login` });
   const again2 = await act('login');
   assert.ok(!again2.error, again2.error);
+
+  // a login added in Settings > Logins: listed with the vault's, signs in the same way, never stored or shown in clear
+  await native(`document.querySelector('#desktop-settings')?.click()`);
+  await until(() => native(`!!document.querySelector('[data-settings-pane="logins"]')`), 'settings open');
+  await native(`document.querySelector('[data-settings-pane="logins"]').click()`);
+  await until(() => native(`/Vault/.test(document.querySelector('.login-list')?.textContent || '')`), 'the vault login is listed');
+  await native(`(() => { const [s, u, p] = document.querySelectorAll('.login-form input'); s.value = 'https://shop.example/login'; u.value = 'grace@shop.example'; p.value = 'pw-Grace-789'; document.querySelector('.login-form').requestSubmit(); })()`);
+  await until(() => native(`/grace@shop\.example/.test(document.querySelector('.login-list').textContent)`), 'saved and listed');
+  assert.equal(await native(`document.querySelector('.login-form input[type=password]').value`), '', 'the field is cleared');
+  const stored = fs.readFileSync(path.join(state, 'logins.json'), 'utf8');
+  assert.ok(stored.includes('shop.example') && !stored.includes('pw-Grace-789'), 'stored encrypted');
+  if (process.env.SHOT_DIR) { await sleep(400); const d = win.webContents.debugger; d.attach('1.3'); fs.writeFileSync(path.join(process.env.SHOT_DIR, 'browser-logins.png'), Buffer.from((await d.sendCommand('Page.captureScreenshot', { format: 'png' })).data, 'base64')); d.detach(); }
+  await native(`document.querySelector('.set-close').click()`);
+  assert.deepEqual((await act('logins')).value.logins.sort(), ['ada@shop.example', 'grace@shop.example']);
+  await act('open', { url: `${url}login` });
+  const grace = act('login', { user: 'grace@shop.example' });
+  await until(() => ui(`/grace@shop\\.example/.test(document.querySelector('.browser-ask.login')?.textContent || '')`), 'asked to approve the Settings login');
+  await tap('.browser-ask.login [data-browser-answer="once"]');
+  const graced = await grace;
+  assert.ok(!graced.error, graced.error);
+  assert.deepEqual(await page.executeJavaScript('window.got'), { u: 'grace@shop.example', p: 'pw-Grace-789' }, 'the page got the Settings login');
+  assert.ok(!JSON.stringify(graced).includes('pw-Grace-789'), 'the agent never sees it');
+  // removed from Settings: gone for the agent too
+  await native(`document.querySelector('#desktop-settings').click()`);
+  await until(() => native(`!!document.querySelector('[data-settings-pane="logins"]')`), 'settings again');
+  await native(`document.querySelector('[data-settings-pane="logins"]').click()`);
+  await until(() => native(`[...document.querySelectorAll('.login-row')].some((r) => /grace/.test(r.textContent) && r.querySelector('button'))`), 'its Remove button');
+  await native(`[...document.querySelectorAll('.login-row')].find((r) => /grace/.test(r.textContent)).querySelector('button').click()`);
+  await until(() => native(`!/grace/.test(document.querySelector('.login-list').textContent)`), 'removed');
+  await native(`document.querySelector('.set-close').click()`);
+  assert.deepEqual((await act('logins')).value.logins, ['ada@shop.example']);
 
   assert.doesNotMatch(await ui(`document.getElementById('toast').hidden ? '' : document.getElementById('toast').textContent`), /Could not save/, 'the panel tab is saved');
   assert.deepEqual(errors.filter((e) => !/favicon|ERR_/.test(e)), []);

@@ -179,7 +179,7 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
       case 'login': {
         if (!wc) throw new Error('Open a page first.');
         const login = pickLogin(wc.getURL(), args.user);
-        if (!login) throw new Error('Your vault has no login for this site.');
+        if (!login) throw new Error('No saved login for this site. Add one in Settings > Logins.');
         await fillLogin(wc, login, true);
         break;
       }
@@ -383,12 +383,11 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
       case 'forward': wc.navigationHistory.goForward(); await settle(wc); await guard(); return read(t);
       case 'logins': return { site: originOf(wc.getURL()), logins: loginsHere(wc.getURL()).map((l) => l.user), note: 'Use action "login" (with user, if there are several) to sign in; you never see the password.' };
       case 'login': {
-        if (!vault?.available()) throw new Error('The user has no vault set up (vault login set SITE USER), so there are no saved logins.');
         const origin = originOf(wc.getURL());
         if (!origin) throw new Error('Open the site\'s sign-in page first.');
         await guard();
         const login = pickLogin(wc.getURL(), args.user);
-        if (!login) throw new Error(loginsHere(wc.getURL()).length ? `Several logins fit; pass user (one of: ${loginsHere(wc.getURL()).map((l) => l.user).join(', ')}).` : `The user's vault has no login for ${new URL(origin).hostname}. Ask them to add one (vault login set ${new URL(origin).hostname} USER) or to sign in themselves in the browser panel.`);
+        if (!login) throw new Error(loginsHere(wc.getURL()).length ? `Several logins fit; pass user (one of: ${loginsHere(wc.getURL()).map((l) => l.user).join(', ')}).` : `The user has no saved login for ${new URL(origin).hostname}. Ask them to add one in Synapse (Settings > Logins) or to sign in themselves in the browser panel.`);
         const ok = await ask(id, origin, login);
         if (ok === null) throw new Error('The user has not answered whether you may sign in yet. Ask them in chat to allow it in Synapse\'s browser panel.');
         if (!ok) throw new Error('The user did not allow signing in.');
