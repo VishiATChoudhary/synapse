@@ -596,7 +596,7 @@ async function ensureCanvas() {
   if (canvasStart) return canvasStart;
   canvasStart = new Promise((resolve, reject) => {
     canvasProc = spawn(process.execPath, [path.join(ROOT, '..', 'server.mjs')], {
-      env: { ...process.env, SYNAPSE_HOME: DATA, ELECTRON_RUN_AS_NODE: '1', PORT: String(CANVAS_PORT), NO_OPEN: '1' },
+      env: { ...process.env, SYNAPSE_HOME: DATA, ELECTRON_RUN_AS_NODE: '1', PORT: String(CANVAS_PORT), NO_OPEN: '1', SYNAPSE_APP_PID: String(process.pid) },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const timer = setTimeout(() => { canvasProc?.kill(); reject(new Error('The local Synapse server did not start.')); }, 15000);
@@ -717,6 +717,7 @@ function noReload() {
 
 app.whenReady().then(() => {
   agentBrowser.start();
+  ensureCanvas().catch(() => {}); // the GUI's server, started with the app rather than when the window asks
   integrationSetup = autoSetup(); // install guidance before a new or restored agent starts
   if (WIN) Menu.setApplicationMenu(null); // its accelerators (Ctrl+W closes the window, Ctrl+R reloads) belong to the terminals
   else noReload();
@@ -768,7 +769,7 @@ app.on('before-quit', (e) => {
   quitting = true;
   for (const [, t] of ptys) { try { process.kill(-t.pid, 'SIGKILL'); } catch {} try { t.p.kill('SIGKILL'); } catch {} }
   const started = Date.now();
-  const wait = setInterval(() => { if (!ptys.size || Date.now() - started > 2000) { clearInterval(wait); app.quit(); } }, 30);
+  const wait = setInterval(() => { if (!ptys.size || Date.now() - started > 800) { clearInterval(wait); app.quit(); } }, 20);
 });
 
 // ---------------------------------------------------------------- updates (see updater.mjs)
@@ -1418,7 +1419,7 @@ handle('requests:deny', async ({ id }) => { const out = FAKE ? null : await (awa
 handle('requests:cancel', async ({ id }) => { const out = await (await acct()).cancel(id); await pollRequests(); return out; });
 handle('update:get', () => ({ ...updater.state, enabled: UPDATES }));
 handle('update:check', async () => ({ ...(await updater.check()), enabled: UPDATES }));
-handle('update:install', () => { if (updater.install({ relaunch: true, open: UPDATE_OPEN })) setTimeout(() => app.quit(), 50); });
+handle('update:install', () => { if (updater.install({ relaunch: true, open: UPDATE_OPEN })) { for (const w of BrowserWindow.getAllWindows()) w.hide(); setTimeout(() => app.quit(), 50); } }); // gone at once; the new version opens in a moment
 handle('update:download', () => { const u = updater.state.dmg; if (u) shell.openExternal(u); });
 handle('talks:list', () => talkHistory());
 handle('links', async () => (FAKE ? fake().links : (await acct()).externalLinks()));

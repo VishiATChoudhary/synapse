@@ -58,18 +58,18 @@ const near = (a, b) => Math.abs(a.x - b.x) < 2 && Math.abs(a.y - b.y) < 2 && Mat
 
   // a new version: a banner at the bottom left, with progress, then Restart; it stays until you update
   win.webContents.send('update', { state: 'downloading', version: '9.9.9', progress: 0.4 });
-  await until(() => ui(`!document.getElementById('update-card').hidden && /Downloading Synapse 9\\.9\\.9/.test(document.getElementById('update-card').textContent) && /40%/.test(document.getElementById('update-card').textContent)`), 'the download shows in the GUI');
+  await until(() => ui(`!document.getElementById('update-card').hidden && /Downloading 9\\.9\\.9/.test(document.getElementById('update-card').textContent) && /40%/.test(document.getElementById('update-card').textContent)`), 'the download shows in the GUI');
   let installed = 0;
   ipcMain.removeHandler('update:install'); ipcMain.handle('update:install', () => { installed++; return { ok: true, value: null }; });
   win.webContents.send('update', { state: 'ready', version: '9.9.9' });
-  await until(() => ui(`/Update to Synapse 9\\.9\\.9/.test(document.getElementById('update-card').textContent)`), 'ready to restart');
-  if (process.env.UPDATE_SHOT) fs.writeFileSync(process.env.UPDATE_SHOT, (await win.webContents.capturePage()).toPNG());
+  await until(() => ui(`/Synapse 9\\.9\\.9 is ready/.test(document.getElementById('update-card').textContent)`), 'ready to restart');
+  if (process.env.UPDATE_SHOT) { await sleep(500); const d = win.webContents.debugger; d.attach('1.3'); fs.writeFileSync(process.env.UPDATE_SHOT, Buffer.from((await d.sendCommand('Page.captureScreenshot', { format: 'png' })).data, 'base64')); d.detach(); } // CDP: capturePage is blank while the window is covered
   const card = await ui(`(() => { const r = document.getElementById('update-card').getBoundingClientRect(); return { left: r.left, bottom: innerHeight - r.bottom }; })()`);
   assert.ok(card.left < 40 && card.bottom < 120, `bottom left: ${JSON.stringify(card)}`);
   await ui(`document.querySelector('[data-update-go]').click()`);
   await until(async () => installed === 1, 'Restart installs the update');
   win.webContents.send('update', { state: 'ready', version: '9.9.10' });
-  await until(() => ui(`/Update to Synapse 9\\.9\\.10/.test(document.getElementById('update-card').textContent)`), 'a newer version shows');
+  await until(() => ui(`/Synapse 9\\.9\\.10 is ready/.test(document.getElementById('update-card').textContent)`), 'a newer version shows');
   console.log('PASS update banner: progress and Restart at the bottom left');
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);
 })().catch(async (e) => {

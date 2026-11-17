@@ -2534,12 +2534,13 @@ function initialize() {
     const shown = ['downloading', 'ready', 'manual', 'installing'].includes(update.state);
     card.hidden = !shown;
     if (!shown) return;
-    const pct = Math.round((update.progress || 0) * 100);
-    const [title, sub, action] = update.state === 'ready' ? [`Update to Synapse${v}`, 'Restart to get the newest version.', 'Restart']
-      : update.state === 'manual' ? [`Update to Synapse${v}`, 'Download it and drag it into Applications.', 'Download']
-      : update.state === 'installing' ? ['Updating…', 'Synapse restarts in a moment.', '']
-      : [`Downloading Synapse${v}`, `${pct}%`, ''];
-    card.innerHTML = `<span class="update-icon">${icon(update.state === 'ready' || update.state === 'manual' ? 'arrow-up' : 'clock')}</span><div class="update-text"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(sub)}</span>${update.state === 'downloading' ? `<span class="update-bar"><span style="width:${pct}%"></span></span>` : ''}</div>${action ? `<button type="button" class="button update-go" data-update-go="1">${action}</button>` : ''}`;
+    const pct = Math.round((update.progress || 0) * 100), st = update.state;
+    const label = st === 'ready' ? `Synapse${v} is ready` : st === 'manual' ? `Synapse${v} is out` : st === 'installing' ? 'Restarting…' : `Downloading${v}`;
+    const end = st === 'ready' ? '<button type="button" class="update-go" data-update-go="1">Restart</button>'
+      : st === 'manual' ? '<button type="button" class="update-go" data-update-go="1">Download</button>'
+      : st === 'downloading' ? `<span class="update-pct">${pct}%</span>` : '';
+    card.dataset.state = st;
+    card.innerHTML = `<span class="update-dot" aria-hidden="true"></span><span class="update-label">${escapeHtml(label)}</span>${end}${st === 'downloading' ? `<span class="update-bar" style="width:${pct}%"></span>` : ''}`;
     if (update.notes) card.title = update.notes;
   }
   $('update-card').addEventListener('click', (event) => {

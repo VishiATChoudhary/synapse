@@ -142,13 +142,14 @@ export function createUpdater({ currentVersion, bundle, manifestUrl = MANIFEST_U
     }
     const script = [
       'pid="$1"; cur="$2"; new="$3"; stage="$4"; relaunch="$5"; open="$6"',
-      'n=0; while kill -0 "$pid" 2>/dev/null && [ $n -lt 600 ]; do sleep 0.1; n=$((n+1)); done',
+      'n=0; while kill -0 "$pid" 2>/dev/null && [ $n -lt 1200 ]; do sleep 0.05; n=$((n+1)); done',
       'old="$stage/previous.app"; rm -rf "$old"',
       'if mv "$cur" "$old"; then',
-      '  if mv "$new" "$cur"; then rm -rf "$old"; else mv "$old" "$cur"; fi',
+      '  if ! mv "$new" "$cur"; then mv "$old" "$cur"; fi',
       'fi',
-      'rm -rf "$stage"',
+      // open the new version first; the old copy (hundreds of MB) is deleted after, not before
       '[ "$relaunch" = 1 ] && "$open" "$cur"',
+      'rm -rf "$stage"',
       'exit 0',
     ].join('\n');
     const child = spawn('/bin/sh', ['-c', script, 'synapse-update', String(pid), bundle, state.staged, stageDir, relaunch ? '1' : '0', open], { detached: true, stdio: 'ignore' });

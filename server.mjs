@@ -514,6 +514,11 @@ const server = http.createServer((req, res) => {
   });
 });
 
+// started by the Synapse app: go when it does, even if it never got to stop us (a crash, a test's hard exit)
+if (process.env.SYNAPSE_APP_PID) {
+  const parent = Number(process.env.SYNAPSE_APP_PID);
+  setInterval(() => { try { process.kill(parent, 0); } catch { process.exit(0); } }, 2000).unref();
+}
 server.listen(PORT, '127.0.0.1', () => {
   const url = `http://localhost:${server.address().port}`;
   console.log(`synapse running at ${url}`);

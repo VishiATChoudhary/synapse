@@ -551,12 +551,12 @@ function scheduleSave() {
 }
 
 // Rebuild the saved slots. Returns how many came back.
+// Panes come back side by side (each one's sessions in order, a fork after its parent), not one after another
 async function restoreSessions(saved) {
   let focus = null;
-  for (const sv of saved?.slots || []) {
-    if (!worktreeOf(sv.worktree)) continue; // its workspace was removed
-    const s = { id: nextId++, worktree: sv.worktree, sessions: [], path: [] };
-    M.slots.push(s);
+  const panes = (saved?.slots || []).filter((sv) => worktreeOf(sv.worktree)) // its workspace may have been removed
+    .map((sv) => { const s = { id: nextId++, worktree: sv.worktree, sessions: [], path: [] }; M.slots.push(s); return { sv, s }; });
+  await Promise.all(panes.map(async ({ sv, s }) => {
     const ids = [];
     for (const [i, x] of sv.sessions.entries()) {
       const parent = x.parent == null ? null : ids[x.parent] ?? null;
@@ -569,11 +569,11 @@ async function restoreSessions(saved) {
         ids[i] = made.id;
       } catch { ids[i] = parent; } // a session that cannot come back hands its children to its parent
     }
-    if (!s.sessions.length) { M.slots = M.slots.filter((y) => y !== s); continue; }
+    if (!s.sessions.length) { M.slots = M.slots.filter((y) => y !== s); return; }
     focusPath(s, ids[sv.top] ?? s.sessions[s.sessions.length - 1].id);
     M.open.add(worktreeOf(sv.worktree).project.key);
-    if (sv.focused || focus == null) focus = s.id;
-  }
+  }));
+  for (const { sv, s } of panes) if (M.slots.includes(s) && (sv.focused || focus == null)) focus = s.id;
   if (focus != null) M.focused = focus;
   return M.slots.length;
 }
@@ -4039,10 +4039,12 @@ async function desktopAction(action, args) {
     default: throw new Error('Unknown workspace action.');
   }
 }
+// the GUI's saved preferences, read at launch so its first page does not wait for them
+let earlyPreferences = synapse.workspace.load().catch(() => ({}));
 addEventListener('message', async (event) => {
   if (!workspaceFrame.src || event.source !== workspaceFrame.contentWindow || event.origin !== new URL(workspaceFrame.src).origin) return;
   if (event.data?.type === 'synapse:desktop-bootstrap') {
-    const preferences = await synapse.workspace.load().catch(() => ({}));
+    const preferences = await (earlyPreferences || synapse.workspace.load().catch(() => ({}))); earlyPreferences = null;
     event.source.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, event.origin);
     return;
   }
@@ -4106,6 +4108,9 @@ if (WIN) {
 (async () => {
   const flags = await synapse.flags();
   M.home = flags.home || '';
+  // the GUI's server is already starting (main starts it with the app): make sure, while the sessions come back
+  const wantGui = (flags.view || localStorage.getItem('synapse-desktop-view') || 'gui') === 'gui';
+  if (wantGui) synapse.canvas().catch(() => {});
   await refresh();
   // first run: the checkout we were started from is the sample workspace
   if (!M.projects.length && !flags.packaged && flags.cwd !== '/' && flags.cwd !== flags.home) { try { await synapse.project.add(flags.cwd); await refresh(); } catch {} }
@@ -4115,7 +4120,7 @@ if (WIN) {
   if (!restored && here) { M.open.add(worktreeOf(here.path)?.project.key); await newSlot(here.path, 'shell'); }
   persist = keep;
   render();
-  if ((flags.view || localStorage.getItem('synapse-desktop-view') || 'gui') === 'gui') await openWorkspace();
+  if (wantGui) await openWorkspace();
   if (flags.demo && here) {
     // a ready-made tree so the deck and the fan-out can be felt without running an agent
     await fork('why not just <= ?');
