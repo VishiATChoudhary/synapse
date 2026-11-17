@@ -91,6 +91,13 @@ function addHooks(d, events, matchers = {}) {
   }
 }
 if (installed('claude hooks', path.join(HOME, '.claude'))) editJSON('claude hooks', path.join(HOME, '.claude', 'settings.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart', 'PreToolUse'], { PreToolUse: 'Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__claude-in-chrome__.*|mcp__.*playwright.*|mcp__.*chrome-devtools.*|mcp__puppeteer__.*|mcp__browsermcp__.*' })); // PreToolUse: protected folders, and other browsers for agents in the app
+// Claude Code asks before each MCP tool call unless allowed: Synapse's own tools (local, and its browser asks you
+// itself before a new site or a login) are allowed up front, like Codex's below
+if (installed('claude permissions', path.join(HOME, '.claude'))) editJSON('claude permissions', path.join(HOME, '.claude', 'settings.json'), (d) => {
+  d.permissions ||= {};
+  const allow = (d.permissions.allow ||= []);
+  if (!allow.includes('mcp__synapse')) allow.push('mcp__synapse');
+});
 if (installed('codex hooks', CODEX)) editJSON('codex hooks', path.join(CODEX, 'hooks.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart', 'SubagentStart']));
 
 // Codex: TOML, append a table if missing. Codex asks before every MCP tool call unless told otherwise, and

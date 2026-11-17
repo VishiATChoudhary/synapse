@@ -312,6 +312,8 @@ const ICONS = {
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/><path d="M14 3v5h5"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/>',
+  maximize: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  minimize: '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
   'pop-out': '<rect x="3" y="7" width="14" height="14" rx="2"/><path d="M10 3h11v11M21 3l-9 9"/>',
   'dock-in': '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M14 3v18M9 9l-3 3 3 3"/>',
   eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
@@ -406,7 +408,7 @@ function initialize() {
       const message = event.data;
       const owns = (id) => desktop?.sessions.some((s) => s.id === id && s.pane === pane.dataset.paneKey);
       if (message?.type === 'synapse:desktop-bootstrap') {
-        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-inspector-tab'].map((key) => [key, getStorage(key, null)]));
+        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-inspector-tab', 'synapse-panel-width'].map((key) => [key, getStorage(key, null)]));
         pane.contentWindow.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, location.origin);
       }
       if (message?.type === 'synapse:desktop-ready') sendPaneState(pane);
@@ -546,6 +548,7 @@ function initialize() {
   const PANEL_TABS = ['details', 'todos', 'browser'];
   let inspectorTab = PANEL_TABS.includes(getStorage('synapse-inspector-tab', 'details')) ? getStorage('synapse-inspector-tab', 'details') : 'details';
   let browserSettle = 0; // while the panel eases to its new width, the page waits to be placed
+  let panelFull = false, panelDragging = false;
   let browserState = { agents: {}, asks: [] }, browserCovered = false, browserPlaced = '', browserSignature = '';
   // files pasted, dropped or attached in the composer, shown as chips (images as thumbnails) until sent (see insertPaths)
   const IMAGE = /\.(png|jpe?g|gif|webp|bmp|heic|tiff?)$/i;
@@ -623,8 +626,48 @@ function initialize() {
     $('workspace').dataset.inspector = visible ? 'open' : 'closed';
     $('context-toggle').setAttribute('aria-expanded', String(visible));
     $('inspector').classList.toggle('browser-mode', visible && inspectorTab === 'browser' && !inspectorFile);
+    if (!visible) panelFull = false;
+    $('panel-grip').hidden = !visible || panelFull;
+    document.querySelector('.content-area').classList.toggle('panel-full', visible && panelFull);
+    applyPanelWidth();
     if (visible) renderInspector();
     placeBrowser();
+  }
+
+  // ---- The panel's width: drag its left edge (double-click resets); Full size gives it the whole conversation area
+  function applyPanelWidth() {
+    const w = Number(getStorage('synapse-panel-width', 0)) || 0, pane = $('inspector');
+    if (w) { pane.style.setProperty('--inspector-width', `${w}px`); pane.style.setProperty('--panel-w', `${w}px`); }
+    else { pane.style.removeProperty('--inspector-width'); pane.style.removeProperty('--panel-w'); }
+  }
+  function setPanelFull(on) {
+    panelFull = !!on; inspectorSignature = ''; browserSignature = '';
+    browserSettle = Date.now() + 360; setTimeout(placeBrowser, 380);
+    syncInspector();
+  }
+  {
+    const grip = $('panel-grip');
+    grip.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault(); grip.setPointerCapture(event.pointerId);
+      panelDragging = true; browserCovered = true; placeBrowser(); // the page view would swallow the drag
+      document.querySelector('.content-area').classList.add('panel-resizing');
+      const area = document.querySelector('.content-area').getBoundingClientRect();
+      const move = (e) => {
+        const w = Math.round(Math.min(Math.max(area.right - e.clientX, 280), area.width - 320));
+        $('inspector').style.setProperty('--inspector-width', `${w}px`); $('inspector').style.setProperty('--panel-w', `${w}px`);
+      };
+      const up = (e) => {
+        grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up);
+        const w = parseInt($('inspector').style.getPropertyValue('--panel-w'), 10);
+        if (w) setStorage('synapse-panel-width', String(w));
+        panelDragging = false; browserCovered = false;
+        document.querySelector('.content-area').classList.remove('panel-resizing');
+        placeBrowser();
+      };
+      grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
+    });
+    grip.addEventListener('dblclick', () => { setStorage('synapse-panel-width', ''); applyPanelWidth(); setTimeout(placeBrowser, 50); });
   }
 
   function toast(message, undo, label = 'Undo') {
@@ -1742,9 +1785,10 @@ function initialize() {
   function inspectorBody(agent) {
     const pane = $('inspector');
     if (!pane.querySelector(':scope > .inspector-tabbar')) {
-      pane.innerHTML = `<div class="inspector-heading inspector-tabbar"><div class="inspector-tabs" role="tablist" aria-label="Panel"><span class="tab-glider" aria-hidden="true"></span>${PANEL_TABS.map((t) => `<button role="tab" data-inspector-tab="${t}"><span>${t[0].toUpperCase()}${t.slice(1)}</span><span class="tab-mark"></span></button>`).join('')}</div><button class="icon-button" data-action="close-inspector" aria-label="Close panel" title="Close">${icon('x')}</button></div><div class="inspector-body" id="inspector-body"></div>`;
+      pane.innerHTML = `<div class="inspector-heading inspector-tabbar"><div class="inspector-tabs" role="tablist" aria-label="Panel"><span class="tab-glider" aria-hidden="true"></span>${PANEL_TABS.map((t) => `<button role="tab" data-inspector-tab="${t}"><span>${t[0].toUpperCase()}${t.slice(1)}</span><span class="tab-mark"></span></button>`).join('')}</div><button class="icon-button" data-action="panel-full" id="panel-full" aria-label="Full size" title="Full size">${icon('maximize')}</button><button class="icon-button" data-action="close-inspector" aria-label="Close panel" title="Close">${icon('x')}</button></div><div class="inspector-body" id="inspector-body"></div>`;
       shownTab = null;
     }
+    const full = $('panel-full'); if (full && full.dataset.on !== String(panelFull)) { full.dataset.on = String(panelFull); full.innerHTML = icon(panelFull ? 'minimize' : 'maximize'); full.title = full.ariaLabel = panelFull ? 'Back to the side' : 'Full size'; }
     const b = browserOf(agent), live = b?.driving && !b.paused, asking = asksOf(agent).length, open = agentTodos(agent).filter((t) => !t.done).length;
     const marks = { details: '', todos: open ? `<span class="tab-count">${open}</span>` : '', browser: asking ? '<span class="tab-badge" title="Waiting for you">1</span>' : live ? '<span class="tab-live" title="The agent is using it"></span>' : '' };
     for (const btn of pane.querySelectorAll('[data-inspector-tab]')) {
@@ -1771,7 +1815,7 @@ function initialize() {
     const host = (q) => escapeHtml(q.origin.replace(/^https?:\/\//, ''));
     const ask = asks.map((q) => `<div class="browser-ask${q.kind === 'login' ? ' login' : ''}" role="alertdialog" aria-label="${q.kind === 'login' ? 'Allow a sign-in' : 'Allow a site'}">${q.kind === 'login'
       ? `<p>${icon('key')}<span><strong>${name}</strong> wants to sign in to <strong>${host(q)}</strong> as <strong>${escapeHtml(q.user || '')}</strong> with the login from your vault. Synapse fills it in; ${name} never sees the password.</span></p>`
-      : `<p><strong>${name}</strong> wants to open <strong>${host(q)}</strong> in your browser, where you may be signed in.</p>`}<div class="browser-ask-actions"><button class="button secondary" data-browser-answer="deny" data-ask="${escapeHtml(q.id)}">Deny</button><button class="button secondary" data-browser-answer="always" data-ask="${escapeHtml(q.id)}">${q.kind === 'login' ? 'Always on this site' : 'Always allow'}</button><button class="button" data-browser-answer="once" data-ask="${escapeHtml(q.id)}">${q.kind === 'login' ? 'Sign in' : 'Allow'}</button></div></div>`).join('');
+      : `<p><strong>${name}</strong> wants to open <strong>${host(q)}</strong> in your browser, where you may be signed in. Allow in this browser lets it open any site here without asking again, until you close its tabs.</p>`}<div class="browser-ask-actions"><button class="button secondary" data-browser-answer="deny" data-ask="${escapeHtml(q.id)}">Deny</button><button class="button secondary" data-browser-answer="always" data-ask="${escapeHtml(q.id)}">${q.kind === 'login' ? 'Always on this site' : 'Always allow this site'}</button><button class="button" data-browser-answer="once" data-ask="${escapeHtml(q.id)}" title="${q.kind === 'login' ? '' : 'Any site in this browser, until you close its tabs'}">${q.kind === 'login' ? 'Sign in' : 'Allow in this browser'}</button></div></div>`).join('');
     const body = !embedded ? `<div class="browser-empty">${icon('globe')}<p>The browser runs in the Synapse app.</p></div>`
       : b?.popped ? `<div class="browser-empty">${icon('pop-out')}<p>${name}'s browser is open in its own window.</p><button class="button secondary" data-browser="dock">${icon('dock-in')}Back to the panel</button></div>`
       : `<div class="browser-slot" id="browser-slot">${b?.tabs.length ? '' : `<div class="browser-empty">${icon('globe')}<p>${name} opens pages here when it uses the browser (the synapse_browser tool). You can watch, or open a page yourself.</p><p class="browser-hint">Sign in to sites here once: agents use your sessions without seeing your passwords.</p></div>`}</div>`;
@@ -3438,6 +3482,7 @@ function initialize() {
     if (action === 'add-connection') addConnection();
     if (action === 'friend-connection') addConnection('share');
     if (action === 'friends-sign-in') { if ($('action-dialog').open) $('action-dialog').close(); desktopCall('sign-in').catch((e) => toast(e.message)); }
+    if (action === 'panel-full') { setPanelFull(!panelFull); return; }
     if (action === 'close-inspector') { inspectorOpen = false; setStorage('synapse-inspector', 'closed'); syncInspector(); $('context-toggle').focus(); }
     if (action === 'show-messages') { persistDraft(); tab = 'messages'; renderMain(true); }
     if (action === 'show-all') { filter = 'all'; renderOverview(); }
@@ -3531,7 +3576,7 @@ if (typeof document !== 'undefined' && document.getElementById('workspace')) {
         const origin = new URLSearchParams(location.search).has('pane') ? location.origin : 'null';
         if (event.source !== parent || event.origin !== origin || event.data?.type !== 'synapse:desktop-bootstrap') return;
         clearTimeout(timer); removeEventListener('message', receive);
-        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-inspector-tab'];
+        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-inspector-tab', 'synapse-panel-width'];
         for (const key of keys) {
           try {
             const value = event.data.preferences?.[key];

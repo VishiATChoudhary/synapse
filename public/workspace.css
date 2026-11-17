@@ -1121,8 +1121,8 @@ body.sorting .session-row .row-actions { display: none; }
 .tab-badge { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--color-accent); color: #fff; font-size: 10.5px; line-height: 16px; text-align: center; }
 @keyframes browser-pulse { to { opacity: .3; } }
 .inspector.browser-mode { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 12px; }
-@media (min-width: 1280px) { .inspector.browser-mode { flex-basis: clamp(420px, 44vw, 820px); } }
-.inspector.browser-mode:not(.file-mode) { width: min(clamp(420px, 44vw, 820px), 100%); }
+@media (min-width: 1280px) { .inspector.browser-mode { flex-basis: var(--panel-w, clamp(420px, 44vw, 820px)); } }
+.inspector.browser-mode:not(.file-mode) { width: min(var(--panel-w, clamp(420px, 44vw, 820px)), 100%); }
 .browser-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .browser-tabs { display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: none; }
 .browser-tab { display: flex; align-items: center; min-width: 0; max-width: 200px; border-radius: var(--radius-sm); color: var(--color-muted); }
@@ -1197,3 +1197,17 @@ body.sorting .session-row .row-actions { display: none; }
 .todo-tab .todo-chip { display: none; }
 .todo-tab .todo-row { align-items: flex-start; gap: 10px; padding: 6px 2px; }
 .todo-tab .todo-text { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
+
+/* the panel's left edge resizes it; Full size gives it the conversation's room */
+.panel-grip { display: none; }
+@media (min-width: 1280px) {
+  .panel-grip:not([hidden]) { display: block; position: relative; flex: none; width: 0; z-index: 3; }
+  .panel-grip::before { content: ''; position: absolute; inset: 0 -4px; cursor: col-resize; }
+  .panel-grip::after { content: ''; position: absolute; top: 0; bottom: 0; left: -1px; width: 2px; background: var(--color-accent); opacity: 0; transition: opacity .15s; }
+  .panel-grip:hover::after, .panel-resizing .panel-grip::after { opacity: .7; }
+  .content-area.panel-resizing { cursor: col-resize; user-select: none; }
+  .content-area.panel-resizing .inspector { transition: none !important; }
+  .content-area.panel-full > .thread-view { display: none !important; }
+  .content-area.panel-full > .inspector { flex: 1 1 auto !important; width: auto !important; max-width: none; margin-inline-start: 0; }
+}
+.inspector-tabbar #panel-full { margin-left: auto; margin-right: 2px; }

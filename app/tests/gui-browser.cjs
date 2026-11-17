@@ -5,7 +5,7 @@
 // Run: SYNAPSE_APP_PORT=<free port> npx electron tests/gui-browser.cjs
 const { app, BrowserWindow } = require('electron');
 // a site that is not local, so the agent has to ask for it (it resolves to this machine)
-app.commandLine.appendSwitch('host-resolver-rules', 'MAP shop.example 127.0.0.1');
+app.commandLine.appendSwitch('host-resolver-rules', 'MAP shop.example 127.0.0.1, MAP news.example 127.0.0.1');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -145,6 +145,37 @@ const shot = async (w, name) => { if (process.env.SHOT_DIR) { await sleep(700); 
   const vb = win.contentView.children[0].getBounds();
   assert.ok(Math.abs(vb.width - slot.w) <= 2 && Math.abs(vb.height - slot.h) <= 2, `view ${JSON.stringify(vb)} on slot ${JSON.stringify(slot)}`);
   await until(() => ui(`/Test shop/.test(document.querySelector('.browser-tab.on')?.textContent || '')`), 'its tab in the panel');
+
+  // Allow covers the whole browser: another site opens without asking again
+  const other = await act('open', { url: `http://news.example:${site.address().port}/` });
+  assert.ok(!other.error, other.error);
+  assert.equal(await ui(`!!document.querySelector('.browser-ask')`), false, 'no second question');
+  await act('open', { url });
+
+  // drag the panel's left edge: it widens, the page follows, the width is kept; Full size takes the chat's room
+  const frameAt = await native(`(() => { const r = document.querySelector('#workspace-frame').getBoundingClientRect(); return { x: r.x, y: r.y }; })()`);
+  const grip = await ui(`(() => { const g = document.getElementById('panel-grip'); if (g.hidden) return null; const r = g.getBoundingClientRect(); return { x: r.x, y: r.y + r.height / 2 }; })()`);
+  assert.ok(grip, 'the panel has a grip');
+  const widthBefore = await ui(`document.getElementById('inspector').getBoundingClientRect().width`);
+  const gx = Math.round(frameAt.x + grip.x), gy = Math.round(frameAt.y + grip.y);
+  // real mouse input through CDP (sendInputEvent does not reach the GUI's own frame)
+  const dbg = win.webContents.debugger; if (!dbg.isAttached()) dbg.attach('1.3');
+  const mouse = (type, x) => dbg.sendCommand('Input.dispatchMouseEvent', { type, x, y: gy, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1 });
+  await mouse('mousePressed', gx);
+  for (let i = 1; i <= 10; i++) { await mouse('mouseMoved', gx - i * 15); await sleep(20); }
+  await mouse('mouseReleased', gx - 150);
+  dbg.detach();
+  await until(async () => (await ui(`document.getElementById('inspector').getBoundingClientRect().width`)) > widthBefore + 120, 'the panel is wider');
+  assert.ok(Number(await ui(`localStorage.getItem('synapse-panel-width')`)) > widthBefore + 120, 'the width is kept');
+  await until(async () => { const s2 = await ui(`Math.round(document.getElementById('browser-slot').getBoundingClientRect().width)`); return views(win) === 1 && Math.abs(win.contentView.children[0].getBounds().width - s2) <= 2; }, 'the page follows the new width');
+  await tap('[data-action="panel-full"]');
+  await until(() => ui(`document.getElementById('thread-view').offsetWidth === 0 && document.getElementById('inspector').getBoundingClientRect().width > innerWidth - 400`), 'full size');
+  await until(async () => views(win) === 1 && win.contentView.children[0].getBounds().width > 900, 'the page fills it');
+  await shot(win, 'full');
+  await tap('[data-action="panel-full"]');
+  await until(() => ui(`document.getElementById('thread-view').offsetWidth > 0`), 'back to the side');
+  await ui(`document.getElementById('panel-grip').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+  await until(() => ui(`!localStorage.getItem('synapse-panel-width')`), 'double-click resets the width');
   // the prompt hook learns which pages the agent has open
   await until(() => { try { return JSON.parse(fs.readFileSync(path.join(state, 'agent-browser-tabs.json'), 'utf8'))[agentKey]?.[0]?.url === url; } catch { return false; } }, 'open pages written for the hook');
 

@@ -87,6 +87,7 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
     detach(t.view);
     t.view.webContents.close();
     a.tabs = a.tabs.filter((x) => x !== t);
+    if (!a.tabs.length) a.allowAll = false; // a new browser asks again
     if (a.active === t.id) a.active = a.tabs.at(-1)?.id || null;
     if (!a.tabs.length && a.popped) { const w = a.popped; a.popped = null; if (!w.isDestroyed()) w.close(); }
     place();
@@ -195,13 +196,15 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
     } else {
       if (choice === 'always') { const s = readSites(); s.add(q.origin); saveSites(s); }
       if (choice === 'always' || choice === 'once') entry(q.agent).allowed.add(q.origin);
+      // Allow covers the whole browser: any site, without asking again, until its tabs are closed
+      if (choice === 'once') entry(q.agent).allowAll = true;
     }
     q.resolve(choice === 'always' || choice === 'once');
     push();
   }
 
   // ------------------------------------------------------------ what agents do
-  const allowedFor = (id, origin) => !origin || local(origin) || entry(id).allowed.has(origin) || readSites().has(origin);
+  const allowedFor = (id, origin) => !origin || local(origin) || entry(id).allowAll || entry(id).allowed.has(origin) || readSites().has(origin);
   function ask(id, origin, login = null) {
     if (!login && allowedFor(id, origin)) return Promise.resolve(true);
     if (login && (entry(id).logins.has(`${origin} ${login.base}`) || (readLogins()[origin] || []).includes(login.base))) return Promise.resolve(true);
