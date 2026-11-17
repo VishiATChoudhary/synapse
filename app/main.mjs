@@ -376,7 +376,7 @@ function state() {
   const messages = readJSON(FILES.messages, []);
   const unread = {};
   for (const m of messages) if (!m.delivered) unread[m.to] = (unread[m.to] || 0) + 1;
-  return { projects: projects(), agents: byPty, edges, unread, talks: openTalks(), talkRequests: openTalkRequests(edges), profiles: config().profiles, autoSendFork: !!config().autoSendFork, safeWorktreeDelete: config().safeWorktreeDelete !== false, wakeAgents: config().wakeAgents !== false, demo: DEMO };
+  return { projects: projects(), agents: byPty, edges, unread, talks: openTalks(), talkRequests: openTalkRequests(edges), profiles: config().profiles, autoSendFork: !!config().autoSendFork, safeWorktreeDelete: config().safeWorktreeDelete !== false, openWith: config().openWith || 'shell', wakeAgents: config().wakeAgents !== false, demo: DEMO };
 }
 
 // ---------------------------------------------------------------- agent talk
@@ -1077,7 +1077,7 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, safeWorktreeDelete: c.safeWorktreeDelete !== false, showBrowser: c.showBrowser !== false, synapseBrowserOnly: c.synapseBrowserOnly !== false, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [] });
+const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, safeWorktreeDelete: c.safeWorktreeDelete !== false, openWith: c.openWith || 'shell', showBrowser: c.showBrowser !== false, synapseBrowserOnly: c.synapseBrowserOnly !== false, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [] });
 handle('settings:get', () => settingsOut(config()));
 // an agent finished a turn while Synapse was in the background (the renderer decides when): say so, with the
 // start of its last reply; a click brings that session to the front
@@ -1158,6 +1158,8 @@ handle('settings:set', (patch) => {
   if ('showBrowser' in patch) c.showBrowser = !!patch.showBrowser;
   if ('synapseBrowserOnly' in patch) c.synapseBrowserOnly = !!patch.synapseBrowserOnly;
   if ('safeWorktreeDelete' in patch) c.safeWorktreeDelete = !!patch.safeWorktreeDelete;
+  // what a new worktree or workspace opens with: a shell, or one of the agents (a profile)
+  if ('openWith' in patch) c.openWith = typeof patch.openWith === 'string' && Object.hasOwn(c.profiles || {}, patch.openWith) ? patch.openWith : 'shell';
   if ('notifyDone' in patch) c.notifyDone = !!patch.notifyDone;
   if ('doneSound' in patch) c.doneSound = DONE_SOUNDS.includes(patch.doneSound) ? patch.doneSound : 'bubbleTap';
   if ('errorSound' in patch) c.errorSound = !!patch.errorSound;

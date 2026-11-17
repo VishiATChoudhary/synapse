@@ -595,6 +595,8 @@ function logo(kind) {
   if (how === 'color') { const i = el('img', 'logo'); i.src = `logos/${kind}.svg`; i.alt = ''; return i; }
   const m = el('span', 'logo mono'); m.style.setProperty('--logo', `url(logos/${kind}.svg)`); return m;
 }
+// what a new worktree, a new workspace and the first launch open with (Settings > Workspaces): a shell, or an agent
+const openWith = () => (M.profiles?.[M.openWith] ? M.openWith : 'shell');
 const profileOrder = () => Object.keys(M.profiles).sort((a, b) => (a === 'shell') - (b === 'shell'));
 
 // every running agent across workspaces, the one that last started, worked or asked for input first.
@@ -1527,7 +1529,7 @@ function promptWorktree(project) {
         if (choice?.pr) prStatuses.set(dir, choice.pr);
         if (alive()) close(); await refresh(); M.open.add(project.key);
         const first = M.slots.find(s => s.worktree === dir);
-        if (first) selectSession(first); else await newSlot(dir, 'shell');
+        if (first) selectSession(first); else await newSlot(dir, openWith());
       } catch (e) { fail(e); }
       finally { busy = false; go.disabled = fetch.disabled = inp.disabled = false; }
     };
@@ -1639,7 +1641,7 @@ async function promptProject(mode) {
     const done = async (dir) => {
       onCloneLine = null; close(); await refresh();
       const wt = worktreeOf(dir); if (wt) M.open.add(wt.project.key);
-      toast(`workspace ${dir.split('/').pop()} added`); newSlot(dir, 'shell');
+      toast(`workspace ${dir.split('/').pop()} added`); newSlot(dir, openWith());
     };
     // a library entry: add it, or go to it if it is already in the sidebar
     const pick = async (w) => {
@@ -2139,8 +2141,13 @@ async function openSettings(start) {
       group('Forks', row('Send forks right away', 'Send a fork’s question at once, instead of leaving it in the child’s prompt for you to send.', toggle(!!s.autoSendFork, async (on) => { M.autoSendFork = (await synapse.settings.set({ autoSendFork: on })).autoSendFork; toast(on ? 'Forks send their question right away' : 'A fork’s question waits in its prompt for you'); }))));
 
     // ---- Workspaces
+    const opener = el('select', 'set-input');
+    for (const k of profileOrder()) { const o = el('option', '', k === 'shell' ? 'A shell' : M.profiles[k].label || k); o.value = k; opener.appendChild(o); }
+    opener.value = M.profiles?.[s.openWith] ? s.openWith : 'shell'; opener.setAttribute('aria-label', 'New worktrees open with');
+    opener.onchange = async () => { try { M.openWith = opener.value = (await synapse.settings.set({ openWith: opener.value })).openWith; } catch (e) { toast(e.message, true); } };
     pane('workspaces', null,
       group('Folders',
+        row('New worktrees open with', 'What starts when you open a new worktree or add a workspace: a shell, or an agent.', opener),
         row('Link workspaces', 'Symlink workspaces added from elsewhere into ~/.synapse/workspaces, so the library can bring them back.', toggle(!!s.autoSymlink, async (on) => { await synapse.settings.set({ autoSymlink: on }); toast(on ? 'New workspaces get linked into ~/.synapse/workspaces' : 'Workspaces are no longer linked. Existing links stay.'); })),
         row('Safe worktree deletion', 'Deleting a worktree first commits its uncommitted changes (untracked files too) to its branch, so nothing is lost. Ignored files go with the folder.', toggle(s.safeWorktreeDelete !== false, async (on) => { M.safeDelete = (await synapse.settings.set({ safeWorktreeDelete: on })).safeWorktreeDelete; toast(on ? 'Deleting a worktree saves its changes to the branch first' : 'Worktrees with uncommitted changes ask before they are deleted'); }))),
       group('Past chats', card(row('Chats from before Synapse', 'Import your Claude Code and Codex chats and pick them up here. ⇧⌘H', button('Browse', () => { close(); openPastChats(); })), importRows({ remove: true }))));
@@ -2773,7 +2780,7 @@ async function refreshPullRequests() {
 }
 async function refresh() { apply(await synapse.state()); }
 function apply(st) {
-  M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo; M.autoSendFork = !!st.autoSendFork; M.safeDelete = st.safeWorktreeDelete !== false; M.wakeAgents = !!st.wakeAgents;
+  M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo; M.autoSendFork = !!st.autoSendFork; M.safeDelete = st.safeWorktreeDelete !== false; M.openWith = st.openWith || 'shell'; M.wakeAgents = !!st.wakeAgents;
   const talks = JSON.stringify([st.talks || [], st.talkRequests || []]);
   if (talks !== M.talksSig) { M.talksSig = talks; M.talks = st.talks || []; M.talkRequests = st.talkRequests || []; renderDot(); }
   // remember which agent each session runs while it is alive: that id is what a restart resumes. A resumed
@@ -4161,7 +4168,7 @@ if (WIN) {
   const here = M.projects.flatMap((p) => p.worktrees).find((w) => flags.cwd.startsWith(w.path)) || M.projects[0]?.worktrees[0];
   const keep = !flags.demo && !flags.shot;
   const restored = keep ? await restoreSessions(await synapse.sessions.load().catch(() => null)) : 0;
-  if (!restored && here) { M.open.add(worktreeOf(here.path)?.project.key); await newSlot(here.path, 'shell'); }
+  if (!restored && here) { M.open.add(worktreeOf(here.path)?.project.key); await newSlot(here.path, openWith()); }
   persist = keep;
   render();
   if (wantGui) await openWorkspace();
