@@ -1587,7 +1587,7 @@ function initialize() {
     });
   }
 
-  let inspectorFile = null, fileRequest = 0; // { agent, path, cwd, mode, stack }
+  let inspectorFile = null, fileRequest = 0, fileShown = ''; // { agent, path, cwd, mode, stack }; what the panel shows now
   const fileSize = (b) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
   function openFile(path, cwd, { back = false } = {}) {
     if (!byId.get(selectedId)) return;
@@ -1605,8 +1605,12 @@ function initialize() {
     catch (error) { f = { error: error.message }; }
     if (request !== fileRequest || inspectorFile !== file) return;
     const head = (title, sub, tools = '') => `<div class="inspector-heading file-heading">${file.stack.length > 1 ? `<button class="icon-button" data-file-act="back" aria-label="Back" title="Back">${icon('arrow-left')}</button>` : ''}<div class="file-title"><h2>${escapeHtml(title)}</h2>${sub ? `<span>${escapeHtml(sub)}</span>` : ''}</div><button class="text-button" data-file-act="details">Details</button><button class="icon-button" data-action="close-inspector" aria-label="Close file" title="Close">${icon('x')}</button></div>${tools}`;
-    if (f.error) { pane.innerHTML = head(file.path.split('/').pop(), file.path) + `<p class="inspector-note">Synapse can't open this file: ${escapeHtml(f.error)}</p>`; return; }
-    const raw = `/api/file/raw?${new URLSearchParams({ path: f.path })}`;
+    if (f.error) { fileShown = ''; pane.innerHTML = head(file.path.split('/').pop(), file.path) + `<p class="inspector-note">Synapse can't open this file: ${escapeHtml(f.error)}</p>`; return; }
+    // the same file, unchanged on disk, is already showing: leave it (a PDF or video would reload from the start)
+    const shown = JSON.stringify([f.path, f.mtime, f.size, file.mode, file.stack.length]);
+    if (shown === fileShown && pane.dataset.filePath === f.path && pane.classList.contains('file-mode')) return;
+    fileShown = shown;
+    const raw = `/api/file/raw?${new URLSearchParams({ path: f.path, v: String(f.mtime || '') })}`;
     const isMd = f.type === 'text' && /^(md|markdown|mdx)$/.test(f.ext);
     const mode = file.mode || (isMd && !from ? 'rendered' : 'source');
     const lines = f.type === 'text' ? f.text.split('\n') : [];
@@ -1931,7 +1935,7 @@ function initialize() {
       if (key !== inspectorSignature) { inspectorSignature = key; renderFile(); }
       return;
     }
-    inspectorFile = null; $('inspector').classList.remove('file-mode'); delete $('inspector').dataset.filePath;
+    inspectorFile = null; fileShown = ''; $('inspector').classList.remove('file-mode'); delete $('inspector').dataset.filePath;
     $('inspector').classList.toggle('browser-mode', inspectorTab === 'browser');
     if (inspectorTab === 'browser') { renderBrowser(agent); return; }
     if (inspectorTab === 'todos') { renderTodosTab(agent); return; }
