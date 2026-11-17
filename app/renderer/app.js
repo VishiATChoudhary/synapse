@@ -3933,7 +3933,7 @@ async function desktopAction(action, args) {
     }
     case 'paste': return synapse.files.fromClipboard();
     case 'save-file': return synapse.files.save(String(args.name || ''), String(args.data || ''));
-    case 'attach': { const { s } = ownSession(args.id); return synapse.files.pick(s.worktree); }
+    case 'attach': { if (!args.id && typeof args.cwd === 'string') return synapse.files.pick(args.cwd); const { s } = ownSession(args.id); return synapse.files.pick(s.worktree); }
     case 'dock': return dock(args);
     case 'update': {
       if (UPD.state === 'ready') return synapse.update.install();

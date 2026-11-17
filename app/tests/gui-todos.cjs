@@ -160,6 +160,49 @@ const linear = http.createServer(async (req, res) => {
   await ui(`document.querySelector('[data-todo-check="${issue.id}"]').click()`);
   await until(() => issues[0].state === 'completed', 'done in Linear too');
   console.log('PASS Linear: connected with a key, the assigned issue came in, ticking it finished it in Linear');
+
+  // Start agent: a todo opens the New session screen with it as the first message; the agent started gets the todo
+  await ui(`(() => { const i = document.getElementById('todo-input'); i.value = 'Tidy the changelog'; document.getElementById('todo-add').requestSubmit(); })()`);
+  await until(async () => (await rows()).some((r) => r.text === 'Tidy the changelog'), 'a todo to start on');
+  const tidy = (await rows()).find((r) => r.text === 'Tidy the changelog');
+  await until(() => ui(`!!document.querySelector('[data-todo-start="${tidy.id}"]')`), 'a Start agent button');
+  if (process.env.SHOT_DIR) { await ui(`document.querySelector('[data-todo-start="${tidy.id}"]').style.opacity = 1`); await sleep(300); fs.writeFileSync(path.join(process.env.SHOT_DIR, 'todo-start.png'), (await win.webContents.capturePage()).toPNG()); }
+  await ui(`document.querySelector('[data-todo-start="${tidy.id}"]').click()`);
+  await until(() => ui(`!document.getElementById('new-view').hidden && document.getElementById('new-input').value === 'Tidy the changelog' && !document.getElementById('new-todo').hidden`), 'New session screen with the todo');
+  assert.match(await ui(`document.getElementById('new-todo').textContent`), /Tidy the changelog/);
+  if (process.env.SHOT_DIR) { await sleep(300); fs.writeFileSync(path.join(process.env.SHOT_DIR, 'todo-new.png'), (await win.webContents.capturePage()).toPNG()); }
+  await ui(`document.getElementById('new-composer').requestSubmit()`);
+  const typedIn = (slot) => { try { return fs.readFileSync(path.join(ctl, `typed-${slot}`), 'utf8'); } catch { return ''; } };
+  await until(() => fs.existsSync(path.join(ctl, 'slot-1')), 'a new agent started', 20000);
+  await until(() => typedIn(1).includes('Tidy the changelog') && typedIn(1).includes(tidy.id), 'the todo is its first message', 20000);
+  await until(() => !!todosFile().find((t) => t.id === tidy.id)?.agent, 'the todo is linked to the new agent');
+  await until(() => ui(`location.hash.includes('agent=')`), 'the new agent is open');
+  // a plain New session afterwards starts empty
+  await ui(`location.hash = 'todos'`);
+  console.log('PASS start agent: a todo starts a new agent with it as the first message, and is linked to it');
+
+  // ⌘N: on the New session screen, @ tags another agent and files can be attached, like the conversation's composer
+  set(1, 'idle');
+  await key('n');
+  await until(() => ui(`!document.getElementById('new-view').hidden && document.getElementById('new-input').value === '' && document.getElementById('new-todo').hidden`), 'an empty New session screen');
+  await ui(`(() => { const i = document.getElementById('new-input'); i.focus(); i.value = 'Review the work of @'; i.setSelectionRange(i.value.length, i.value.length); i.dispatchEvent(new Event('input')); })()`);
+  await until(() => ui(`!document.getElementById('mention-pop').hidden && !!document.querySelector('#new-compose-wrap #mention-pop [data-mention-pick]')`), 'the @ menu on the New session screen');
+  const handle = await ui(`document.querySelector('#mention-pop [data-mention-pick]').dataset.mentionPick`);
+  await ui(`document.querySelector('#mention-pop [data-mention-pick]').click()`);
+  await until(() => ui(`document.getElementById('new-input').value.includes('@${handle} ') && !document.getElementById('mention-bar').hidden`), 'tagged, with a note that starting connects them');
+  await ui(`(() => { const dt = new DataTransfer(); dt.items.add(new File(['notes'], 'brief.txt', { type: 'text/plain' })); document.getElementById('new-view').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); })()`);
+  await until(() => ui(`document.querySelectorAll('#new-attach-row .attach-file').length === 1`), 'a dropped file shows as a chip');
+  const dropped = await ui(`document.querySelector('#new-attach-row .attach-file').title`);
+  assert.equal(await ui(`document.getElementById('new-attach').hidden`), false, 'an attach button');
+  if (process.env.SHOT_DIR) { await sleep(300); fs.writeFileSync(path.join(process.env.SHOT_DIR, 'new-tags.png'), (await win.webContents.capturePage()).toPNG()); }
+  await ui(`document.getElementById('new-composer').requestSubmit()`);
+  await until(() => fs.existsSync(path.join(ctl, 'slot-2')), 'a third agent started', 20000);
+  const typed2 = () => { try { return fs.readFileSync(path.join(ctl, 'typed-2'), 'utf8'); } catch { return ''; } };
+  await until(() => typed2().includes(`@${handle}`) && typed2().includes(dropped), 'its first message has the tag and the file', 20000);
+  assert.equal(await ui(`document.querySelectorAll('#new-attach-row figure').length`), 0, 'the chips are cleared');
+  const pid1 = pidOf(1), pid2 = pidOf(2);
+  await until(async () => { const st = await ui(`fetch('/api/state').then((r) => r.json())`); const id = (pid) => st.agents.find((a) => String(a.pid) === pid || String(a.id).includes(pid))?.id; const a1 = id(pid1), a2 = id(pid2); return a1 && a2 && st.edges.some((e) => e.from === a1 && e.to === a2) && st.edges.some((e) => e.from === a2 && e.to === a1); }, 'the tagged agent is connected with the new one both ways', 60000);
+  console.log('PASS new session: @ tags an agent (connected once it starts) and files attach to the first message');
   if (process.env.TODO_SHOT) { await ui(`document.querySelector('[data-todo-done-toggle]')?.getAttribute('aria-expanded') === 'false' && document.querySelector('[data-todo-done-toggle]').click()`); await sleep(400); fs.writeFileSync(process.env.TODO_SHOT, (await win.webContents.capturePage()).toPNG()); }
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);
 })().catch(async (e) => {

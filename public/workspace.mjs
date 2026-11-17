@@ -317,6 +317,7 @@ const ICONS = {
   'folder-plus': '<path d="M3 7V5a2 2 0 0 1 2-2h4l3 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M12 10v6m-3-3h6"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>',
+  play: '<path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z"/>',
   terminal: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7.5 9.5 3 2.5-3 2.5M13 15h4"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/><path d="M14 3v5h5"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18"/>',
@@ -564,6 +565,8 @@ function initialize() {
   // files pasted, dropped or attached in the composer, shown as chips (images as thumbnails) until sent (see insertPaths)
   const IMAGE = /\.(png|jpe?g|gif|webp|bmp|heic|tiff?)$/i;
   const attachments = new Map(); // session -> file paths waiting to be sent
+  const NEW = '\0new'; // the New session screen's attachments, sent with its first message
+  const attachKey = () => (view === 'new' ? NEW : selectedId);
   let drafts;
   try { drafts = JSON.parse(getStorage('synapse-drafts', '{}')); if (!drafts || typeof drafts !== 'object') drafts = {}; } catch { drafts = {}; }
   const projectElements = new Map(), worktreeElements = new Map(), sessionElements = new Map(), recentCache = new Map();
@@ -2389,6 +2392,9 @@ function initialize() {
   function agentTodos(agent) { return todoList().filter((t) => t.agent && (t.agent.id === agent.id || t.agent.id === agent.backendId)); }
   function todosOf(agent) { return agentTodos(agent).map((t) => [t.id, t.text, t.done]); } // (a signature)
   function todoRef(a) { return { id: a.backendId || a.id, name: titleOf(a) }; }
+  // Start agent: the New session screen opens with the todo as the first message, and the agent it starts gets the todo
+  const canStartFromTodo = (t) => embedded && !paneKey && !!desktop && !t.done;
+  function startFromTodo(t) { showNew(agentOfTodo(t)?.cwd || null, null, t); }
   const todoCall = (path, method, body) => api(path, { method, ...(body ? { body: JSON.stringify(body) } : {}) });
   async function refreshLinear() { try { linear = await api('/api/linear'); } catch {} todosSignature = ''; if (view === 'todos') renderTodos(); }
   function paintTodoCount() {
@@ -2402,7 +2408,8 @@ function initialize() {
       : t.agent ? `<button type="button" class="todo-who${a ? '' : ' gone'}" data-todo-agent="${id}" title="${a ? `Open ${escapeHtml(titleOf(a))}` : `${escapeHtml(t.agent.name)} has ended`}">${a ? avatar(a) : icon('user')}<span>${escapeHtml(a ? titleOf(a) : t.agent.name)}</span></button>` : '';
     const lin = t.linear ? `<a class="todo-linear" href="${escapeHtml(t.linear.url)}" target="_blank" rel="noopener" title="Open in Linear">${escapeHtml(t.linear.identifier)}</a>` : '';
     const by = t.by && t.by !== 'you' && t.by !== 'Linear' ? `<span class="todo-by">by ${escapeHtml(t.by)}</span>` : '';
-    return `<div class="todo-row${t.done ? ' done' : ''}" data-todo="${id}"><button type="button" class="todo-check" data-todo-check="${id}" aria-pressed="${t.done}" aria-label="${t.done ? 'Mark not done' : 'Mark done'}">${icon('check')}</button><span class="todo-text">${escapeHtml(t.text)}</span>${by}${lin}${who}<button type="button" class="icon-button todo-more" data-todo-more="${id}" aria-label="More" title="More">${icon('more')}</button></div>`;
+    const start = canStartFromTodo(t) ? `<button type="button" class="todo-start" data-todo-start="${id}" title="Start a new agent on this todo">${icon('play')}<span>Start agent</span></button>` : '';
+    return `<div class="todo-row${t.done ? ' done' : ''}" data-todo="${id}"><button type="button" class="todo-check" data-todo-check="${id}" aria-pressed="${t.done}" aria-label="${t.done ? 'Mark not done' : 'Mark done'}">${icon('check')}</button><span class="todo-text">${escapeHtml(t.text)}</span>${by}${lin}${start}${who}<button type="button" class="icon-button todo-more" data-todo-more="${id}" aria-label="More" title="More">${icon('more')}</button></div>`;
   }
   // open todos by who has them: yours first, then each agent's under a header with its name and project
   function todoGroups(open) {
@@ -2420,7 +2427,7 @@ function initialize() {
   }
   function renderTodos() {
     const all = todoList(), open = all.filter((t) => !t.done).sort((a, b) => b.createdAt - a.createdAt), done = all.filter((t) => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
-    const sig = JSON.stringify([all, linear, showDone, state.agents.map((a) => [a.id, a.backendId, titleOf(a)])]);
+    const sig = JSON.stringify([all, linear, showDone, !!desktop, state.agents.map((a) => [a.id, a.backendId, titleOf(a)])]);
     if (sig === todosSignature) return;
     todosSignature = sig;
     const picked = todoPick && agentOfTodo({ agent: todoPick });
@@ -2449,6 +2456,7 @@ function initialize() {
   function todoMenu(anchor, t) {
     dropdown(anchor, [
       { label: t.done ? 'Mark not done' : 'Mark done', icon: 'check', run: () => todoAction(() => todoCall(`/api/todos/${t.id}`, 'PATCH', { done: !t.done })) },
+      ...(canStartFromTodo(t) ? [{ label: 'Start a new agent on it', icon: 'play', run: () => startFromTodo(t) }] : []),
       { label: 'Edit…', icon: 'edit', run: () => openModal('Edit todo', `<label class="field-label" for="todo-edit">Todo</label><input class="field" id="todo-edit" maxlength="500" value="${escapeHtml(t.text)}">`, 'Save', () => todoCall(`/api/todos/${t.id}`, 'PATCH', { text: $('todo-edit').value })) },
       { label: t.agent ? 'Link to another agent…' : 'Link to an agent…', icon: 'arrows', run: () => pickAgent(anchor, t.agent?.id, (a) => todoAction(() => todoCall(`/api/todos/${t.id}`, 'PATCH', { agent: a ? todoRef(a) : null }))) },
       ...(t.linear ? [{ label: `Open ${t.linear.identifier} in Linear`, icon: 'external', run: () => window.open(t.linear.url, '_blank', 'noopener') }]
@@ -2461,10 +2469,11 @@ function initialize() {
     if (event.target.closest('[data-todo-pick-clear]')) { event.preventDefault(); todoPick = null; todosSignature = ''; renderTodos(); return; }
     const open = event.target.closest('[data-todo-open]');
     if (open) { event.preventDefault(); navigate('session', open.dataset.todoOpen); return; }
-    const el = event.target.closest('[data-todo-check], [data-todo-more], [data-todo-agent], [data-todo-link], [data-todo-done-toggle], [data-linear], #todo-agent-pick');
+    const el = event.target.closest('[data-todo-check], [data-todo-more], [data-todo-agent], [data-todo-link], [data-todo-start], [data-todo-done-toggle], [data-linear], #todo-agent-pick');
     if (!el) return;
     event.preventDefault();
-    const t = todoList().find((x) => x.id === (el.dataset.todoCheck || el.dataset.todoMore || el.dataset.todoAgent || el.dataset.todoLink));
+    const t = todoList().find((x) => x.id === (el.dataset.todoCheck || el.dataset.todoMore || el.dataset.todoAgent || el.dataset.todoLink || el.dataset.todoStart));
+    if (el.dataset.todoStart && t) return startFromTodo(t);
     if (el.dataset.todoCheck && t) {
       el.closest('.todo-row')?.classList.toggle('ticking', !t.done);
       return todoAction(() => todoCall(`/api/todos/${t.id}`, 'PATCH', { done: !t.done }));
@@ -2660,12 +2669,14 @@ function initialize() {
 
   // ---- New session, like T3: "What should we do in <project>?" with the project and agent as pickers,
   // and the first message typed right there. Enter starts the agent with that message.
-  const newDraft = { cwd: null, kind: getStorage('synapse-new-kind') || null };
+  const newDraft = { cwd: null, kind: getStorage('synapse-new-kind') || null, todo: null };
   const worktreeList = () => (desktop?.projects || []).flatMap((p) => p.worktrees.map((w) => ({ ...w, project: p.label, projectKey: p.key, home: w.path === p.worktrees[0]?.path })));
   // kind: open the screen on that agent (⌘T: a shell), otherwise the last one picked
-  function showNew(cwd, kind = null) {
+  // todo: start on that todo (its text is the first message, and the agent started gets it)
+  function showNew(cwd, kind = null, todo = null) {
     const list = worktreeList();
     if (!list.length) { addProject(); return; }
+    if (todo || newDraft.todo) { newDraft.todo = todo?.id || null; $('new-input').value = todo ? todo.text : ''; }
     const current = byId.get(selectedId);
     const want = cwd || current?.cwd;
     newDraft.cwd = list.find((w) => w.path === want)?.path || list.find((w) => want?.startsWith(`${w.path}/`))?.path || (list.some((w) => w.path === newDraft.cwd) ? newDraft.cwd : list[0].path);
@@ -2673,6 +2684,7 @@ function initialize() {
     else if (newDraft.kind === 'shell' || !Object.hasOwn(desktop.profiles, newDraft.kind)) newDraft.kind = getStorage('synapse-new-kind') !== 'shell' && Object.hasOwn(desktop.profiles, getStorage('synapse-new-kind')) ? getStorage('synapse-new-kind') : null;
     if (!Object.hasOwn(desktop.profiles, newDraft.kind)) newDraft.kind = ['claude', 'codex'].find((k) => Object.hasOwn(desktop.profiles, k)) || Object.keys(desktop.profiles)[0];
     navigate('new');
+    renderAttachments(); paintMentionBar();
     requestAnimationFrame(() => $('new-input').focus());
   }
   function renderNew() {
@@ -2694,7 +2706,12 @@ function initialize() {
     $('new-input').placeholder = newDraft.kind === 'shell' ? 'Opens a shell in this folder. Type a command to run, or leave empty.' : 'Describe the task. Leave empty to just start the agent.';
     const command = String(profile.command || (newDraft.kind === 'shell' ? 'your shell' : newDraft.kind)).replace(/^exec\s+/, '').replace(/^\S*\//, '');
     $('new-hint').textContent = `Runs ${command} in ${w.path.replace(/^\/Users\/[^/]+/, '~')}`;
+    const todo = newDraft.todo && todoList().find((t) => t.id === newDraft.todo);
+    if (newDraft.todo && !todo) newDraft.todo = null;
+    $('new-todo').hidden = !todo || newDraft.kind === 'shell';
+    if (todo) $('new-todo').innerHTML = `${icon('todo')}<span class="new-todo-text">For your todo: ${escapeHtml(todo.text)}</span><button type="button" class="new-todo-clear" aria-label="Start without the todo" title="Start without the todo">${icon('x')}</button>`;
   }
+  $('new-todo').addEventListener('click', (event) => { if (event.target.closest('.new-todo-clear')) { newDraft.todo = null; renderNew(); $('new-input').focus(); } });
   $('new-project').onclick = () => {
     const seen = new Set();
     const items = worktreeList().filter((w) => w.home && !seen.has(w.projectKey) && seen.add(w.projectKey)).map((w) => ({ label: w.project, icon: w.path === newDraft.cwd || newDraft.cwd?.startsWith(`${w.path}`) ? 'check' : null, run: () => { newDraft.cwd = w.path; renderNew(); $('new-input').focus(); } }));
@@ -2713,20 +2730,26 @@ function initialize() {
   async function startNew(event) {
     event?.preventDefault();
     if (starting) return;
-    const prompt = $('new-input').value.trim();
+    const typed = $('new-input').value.trim(), files = attachments.get(NEW) || [];
+    const prompt = [typed, files.map(quotePath).join(' ')].filter(Boolean).join(' ');
+    const tagged = newDraft.kind === 'shell' ? [] : [...taggedAgents(typed).values()].filter((a) => !a.owned || a.backendId);
     starting = true; $('new-start').disabled = true; $('new-start').innerHTML = '<span class="spinner" aria-hidden="true"></span>';
     try {
       const shell = newDraft.kind === 'shell';
-      const result = await desktopCall('new-session', { cwd: newDraft.cwd, kind: newDraft.kind, prompt: shell ? '' : prompt });
+      const todo = !shell && newDraft.todo && todoList().find((t) => t.id === newDraft.todo);
+      const first = todo ? `${prompt || todo.text}\n\n(This is Synapse todo ${todo.id}. When it is done, tick it with synapse_todo_update.)` : prompt;
+      const result = await desktopCall('new-session', { cwd: newDraft.cwd, kind: newDraft.kind, prompt: shell ? '' : first });
       desktop = await desktopCall('state'); applyState(rawState);
-      $('new-input').value = '';
+      $('new-input').value = ''; newDraft.todo = null; attachments.delete(NEW); renderAttachments(); paintMentionBar();
+      if (tagged.length) connectWhenMatched(result.id, tagged);
+      if (todo) { const a = byId.get(result.id); todoAction(() => todoCall(`/api/todos/${todo.id}`, 'PATCH', { agent: a ? todoRef(a) : { id: result.id, name: desktop.profiles[newDraft.kind]?.label || newDraft.kind } })); }
       navigate('session', result.id);
       if (shell && prompt) desktopCall('submit', { id: result.id, text: prompt }).catch(() => {});
     } catch (e) { toast(e.message); }
     finally { starting = false; $('new-start').disabled = false; $('new-start').innerHTML = icon('arrow-up'); }
   }
   $('new-composer').addEventListener('submit', startNew);
-  $('new-input').addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) startNew(event); });
+  $('new-input').addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && document.getElementById('mention-pop')?.hidden !== false) startNew(event); });
 
   // ---- Terminals in the GUI. Terminal mode's real terminals are shown in place: the page leaves an empty box
   // (#term-host for a session's Terminal tab, #drawer-host for the ⌘J drawer) and the app lays the terminal over it.
@@ -3136,7 +3159,26 @@ function initialize() {
     try { await loadFriends(); } catch { friendsAt = 0; }
   }
   // your other live agents, by @handle; friends' handles come first so they never clash
-  const myAgents = () => agentHandles(state.agents.filter((a) => a.id !== selectedId && a.status !== 'exited' && a.kind !== 'shell').sort((a, b) => String(a.id).localeCompare(String(b.id))), knownFriends().map((p) => p.handle));
+  // the composer in use: the New session screen's, or the conversation's
+  const onNew = () => view === 'new';
+  const activeInput = () => $(onNew() ? 'new-input' : 'message-input');
+  // the @ menu and the tag notes sit on whichever composer is in use
+  function placeMentions() {
+    const form = $(onNew() ? 'new-composer' : 'composer');
+    if (mentionBox.nextElementSibling !== form && mentionBox.nextElementSibling?.nextElementSibling !== form) form.before(mentionBar, mentionBox);
+  }
+  // tagged on the New session screen: once Synapse has matched the new session to its agent, connect them both ways
+  async function connectWhenMatched(id, tagged) {
+    const deadline = Date.now() + 120000;
+    while (Date.now() < deadline && !byId.get(id)?.backendId) {
+      if (desktop && !desktop.sessions.some((s) => s.id === id && !s.exited)) return; // closed before it was matched
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    if (!byId.get(id)?.backendId) { toast('Could not connect the tagged agents: Synapse has not matched the new session yet.'); return; }
+    try { for (const other of tagged) { await createEdge(other.id, id); await createEdge(id, other.id); } await reloadState(); }
+    catch (e) { toast(e.message); }
+  }
+  const myAgents = () => agentHandles(state.agents.filter((a) => (onNew() || a.id !== selectedId) && a.status !== 'exited' && a.kind !== 'shell').sort((a, b) => String(a.id).localeCompare(String(b.id))), knownFriends().map((p) => p.handle));
   const projectOf = (agent) => agent?.project || (agent?.cwd || '').split('/').filter(Boolean).pop() || '';
   // which of their agents already reach this one, and whether one of theirs works on this project
   function friendContext(p) {
@@ -3170,6 +3212,11 @@ function initialize() {
     return out;
   }
   function paintMentionBar() {
+    placeMentions();
+    if (onNew()) { // a session not started yet: tagged agents get connected to it once it starts
+      mentionBar.innerHTML = [...taggedAgents($('new-input').value)].map(([handle, agent]) => `<div class="mention-row"><span class="mention agent">@${escapeHtml(handle)}</span><span class="mention-text">Starting connects <strong>${escapeHtml(titleOf(agent))}</strong>${agent.project ? ` (${escapeHtml(agent.project)})` : ''} with the new agent, so they can read each other's work and message.</span></div>`).join('');
+      mentionBar.hidden = !mentionBar.innerHTML; return;
+    }
     const text = $('message-input').value, seen = new Set(), rows = [];
     const peers = new Set(relations(selectedId).filter((p) => p.reads && p.shares).map((p) => p.agent.id));
     for (const [handle, agent] of taggedAgents(text)) {
@@ -3185,7 +3232,7 @@ function initialize() {
     mentionBar.innerHTML = rows.join(''); mentionBar.hidden = !rows.length;
   }
   function mentionQuery() {
-    const input = $('message-input'), before = input.value.slice(0, input.selectionStart);
+    const input = activeInput(), before = input.value.slice(0, input.selectionStart);
     const m = /(^|[\s(])@([\w-]{0,32})$/.exec(before);
     return m ? { at: before.length - m[2].length - 1, q: m[2].toLowerCase() } : null;
   }
@@ -3193,9 +3240,11 @@ function initialize() {
     const hit = mentionQuery();
     if (!hit) { mentionBox.hidden = true; mentionAt = -1; return; }
     mentionAt = hit.at;
+    placeMentions();
     const rank = (p) => { const c = friendContext(p); return c.here ? 0 : c.related ? 1 : 2; };
-    const self = byId.get(selectedId);
-    mentionHits = mentionOptions({ friends: [...knownFriends()].sort((a, b) => rank(a) - rank(b)), agents: myAgents(), project: self?.projectKey, query: hit.q });
+    const self = onNew() ? worktreeList().find((w) => w.path === newDraft.cwd) : byId.get(selectedId);
+    // friends are asked to share with an agent that exists, so the New session screen offers your own agents only
+    mentionHits = mentionOptions({ friends: onNew() ? [] : [...knownFriends()].sort((a, b) => rank(a) - rank(b)), agents: myAgents(), project: self?.projectKey, query: hit.q });
     if (!mentionHits.length) { mentionBox.hidden = true; return; }
     mentionIndex = Math.min(mentionIndex, mentionHits.length - 1);
     const heads = { friend: 'Friends', here: 'Agents in this project', elsewhere: 'Other agents' };
@@ -3212,7 +3261,7 @@ function initialize() {
     mentionBox.hidden = false;
   }
   function pickMention(handle) {
-    const input = $('message-input'), end = input.selectionStart;
+    const input = activeInput(), end = input.selectionStart;
     if (mentionAt < 0) return;
     input.value = `${input.value.slice(0, mentionAt)}@${handle} ${input.value.slice(end)}`;
     const caret = mentionAt + handle.length + 2;
@@ -3237,19 +3286,23 @@ function initialize() {
   });
   $('message-input').addEventListener('scroll', () => { mirror.scrollTop = $('message-input').scrollTop; });
   $('message-input').addEventListener('click', paintMentionPop);
-  $('message-input').addEventListener('blur', () => setTimeout(() => { if (!mentionBox.contains(document.activeElement)) mentionBox.hidden = true; }, 120));
+  $('new-input').addEventListener('input', () => { paintMentionBar(); paintMentionPop(); });
+  $('new-input').addEventListener('click', paintMentionPop);
+  for (const id of ['message-input', 'new-input']) $(id).addEventListener('blur', () => setTimeout(() => { if (!mentionBox.contains(document.activeElement)) mentionBox.hidden = true; }, 120));
   mentionBox.addEventListener('mousedown', (event) => event.preventDefault()); // keep the caret in the textarea
   document.addEventListener('click', (event) => {
     const pick = event.target.closest('[data-mention-pick]'), ask = event.target.closest('[data-mention-ask]');
     if (pick) pickMention(pick.dataset.mentionPick);
     if (ask) askMention(ask.dataset.mentionAsk, ask);
   });
-  $('message-input').addEventListener('keydown', (event) => {
+  const mentionKeys = (event) => {
     if (mentionBox.hidden || !mentionHits.length) return;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); event.stopImmediatePropagation(); mentionIndex = (mentionIndex + (event.key === 'ArrowDown' ? 1 : mentionHits.length - 1)) % mentionHits.length; paintMentionPop(); }
     else if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) { event.preventDefault(); event.stopImmediatePropagation(); pickMention(mentionHits[mentionIndex].handle); }
     else if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); mentionBox.hidden = true; }
-  });
+  };
+  $('message-input').addEventListener('keydown', mentionKeys);
+  $('new-input').addEventListener('keydown', mentionKeys);
 
   // Up on the first line brings back your last prompt, again for the one before; Down returns to what you had typed
   let recall = null; // { agent, index, draft }
@@ -3444,7 +3497,7 @@ function initialize() {
   }
   const fileChips = (files) => (files?.length ? `<div class="message-files">${files.map((p) => `<button type="button" class="attach-file" data-file="${escapeHtml(p)}" title="${escapeHtml(p)}">${icon('file')}<span>${escapeHtml(p.split(/[\\/]/).pop())}</span></button>`).join('')}</div>` : '');
   function renderAttachments() {
-    const list = attachments.get(selectedId) || [], row = $('attach-row');
+    const list = attachments.get(attachKey()) || [], row = $(onNew() ? 'new-attach-row' : 'attach-row');
     row.hidden = !list.length;
     row.innerHTML = list.map((p, i) => {
       const name = escapeHtml(p.split(/[\\/]/).pop()), remove = `<button type="button" class="attach-remove" data-attach-remove="${i}" aria-label="Remove ${name}">${icon('x')}</button>`;
@@ -3452,19 +3505,21 @@ function initialize() {
         ? `<figure class="attach-thumb" title="${escapeHtml(p)}"><img alt="${name}" src="/api/file/raw?${new URLSearchParams({ path: p })}">${remove}</figure>`
         : `<figure class="attach-file" title="${escapeHtml(p)}">${icon('file')}<span>${name}</span>${remove}</figure>`;
     }).join('');
-    updateComposer();
+    if (!onNew()) updateComposer();
   }
-  $('attach-row').addEventListener('click', (event) => {
+  for (const id of ['attach-row', 'new-attach-row']) $(id).addEventListener('click', (event) => {
     const b = event.target.closest('[data-attach-remove]'); if (!b) return;
-    const list = [...(attachments.get(selectedId) || [])]; list.splice(Number(b.dataset.attachRemove), 1);
-    attachments.set(selectedId, list); renderAttachments(); $('message-input').focus();
+    const list = [...(attachments.get(attachKey()) || [])]; list.splice(Number(b.dataset.attachRemove), 1);
+    attachments.set(attachKey(), list); renderAttachments(); activeInput().focus();
   });
   function insertPaths(paths) { // files to send with the next message
     if (!paths?.length) return;
-    const have = attachments.get(selectedId) || [];
-    attachments.set(selectedId, [...have, ...paths.filter((p) => !have.includes(p))]);
-    renderAttachments(); $('message-input').focus();
+    const key = attachKey(), have = attachments.get(key) || [];
+    attachments.set(key, [...have, ...paths.filter((p) => !have.includes(p))]);
+    renderAttachments(); activeInput().focus();
   }
+  $('new-attach').hidden = !embedded;
+  $('new-attach').onclick = async () => insertPaths(await desktopCall('attach', { cwd: newDraft.cwd }).catch((e) => { toast(e.message); return []; }));
   $('attach-files').onclick = async () => {
     const agent = byId.get(selectedId); if (!agent?.owned) return;
     insertPaths(await desktopCall('attach', { id: agent.id }).catch((e) => { toast(e.message); return []; }));
@@ -3479,7 +3534,7 @@ function initialize() {
     return out;
   }
   // paste: files copied in Finder keep their real paths; an image (a screenshot) is saved and pasted as its path
-  $('message-input').addEventListener('paste', async (event) => {
+  const pasteFiles = async (event) => {
     const data = event.clipboardData;
     if (!embedded || !data || ![...data.types].includes('Files')) return;
     event.preventDefault();
@@ -3488,13 +3543,16 @@ function initialize() {
       if (got.paths.length) { insertPaths(got.paths); return; }
       insertPaths(await saveDropped([...data.files]));
     } catch (e) { toast(e.message); }
-  });
+  };
+  $('message-input').addEventListener('paste', pasteFiles);
+  $('new-input').addEventListener('paste', pasteFiles);
   // drop: files dragged onto the composer are copied where the agent can read them
-  for (const target of [$('thread-view')]) { // the composer sits inside the conversation: one target covers both
-    target.addEventListener('dragover', (event) => { if (embedded && [...event.dataTransfer.types].includes('Files')) { event.preventDefault(); $('composer').classList.add('dropping'); } });
-    target.addEventListener('dragleave', (event) => { if (!target.contains(event.relatedTarget)) $('composer').classList.remove('dropping'); });
+  for (const target of [$('thread-view'), $('new-view')]) { // each composer sits inside its view: the view is the target
+    const box = target.id === 'new-view' ? $('new-compose-wrap') : $('composer');
+    target.addEventListener('dragover', (event) => { if (embedded && [...event.dataTransfer.types].includes('Files')) { event.preventDefault(); box.classList.add('dropping'); } });
+    target.addEventListener('dragleave', (event) => { if (!target.contains(event.relatedTarget)) box.classList.remove('dropping'); });
     target.addEventListener('drop', async (event) => {
-      $('composer').classList.remove('dropping');
+      box.classList.remove('dropping');
       if (!embedded || !event.dataTransfer.files.length) return;
       event.preventDefault();
       try { insertPaths(await saveDropped([...event.dataTransfer.files])); } catch (e) { toast(e.message); }

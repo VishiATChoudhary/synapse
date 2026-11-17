@@ -875,6 +875,9 @@ body:not(.sidebar-sorting) .project-group.folded:not(.hover-off):is(:hover, :has
 .new-badge { position: relative; display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: var(--badge); color: #fff; font-size: 14px; font-weight: 700; overflow: hidden; }
 .new-badge img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .new-composer textarea { min-height: 72px; }
+.new-compose-wrap { position: relative; }
+.new-compose-wrap .mention-pop { top: calc(100% + 4px); bottom: auto; }
+.new-compose-wrap.dropping .new-composer { border-color: var(--color-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 25%, transparent); }
 .new-composer .composer-toolbar { gap: 6px; }
 .new-agent { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 8px; font-size: var(--text-sm); color: var(--color-secondary); background: transparent; border: 1px solid var(--color-border); cursor: pointer; }
 .new-agent:hover, .new-agent[aria-expanded='true'] { background: var(--color-hover); color: var(--color-ink); }
@@ -1244,6 +1247,19 @@ button.todo-group-head:hover .todo-group-name { text-decoration: underline; text
 .todo-row:hover .todo-assign, .todo-assign:focus-visible { opacity: 1; }
 .todo-assign:hover, .todo-who:hover { background: var(--color-hover); color: var(--color-ink); }
 .todo-who.gone span { text-decoration: line-through; }
+.todo-start { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 7px; color: var(--color-muted); font-size: var(--text-sm); white-space: nowrap; opacity: 0; transition: opacity 120ms ease; }
+.todo-start .icon { width: 13px; height: 13px; }
+.todo-row:hover .todo-start, .todo-start:focus-visible { opacity: 1; }
+.todo-start:hover { background: var(--color-hover); color: var(--color-ink); }
+.todo-section .todo-start, .todo-tab .todo-start { display: none; }
+/* New session started from a todo */
+.new-todo { display: flex; align-items: center; gap: 8px; margin: 0 4px 10px; padding: 6px 6px 6px 10px; border: 1px solid var(--color-border); border-radius: 10px; color: var(--color-muted); font-size: var(--text-sm); }
+.new-todo[hidden] { display: none; }
+.new-todo > .icon { width: 15px; height: 15px; flex: none; }
+.new-todo-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-ink); }
+.new-todo-clear { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; color: var(--color-muted); flex: none; }
+.new-todo-clear:hover { background: var(--color-hover); color: var(--color-ink); }
+.new-todo-clear .icon { width: 12px; height: 12px; }
 .todo-done-rows .todo-who { opacity: .8; }
 /* the add bar's agent: a quiet Assign until one is picked */
 .todo-agent-pick { flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 5px 9px; border-radius: 9px; color: var(--color-muted); font-size: var(--text-sm); white-space: nowrap; }

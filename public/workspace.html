@@ -99,11 +99,15 @@
         <section class="new-view" id="new-view" aria-labelledby="new-title" hidden>
           <div class="new-inner">
             <h1 id="new-title"><span id="new-lead">What should we do in</span> <button type="button" class="new-project" id="new-project" aria-haspopup="menu" aria-expanded="false"></button>?</h1>
+            <p class="new-todo" id="new-todo" hidden></p>
+            <div class="new-compose-wrap" id="new-compose-wrap">
             <form class="composer new-composer" id="new-composer">
               <label class="sr-only" for="new-input">First message</label>
+              <div class="attach-row" id="new-attach-row" hidden></div>
               <textarea id="new-input" rows="3" maxlength="12000" placeholder="Describe the task. Leave empty to just start the agent."></textarea>
-              <div class="composer-toolbar"><button type="button" class="new-agent" id="new-agent" aria-haspopup="menu" aria-expanded="false"></button><button type="button" class="new-agent" id="new-branch" aria-haspopup="menu" aria-expanded="false" hidden></button><span class="side-spacer"></span><span class="composer-shortcut">Enter to start</span><button class="send-button" id="new-start" type="submit" aria-label="Start session" title="Start session"><span data-icon="arrow-up"></span></button></div>
+              <div class="composer-toolbar"><button type="button" class="new-agent" id="new-agent" aria-haspopup="menu" aria-expanded="false"></button><button type="button" class="new-agent" id="new-branch" aria-haspopup="menu" aria-expanded="false" hidden></button><button type="button" class="icon-button attach-button" id="new-attach" aria-label="Attach files" title="Attach files"><span data-icon="paperclip"></span></button><span class="side-spacer"></span><span class="composer-shortcut">Enter to start</span><button class="send-button" id="new-start" type="submit" aria-label="Start session" title="Start session"><span data-icon="arrow-up"></span></button></div>
             </form>
+            </div>
             <p class="new-hint" id="new-hint"></p>
           </div>
         </section>
