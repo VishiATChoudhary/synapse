@@ -2472,23 +2472,22 @@ function initialize() {
     answerApproval(form.dataset.approvalInput, { text });
   });
 
-  // ---- A new version: a card in the top right while it downloads, then Restart (or Later, until the next version)
+  // ---- A new version: a banner at the bottom left of the sidebar, until you update
   let update = {};
   function renderUpdateCard() {
     const card = $('update-card'), v = update.version ? ` ${update.version}` : '';
-    const shown = ['downloading', 'ready', 'manual', 'installing'].includes(update.state) && getStorage('synapse-update-later') !== `${update.state}:${update.version}`;
+    const shown = ['downloading', 'ready', 'manual', 'installing'].includes(update.state);
     card.hidden = !shown;
     if (!shown) return;
     const pct = Math.round((update.progress || 0) * 100);
-    const [title, sub, action] = update.state === 'ready' ? [`Synapse${v} is ready`, 'Restart to update. It also installs when you quit.', 'Restart']
-      : update.state === 'manual' ? [`Synapse${v} is out`, 'Download it and drag it into Applications.', 'Download']
+    const [title, sub, action] = update.state === 'ready' ? [`Update to Synapse${v}`, 'Restart to get the newest version.', 'Restart']
+      : update.state === 'manual' ? [`Update to Synapse${v}`, 'Download it and drag it into Applications.', 'Download']
       : update.state === 'installing' ? ['Updating…', 'Synapse restarts in a moment.', '']
       : [`Downloading Synapse${v}`, `${pct}%`, ''];
-    card.innerHTML = `<span class="update-icon">${icon(update.state === 'ready' || update.state === 'manual' ? 'arrow-up' : 'clock')}</span><div class="update-text"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(sub)}</span>${update.state === 'downloading' ? `<span class="update-bar"><span style="width:${pct}%"></span></span>` : ''}</div>${action ? `<button type="button" class="button update-go" data-update-go="1">${action}</button><button type="button" class="icon-button" data-update-later="1" aria-label="Later" title="Later">${icon('x')}</button>` : ''}`;
+    card.innerHTML = `<span class="update-icon">${icon(update.state === 'ready' || update.state === 'manual' ? 'arrow-up' : 'clock')}</span><div class="update-text"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(sub)}</span>${update.state === 'downloading' ? `<span class="update-bar"><span style="width:${pct}%"></span></span>` : ''}</div>${action ? `<button type="button" class="button update-go" data-update-go="1">${action}</button>` : ''}`;
     if (update.notes) card.title = update.notes;
   }
   $('update-card').addEventListener('click', (event) => {
-    if (event.target.closest('[data-update-later]')) { setStorage('synapse-update-later', `${update.state}:${update.version}`); renderUpdateCard(); return; }
     if (event.target.closest('[data-update-go]')) desktopCall('update').catch((e) => toast(e.message));
   });
 

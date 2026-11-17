@@ -935,9 +935,9 @@ body:not(.desktop) .nav-arrow { display: none; }
 .queued-prompt .icon-button { width: 26px; height: 26px; flex: none; }
 
 /* a new version, top right */
-.update-card { position: fixed; top: 58px; right: 16px; z-index: 60; display: flex; align-items: center; gap: 12px; max-width: 380px; padding: 12px 10px 12px 14px; border: 1px solid var(--color-border-strong); border-radius: 14px; background: var(--color-raised); box-shadow: 0 12px 36px var(--color-shadow); animation: pop-in .18s var(--ease-out); }
+.update-card { flex: none; display: flex; align-items: center; gap: 10px; margin: 8px 0; padding: 10px 8px 10px 10px; border: 1px solid var(--color-border-strong); border-radius: 12px; background: var(--color-raised); box-shadow: 0 6px 20px var(--color-shadow); animation: pop-in .18s var(--ease-out); }
 .update-card[hidden] { display: none; }
-.update-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: 50%; background: var(--color-accent); color: #fff; }
+.update-icon { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--color-accent); color: #fff; }
 .update-icon svg { width: 16px; height: 16px; }
 .update-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; font-size: var(--text-sm); }
 .update-text strong { color: var(--color-ink); font-weight: 600; }
@@ -945,7 +945,6 @@ body:not(.desktop) .nav-arrow { display: none; }
 .update-bar { display: block; height: 3px; margin-top: 6px; border-radius: 2px; background: var(--color-border); overflow: hidden; }
 .update-bar > span { display: block; height: 100%; background: var(--color-accent); transition: width .3s; }
 .update-go { flex: none; }
-.update-card .icon-button { width: 26px; height: 26px; flex: none; }
 
 /* a row's hover actions: settle and archive, in place of its time */
 .row-actions { display: none; align-items: center; gap: 2px; }

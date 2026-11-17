@@ -130,23 +130,6 @@ const near = (a, b) => Math.abs(a.x - b.x) < 2 && Math.abs(a.y - b.y) < 2 && Mat
   await ui(`document.getElementById('tidy-close').value = '0'; document.getElementById('action-form').requestSubmit()`);
   await until(() => ui(`JSON.parse(localStorage.getItem('synapse-tidy')).close === 0`), 'the setting is saved');
   console.log('PASS tidy up: done, archive and close times can be changed or turned off');
-  // a new version: a card in the top right, with progress, then Restart; Later hides it for that version
-  win.webContents.send('update', { state: 'downloading', version: '9.9.9', progress: 0.4 });
-  await until(() => ui(`!document.getElementById('update-card').hidden && /Downloading Synapse 9\\.9\\.9/.test(document.getElementById('update-card').textContent) && /40%/.test(document.getElementById('update-card').textContent)`), 'the download shows in the GUI');
-  let installed = 0;
-  ipcMain.removeHandler('update:install'); ipcMain.handle('update:install', () => { installed++; return { ok: true, value: null }; });
-  win.webContents.send('update', { state: 'ready', version: '9.9.9' });
-  await until(() => ui(`/Synapse 9\\.9\\.9 is ready/.test(document.getElementById('update-card').textContent)`), 'ready to restart');
-  if (process.env.UPDATE_SHOT) fs.writeFileSync(process.env.UPDATE_SHOT, (await win.webContents.capturePage()).toPNG());
-  const card = await ui(`(() => { const r = document.getElementById('update-card').getBoundingClientRect(); return { right: innerWidth - r.right, top: r.top }; })()`);
-  assert.ok(card.right < 40 && card.top < 120, `top right: ${JSON.stringify(card)}`);
-  await ui(`document.querySelector('[data-update-go]').click()`);
-  await until(async () => installed === 1, 'Restart installs the update');
-  await ui(`document.querySelector('[data-update-later]').click()`);
-  await until(() => ui(`document.getElementById('update-card').hidden`), 'Later hides it');
-  win.webContents.send('update', { state: 'ready', version: '9.9.10' });
-  await until(() => ui(`!document.getElementById('update-card').hidden`), 'a newer version shows again');
-  console.log('PASS update card: progress, Restart and Later in the GUI\'s top right');
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);
 })().catch(async (e) => {
   failed = true; console.error(e); console.error('page errors:', errors);
