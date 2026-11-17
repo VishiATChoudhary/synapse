@@ -73,8 +73,19 @@ test('@ lists friends, then agents in this project, and searches the rest', () =
 
 test('an agent handle never ends in a dash, so it still reads as a mention', () => {
   const [handle] = agentHandles([{ id: 'x', name: 'codex-synapse-links-ui-abc' }]).keys();
-  assert.equal(handle, 'codex-synapse-links');
-  assert.match(`@${handle} hi`, /@codex-synapse-links\b/);
+  assert.equal(handle, 'codex-synapse-links-ui-abc');
+  assert.match(`@${handle} hi`, /@codex-synapse-links-ui-abc\b/);
+});
+
+test('a long agent name becomes a handle cut at a word end, and its title finds it', () => {
+  const agents = agentHandles([
+    { id: 'a', name: 'What do you think, given their status quo…', projectKey: 'p' },
+    { id: 'b', name: 'Also pasting files and images doesn\'t work in…', projectKey: 'p' },
+    { id: 'c', name: 'claude-synapse-6', title: 'Agent tagging naming issues', projectKey: 'p' },
+  ]);
+  assert.deepEqual([...agents.keys()], ['What-do-you-think-given', 'Also-pasting-files-and', 'claude-synapse-6']);
+  for (const h of agents.keys()) assert.match(`@${h} `, new RegExp(`@${h}\\b`), 'the whole handle reads as one mention');
+  assert.deepEqual(mentionOptions({ agents, project: 'p', query: 'tagging' }).map((o) => o.handle), ['claude-synapse-6']);
 });
 
 test('Up steps back through your prompts, transcript and queued messages in time order', () => {

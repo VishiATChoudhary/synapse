@@ -894,6 +894,16 @@ export function agentForProcess(pid, sessionId = process.env.CODEX_THREAD_ID || 
   return null;
 }
 
+// An @handle from the app's composer ("What-do-you-think-given" for "What do you think, given…"): the name with
+// punctuation as dashes, maybe cut at a word end and numbered when names repeat. Only a single match counts.
+const slugOf = (name) => String(name || '').toLowerCase().replace(/[^\w-]+/g, '-').replace(/[-_]{2,}/g, '-').replace(/^[-_]+|[-_]+$/g, '');
+function byHandle(agents, q) {
+  const h = slugOf(q).replace(/-\d+$/, (n) => (agents.some((a) => !a.remote && slugOf(a.name) === slugOf(q)) ? n : ''));
+  if (h.length < 2) return null;
+  const hits = agents.filter((a) => !a.remote && [a.name, a.autoName].some((n) => n && (slugOf(n) === h || slugOf(n).startsWith(`${h}-`))));
+  return hits.length === 1 ? hits[0] : null;
+}
+
 // Resolve "name", "id" or a unique prefix of either. A friend's agent also answers to "name@friend" (their name or their handle).
 export function findAgent(agents, query) {
   const q = String(query || '').toLowerCase().trim();
@@ -903,7 +913,8 @@ export function findAgent(agents, query) {
   return agents.find((a) => a.id === query || names(a).includes(q))
     || agents.find((a) => a.remote && (`${a.name}@${a.remote.owner}`.toLowerCase() === q || (a.remote.handle && `${a.name}@${a.remote.handle}`.toLowerCase() === q)))
     || agents.find((a) => a.name.toLowerCase().startsWith(q) || a.id.startsWith(q))
-    || (loose.length === 1 ? loose[0] : null);
+    || (loose.length === 1 ? loose[0] : null)
+    || byHandle(agents, q);
 }
 
 // ---------------------------------------------------------------- projects & colours

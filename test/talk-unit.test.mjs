@@ -1234,3 +1234,13 @@ test('a claude transcript whose path has a # still reads', () => {
   assert.equal(lib.transcriptFile({ transcript: `${dir}/o.db#ses_1`, format: 'opencode' }), `${dir}/o.db`);
   assert.deepEqual(lib.readAgentMessages({ transcript: file, format: 'claude' }).messages.map((m) => m.text), ['hello there']);
 });
+
+test('findAgent resolves an @handle from the composer back to its agent', () => {
+  const agents = [
+    { id: 'a1', name: 'What do you think, given their status quo…' },
+    { id: 'a2', name: 'Thesis-Writing', autoName: 'claude-vision-2' },
+    { id: 'a3', name: 'claude' }, { id: 'a4', name: 'claude' },
+  ];
+  assert.equal(findAgent(agents, 'What-do-you-think-given')?.id, 'a1');
+  assert.equal(findAgent(agents, 'thesis-writing')?.id, 'a2');
+});

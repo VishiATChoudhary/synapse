@@ -39,7 +39,7 @@ export function toolSummary(text) {
 }
 const toolRow = (t) => `${icon(t.icon)}<span class="tool-verb">${escapeHtml(t.verb)}</span>${t.what ? `<code class="tool-what">${escapeHtml(t.what)}</code>` : ''}`;
 // "@mara" in a message, not inside an email address
-export const MENTION = /(^|[\s(])@([A-Za-z0-9][\w-]{1,23})\b/g;
+export const MENTION = /(^|[\s(])@([A-Za-z0-9][\w-]{1,31})\b/g;
 
 export function renderMarkdown(value) {
   const blocks = [];
@@ -106,12 +106,21 @@ export function filePaths(text) {
     .filter(({ path }) => path.length > 2 && (path.includes('/') || /\.[A-Za-z]\w{0,7}(?::\d|#L|$)/.test(path)) && !/^\/+$/.test(path) && !/^\d+(\.\d+)+$/.test(path));
 }
 
+// A name as a mention: punctuation becomes dashes, and a long name stops at a word end, not mid-word
+// ("What do you think, given…" → "What-do-you-think-given", never "What-do-you-think-gi"). Room is left for "-2" under the 32-character mention.
+export function mentionSlug(name, max = 28) {
+  const slug = String(name ?? '').replace(/[^\w-]+/g, '-').replace(/[-_]{2,}/g, '-').replace(/^[-_]+|[-_]+$/g, '');
+  if (slug.length <= max) return slug;
+  const cut = slug.slice(0, max + 1).lastIndexOf('-');
+  return (cut >= 6 ? slug.slice(0, cut) : slug.slice(0, max)).replace(/[-_]+$/, '');
+}
+
 // "@handle" for each of your agents: its name made mention-safe, numbered when names repeat ("claude", "claude-2").
 // Friends keep their own handles, so an agent never takes one.
 export function agentHandles(agents, taken = []) {
   const used = new Set(taken.map((h) => h.toLowerCase())), out = new Map();
   for (const agent of agents) {
-    let base = String(agent.name || agent.kind || 'agent').replace(/[^\w-]+/g, '-').replace(/^[-_]+/, '').slice(0, 20).replace(/[-_]+$/, '') || 'agent';
+    let base = mentionSlug(agent.name || agent.kind || 'agent') || 'agent';
     if (base.length < 2) base += '-agent';
     let handle = base, n = 2;
     while (used.has(handle.toLowerCase())) handle = `${base}-${n++}`;
@@ -128,8 +137,8 @@ export function mentionOptions({ friends = [], agents = new Map(), project = '',
   const here = [], elsewhere = [];
   for (const [handle, agent] of agents) {
     const local = !!project && agent.projectKey === project;
-    if (local && (starts(handle, agent.name) || (q && contains(handle, agent.name)))) here.push({ type: 'agent', handle, agent, local });
-    else if (!local && q && contains(handle, agent.name, agent.project)) elsewhere.push({ type: 'agent', handle, agent, local });
+    if (local && (starts(handle, agent.name, agent.title) || (q && contains(handle, agent.name, agent.title)))) here.push({ type: 'agent', handle, agent, local });
+    else if (!local && q && contains(handle, agent.name, agent.title, agent.project)) elsewhere.push({ type: 'agent', handle, agent, local });
   }
   const recent = (a, b) => (b.agent.lastActivity || 0) - (a.agent.lastActivity || 0);
   return [...friendHits.slice(0, 4), ...here.sort(recent).slice(0, 5), ...elsewhere.sort(recent).slice(0, 5)];
@@ -3050,7 +3059,7 @@ function initialize() {
     const text = $('message-input').value, seen = new Set(), rows = [];
     const peers = new Set(relations(selectedId).filter((p) => p.reads && p.shares).map((p) => p.agent.id));
     for (const [handle, agent] of taggedAgents(text)) {
-      rows.push(`<div class="mention-row"><span class="mention agent">@${escapeHtml(handle)}</span><span class="mention-text">${peers.has(agent.id) ? `<strong>${escapeHtml(agent.name)}</strong> is connected: this agent can read its work and message it.` : `Sending connects <strong>${escapeHtml(agent.name)}</strong>${agent.project ? ` (${escapeHtml(agent.project)})` : ''} with this agent, so they can read each other's work and message.`}</span></div>`);
+      rows.push(`<div class="mention-row"><span class="mention agent">@${escapeHtml(handle)}</span><span class="mention-text">${peers.has(agent.id) ? `<strong>${escapeHtml(titleOf(agent))}</strong> is connected: this agent can read its work and message it.` : `Sending connects <strong>${escapeHtml(titleOf(agent))}</strong>${agent.project ? ` (${escapeHtml(agent.project)})` : ''} with this agent, so they can read each other's work and message.`}</span></div>`);
     }
     for (const m of text.matchAll(MENTION)) {
       const p = knownFriends().find((x) => x.handle.toLowerCase() === m[2].toLowerCase());
@@ -3063,7 +3072,7 @@ function initialize() {
   }
   function mentionQuery() {
     const input = $('message-input'), before = input.value.slice(0, input.selectionStart);
-    const m = /(^|[\s(])@([\w-]{0,24})$/.exec(before);
+    const m = /(^|[\s(])@([\w-]{0,32})$/.exec(before);
     return m ? { at: before.length - m[2].length - 1, q: m[2].toLowerCase() } : null;
   }
   function paintMentionPop() {
@@ -3082,7 +3091,7 @@ function initialize() {
       const head = group !== last ? `<p class="mention-head">${heads[group]}</p>` : '';
       last = group;
       const option = (name, extra) => `${head}<button type="button" class="mention-option" role="option" aria-selected="${i === mentionIndex}" data-mention-pick="${escapeHtml(o.handle)}"><strong>${escapeHtml(name)}</strong><span>@${escapeHtml(o.handle)}</span><small>${extra}</small></button>`;
-      if (o.type === 'agent') return option(o.agent.name, `${escapeHtml(kindName(o.agent))}${o.local ? '' : ` · ${escapeHtml(o.agent.project || '')}`} · ${activityLabel(o.agent).toLowerCase()}`);
+      if (o.type === 'agent') return option(titleOf(o.agent), `${escapeHtml(titleOf(o.agent) === o.agent.name ? kindName(o.agent) : o.agent.name)}${o.local ? '' : ` · ${escapeHtml(o.agent.project || '')}`} · ${activityLabel(o.agent).toLowerCase()}`);
       const c = friendContext(o.friend);
       return option(o.friend.name, c.here ? `shares ${escapeHtml(c.here.agent?.name || 'an agent')} here` : c.related ? `has ${escapeHtml(c.related.agent.name)}` : c.project ? `ask for an agent on ${escapeHtml(c.project)}` : 'ask for an agent');
     }).join('') + (hit.q ? '' : '<p class="mention-foot">Type a name to search all your agents</p>');
