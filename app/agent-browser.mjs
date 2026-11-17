@@ -37,14 +37,16 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
     if (!agents.has(id)) agents.set(id, { tabs: [], active: null, popped: null, paused: false, bounds: null, allowed: new Set(), logins: new Set() });
     return agents.get(id);
   };
-  const tabOf = (a) => a.tabs.find((t) => t.id === a.active) || a.tabs.at(-1) || null;
+  // a tab whose page is gone (it closed itself, like a sign-in popup calling window.close()) is never used again
+  const alive = (t) => { const wc = t?.view?.webContents; return !!wc && !wc.isDestroyed(); };
+  const tabOf = (a) => { const live = a.tabs.filter(alive); return live.find((t) => t.id === a.active) || live.at(-1) || null; };
 
   // ------------------------------------------------------------ what the GUI sees
   function snapshot() {
     const out = {};
     for (const [id, a] of agents) {
       out[id] = {
-        tabs: a.tabs.map((t) => ({ id: t.id, title: t.view.webContents.getTitle() || t.view.webContents.getURL() || 'New tab', url: t.view.webContents.getURL(), loading: t.view.webContents.isLoading() })),
+        tabs: a.tabs.filter(alive).map((t) => ({ id: t.id, title: t.view.webContents.getTitle() || t.view.webContents.getURL() || 'New tab', url: t.view.webContents.getURL(), loading: t.view.webContents.isLoading() })),
         active: tabOf(a)?.id || null, popped: !!a.popped, paused: a.paused, driving: !!a.driving && Date.now() - a.driving < 4000,
         logins: tabOf(a) ? loginsHere(tabOf(a).view.webContents.getURL()).map((l) => l.user) : [],
         canBack: !!tabOf(a)?.view.webContents.navigationHistory.canGoBack(), canForward: !!tabOf(a)?.view.webContents.navigationHistory.canGoForward(),
@@ -55,7 +57,10 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
   let pushTimer = null, lastTabs = '';
   const push = () => {
     clearTimeout(pushTimer);
-    pushTimer = setTimeout(() => {
+    pushTimer = setTimeout(() => { try { pushNow(); } catch (e) { console.error('Agent browser state:', e.message); } }, 60);
+  };
+  const pushNow = () => {
+    {
       const s = snapshot();
       getWin()?.webContents.send('agent-browser:state', s);
       // which pages each agent has open, so its next prompt can say so (hook.mjs)
@@ -63,7 +68,7 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
       const text = JSON.stringify(open);
       if (text !== lastTabs) { lastTabs = text; try { fs.writeFileSync(TABS, text, { mode: 0o600 }); } catch {} }
       for (const [id, a] of agents) if (a.popped && !a.popped.isDestroyed()) a.popped.webContents.send('agent-browser:state', { ...s.agents[id], name: agentName(id) });
-    }, 60);
+    }
   };
 
   // ------------------------------------------------------------ tabs and placement
@@ -76,6 +81,9 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
     for (const ev of ['did-navigate', 'did-navigate-in-page', 'page-title-updated', 'did-start-loading', 'did-stop-loading']) wc.on(ev, push);
     // a link that opens a new window opens a new tab of the same agent
     wc.setWindowOpenHandler(({ url: u }) => { if (originOf(u)) newTab(id, u); return { action: 'deny' }; });
+    // the page closed itself: the tab goes; a crashed page loads again
+    wc.once('destroyed', () => { if (a.tabs.includes(tab)) dropTab(a, tab); });
+    wc.on('render-process-gone', () => { setTimeout(() => { if (!wc.isDestroyed()) wc.reload(); }, 500); });
     a.tabs.push(tab); a.active = tab.id;
     if (url !== 'about:blank') wc.loadURL(url).catch(() => {});
     place();
@@ -84,13 +92,16 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
   function closeTab(id, tabId) {
     const a = agents.get(id); if (!a) return;
     const t = a.tabs.find((x) => x.id === tabId); if (!t) return;
-    detach(t.view);
-    t.view.webContents.close();
+    dropTab(a, t);
+    try { if (alive(t)) t.view.webContents.close(); } catch {}
+  }
+  function dropTab(a, t) {
+    try { detach(t.view); } catch {}
     a.tabs = a.tabs.filter((x) => x !== t);
     if (!a.tabs.length) a.allowAll = false; // a new browser asks again
     if (a.active === t.id) a.active = a.tabs.at(-1)?.id || null;
     if (!a.tabs.length && a.popped) { const w = a.popped; a.popped = null; if (!w.isDestroyed()) w.close(); }
-    place();
+    place(); push();
   }
   const parentOf = (view) => [getWin(), ...[...agents.values()].map((a) => a.popped)].find((w) => w && !w.isDestroyed() && w.contentView.children.includes(view));
   const detach = (view) => { const p = parentOf(view); if (p) p.contentView.removeChildView(view); };
@@ -108,7 +119,7 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
         } else if (t === active && id === shown && a.bounds && win) { host = win; bounds = a.bounds; }
         const p = parentOf(t.view);
         if (p && p !== host) p.contentView.removeChildView(t.view);
-        if (host) { if (!host.contentView.children.includes(t.view)) host.contentView.addChildView(t.view); t.view.setBounds(bounds); }
+        if (host && alive(t)) { if (!host.contentView.children.includes(t.view)) host.contentView.addChildView(t.view); t.view.setBounds(bounds); }
       }
     }
     push();
@@ -321,7 +332,7 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
     a.driving = Date.now(); push();
     setTimeout(push, 4100);
     let t = tabOf(a);
-    if (action === 'status') return { paused: a.paused, tabs: a.tabs.map((x) => ({ tab: x.id, url: x.view.webContents.getURL(), title: x.view.webContents.getTitle(), active: x === t })) };
+    if (action === 'status') return { paused: a.paused, tabs: a.tabs.filter(alive).map((x) => ({ tab: x.id, url: x.view.webContents.getURL(), title: x.view.webContents.getTitle(), active: x === t })) };
     if (action === 'tabs') return agentAct(id, 'status');
     if (action === 'open' || action === 'new_tab') {
       const url = String(args.url || '').trim();

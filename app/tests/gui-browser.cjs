@@ -68,6 +68,7 @@ const todosFile = () => { try { return JSON.parse(fs.readFileSync(path.join(stat
 
 const site = http.createServer((req, res) => {
   res.writeHead(200, { 'content-type': 'text/html' });
+  if (req.url.startsWith('/closes')) return res.end(`<!doctype html><title>Done</title><p>Signed in, closing</p><script>setTimeout(() => window.close(), 300)</script>`);
   if (req.url.startsWith('/login')) return res.end(`<!doctype html><title>Sign in</title><h1 id="h">Sign in</h1>
     <form onsubmit="event.preventDefault(); window.got = { u: this.email.value, p: this.password.value }; document.getElementById('h').textContent = 'Welcome ' + this.email.value"><input type="email" name="email" autocomplete="username"><input type="password" name="password"></form>`);
   res.end(`<!doctype html><title>Test shop</title><h1 id="h">Welcome</h1>
@@ -246,6 +247,15 @@ const shot = async (w, name) => { if (process.env.SHOT_DIR) { await sleep(700); 
   await act('open', { url: `${url}login` });
   const again2 = await act('login');
   assert.ok(!again2.error, again2.error);
+
+  // a page that closes itself (a sign-in popup does): its tab goes away and nothing breaks
+  const before = (await act('tabs')).value.tabs.length;
+  await act('new_tab', { url: `${url}closes` });
+  await until(async () => (await act('tabs')).value.tabs.length === before, 'the closed page left the tabs', 15000);
+  await sleep(500);
+  assert.ok(!(await act('read')).error, 'the browser still works');
+  await until(() => ui(`document.querySelectorAll('.browser-tab').length`).then((n) => n === before), 'the panel lost the tab too');
+  console.log('PASS a page that closes itself: its tab goes, nothing crashes');
 
   // a login added in Settings > Logins: listed with the vault's, signs in the same way, never stored or shown in clear
   await native(`document.querySelector('#desktop-settings')?.click()`);
