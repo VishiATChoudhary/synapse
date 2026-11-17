@@ -64,6 +64,7 @@ export function renderMarkdown(value) {
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|[^\w*])\*(?!\s)(.+?)\*(?!\w)/g, '$1<em>$2</em>')
       .replace(/(^|[^\w_])_(?!\s)(.+?)_(?!\w)/g, '$1<em>$2</em>')
+      .replace(/&lt;u&gt;(.+?)&lt;\/u&gt;/g, '<u>$1</u>')
       .replace(MENTION, '$1<span class="mention">@$2</span>')
       .replace(/\u0001(\d+)\u0001/g, (_, index) => parts[index]);
   };
@@ -497,7 +498,7 @@ function initialize() {
       desktop = message.state;
       document.body.classList.add('desktop');
       const theme = desktop.theme;
-      if (['night', 'signal'].includes(theme)) document.documentElement.dataset.theme = theme;
+      if (['night', 'signal'].includes(theme)) { document.documentElement.dataset.theme = theme; themeFileFrame(); }
       updateThemeButton();
       if (desktopActive) {
         const follow = view === 'session' && followSelection && desktop.active && desktop.active !== previous && desktop.sessions.some((s) => s.id === desktop.active);
@@ -1610,22 +1611,21 @@ function initialize() {
     const head = (title, sub, tools = '') => `<div class="inspector-heading file-heading">${file.stack.length > 1 ? `<button class="icon-button" data-file-act="back" aria-label="Back" title="Back">${icon('arrow-left')}</button>` : ''}<div class="file-title"><h2>${escapeHtml(title)}</h2>${sub ? `<span>${escapeHtml(sub)}</span>` : ''}</div><button class="text-button" data-file-act="details">Details</button><button class="icon-button" data-action="close-inspector" aria-label="Close file" title="Close">${icon('x')}</button></div>${tools}`;
     if (f.error) { fileShown = ''; pane.innerHTML = head(file.path.split('/').pop(), file.path) + `<p class="inspector-note">Synapse can't open this file: ${escapeHtml(f.error)}</p>`; return; }
     // the same file, unchanged on disk, is already showing: leave it (a PDF or video would reload from the start)
-    const shown = JSON.stringify([f.path, f.mtime, f.size, file.mode, file.stack.length]);
+    // a text file is the editable pane (/file): it follows changes on disk by itself, so a save is no reason to redraw
+    const shown = JSON.stringify([f.path, f.type === 'text' ? 0 : f.mtime, f.type === 'text' ? 0 : f.size, file.mode, file.stack.length]);
     if (shown === fileShown && pane.dataset.filePath === f.path && pane.classList.contains('file-mode')) return;
     fileShown = shown;
     const raw = `/api/file/raw?${new URLSearchParams({ path: f.path, v: String(f.mtime || '') })}`;
-    const isMd = f.type === 'text' && /^(md|markdown|mdx)$/.test(f.ext);
-    const mode = file.mode || (isMd && !from ? 'rendered' : 'source');
     const lines = f.type === 'text' ? f.text.split('\n') : [];
     const facts = [f.type === 'dir' ? `${f.entries.length} items` : f.type === 'text' ? `${lines.length} lines` : f.ext || f.type, f.type !== 'dir' && fileSize(f.size), `edited ${relativeTime(f.mtime)} ago`, f.truncated && 'first 1 MB'].filter(Boolean);
-    const tools = `<div class="file-tools"><span>${facts.map(escapeHtml).join(' · ')}</span>${isMd ? `<button class="text-button" data-file-act="mode">${mode === 'rendered' ? 'Source' : 'Preview'}</button>` : ''}<button class="text-button" data-file-act="open">Open</button><button class="text-button" data-file-act="reveal">Show in Finder</button><button class="text-button" data-file-act="copy">Copy path</button></div>`;
+    const tools = `<div class="file-tools"><span>${facts.map(escapeHtml).join(' · ')}</span><button class="text-button" data-file-act="open">Open</button><button class="text-button" data-file-act="reveal">Show in Finder</button><button class="text-button" data-file-act="copy">Copy path</button></div>`;
     let body;
     if (f.type === 'dir') body = `<div class="file-dir">${f.entries.map((e) => `<button type="button" class="file-link" data-file="${escapeHtml(`${f.path}/${e.name}`)}">${escapeHtml(e.name)}${e.dir ? '/' : ''}</button>`).join('') || '<p class="inspector-note">Empty folder.</p>'}</div>`;
     else if (f.type === 'image') body = `<div class="file-media"><img src="${raw}" alt="${escapeHtml(f.name)}"></div>`;
     else if (f.type === 'video' || f.type === 'audio') body = `<div class="file-media"><${f.type} src="${raw}" controls></${f.type}></div>`;
     else if (f.type === 'pdf') body = `<iframe class="file-pdf" src="${raw}" title="${escapeHtml(f.name)}"></iframe>`;
     else if (f.type === 'binary') body = `<p class="inspector-note">Binary file. Open it in its own app instead.</p>`;
-    else if (mode === 'rendered') body = `<div class="file-md md">${renderMarkdown(f.text)}</div>`;
+    else if (f.type === 'text') body = `<iframe class="file-frame" title="${escapeHtml(f.name)}" src="/file?${new URLSearchParams({ path: file.path, cwd: file.cwd || '', theme: document.documentElement.dataset.theme || '', embed: '1', ...(file.mode ? { mode: file.mode === 'rendered' ? 'preview' : 'edit' } : {}) })}"></iframe>`;
     else body = `<div class="file-source">${lines.slice(0, 20000).map((l, i) => `<div class="file-line${i + 1 >= from && i + 1 <= to ? ' hit' : ''}"><span>${i + 1}</span><code>${escapeHtml(l) || ' '}</code></div>`).join('')}</div>`;
     const dir = f.type === 'dir' ? f.path : f.path.replace(/\/[^/]*$/, '');
     const root = (file.cwd || '').replace(/\/+$/, ''), inside = root && (dir === root || dir.startsWith(`${root}/`));
@@ -1635,6 +1635,26 @@ function initialize() {
     if (hit) hit.scrollIntoView({ block: 'center' });
     else pane.scrollTop = 0;
   }
+  // the file pane follows the app's theme
+  function themeFileFrame() { $('inspector').querySelector('iframe.file-frame')?.contentWindow?.postMessage({ type: 'synapse:theme', theme: document.documentElement.dataset.theme }, '*'); }
+  // comments written in the file pane go to the agent it is open for, like a message typed in the composer
+  // (held in the queue while the agent works or waits on you)
+  addEventListener('message', async (event) => {
+    const frame = $('inspector').querySelector('iframe.file-frame');
+    if (!frame || event.source !== frame.contentWindow || event.data?.type !== 'synapse:file-comments') return;
+    const reply = (r) => frame.contentWindow?.postMessage({ type: 'synapse:file-comments-result', ...r }, '*');
+    const text = String(event.data.text || '').slice(0, 12000), agent = byId.get(inspectorFile?.agent);
+    if (!agent || agent.exited || !text.trim()) return reply({ ok: false, error: agent ? 'this agent has ended' : 'no agent for this file' });
+    try {
+      const id = agent.id, holding = agent.owned && (agent.status === 'busy' || needsYou(agent) || queued[id]?.length || flushing.has(id));
+      if (holding) { queued[id] = [...(queued[id] || []), { id: `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, text, at: Date.now() }]; saveQueue(); renderQueue(); }
+      else if (agent.owned) await desktopCall('submit', { id, text });
+      else await api(`/api/agents/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
+      const stale = recentCache.get(id); if (stale) stale.activity = -1;
+      if (selectedId === id && !holding) loadRecent(true).catch(() => {});
+      reply({ ok: true });
+    } catch (error) { reply({ ok: false, error: error.message }); }
+  });
   document.addEventListener('click', (event) => {
     const link = event.target.closest('[data-file]');
     if (link) { event.preventDefault(); openFile(link.dataset.file, link.dataset.cwd || inspectorFile?.cwd || byId.get(selectedId)?.cwd); return; }
@@ -3562,7 +3582,7 @@ function initialize() {
   $('close-dialog').onclick = $('cancel-dialog').onclick = () => $('action-dialog').close();
   $('theme-toggle').onclick = () => {
     const theme = document.documentElement.dataset.theme === 'night' ? 'signal' : 'night';
-    document.documentElement.dataset.theme = theme; setStorage('synapse-mode', theme); updateThemeButton();
+    document.documentElement.dataset.theme = theme; setStorage('synapse-mode', theme); updateThemeButton(); themeFileFrame();
     if (embedded) runDesktop('theme', { theme });
   };
   function updateThemeButton() {

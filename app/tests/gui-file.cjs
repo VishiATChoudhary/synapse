@@ -116,5 +116,53 @@ const shot = async (w, name) => { if (process.env.SHOT_DIR) { await sleep(700); 
   await ui(`document.getElementById('open-pdf').click()`);
   await until(() => ui(`!!document.querySelector('#inspector .file-pdf') && !document.querySelector('#inspector .file-pdf').dataset.mark`), 'a changed file loads again', 20000);
   console.log('PASS PDF: a changed file loads again');
+
+  // a markdown file in the panel: the preview edits in place (⌘B / ⌘U), only the changed block is rewritten, the text
+  // size changes, and comments go to the agent one by one or all at once
+  const md = path.join(fixture, 'notes.md'), original = '# Title\n\nSome **bold** text.\n\n* one\n* two\n\nLast para here\n';
+  fs.writeFileSync(md, original);
+  await ui(`(() => { const a = document.createElement('a'); a.dataset.file = ${JSON.stringify(md)}; a.dataset.cwd = ${JSON.stringify(fixture)}; document.body.append(a); a.click(); a.remove(); })()`);
+  await until(() => ui(`!!document.querySelector('#inspector iframe.file-frame')`), 'the markdown opens in the editable pane');
+  const pane = () => win.webContents.mainFrame.framesInSubtree.find((f) => f.url.includes('/file?') && f.url.includes('embed=1'));
+  const inPane = (code) => Promise.race([pane().executeJavaScript(code, true), sleep(3000).then(() => { throw new Error('pane did not answer'); })]);
+  await until(() => pane() && inPane(`!!document.querySelector('.md-view[contenteditable="true"] h1')`), 'the preview is editable');
+  const selectWord = (word) => inPane(`(() => { const w = ${JSON.stringify(word)}; const walk = document.createTreeWalker(document.querySelector('.md-view'), NodeFilter.SHOW_TEXT); let n; while ((n = walk.nextNode())) { const i = n.data.indexOf(w); if (i >= 0) { document.querySelector('.md-view').focus(); const r = document.createRange(); r.setStart(n, i); r.setEnd(n, i + w.length); getSelection().removeAllRanges(); getSelection().addRange(r); return true; } } return false; })()`);
+  const press = (code, opts = {}) => inPane(`(document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(code.replace(/^(Key|Digit)/, '').toLowerCase())}, code: ${JSON.stringify(code)}, metaKey: true, altKey: ${!!opts.alt}, bubbles: true, cancelable: true }))`);
+  assert.ok(await selectWord('Last'));
+  await press('KeyB');
+  await until(() => fs.readFileSync(md, 'utf8').includes('**Last** para here'), '⌘B made it bold in the file');
+  assert.ok(await selectWord('here'));
+  await press('KeyU');
+  await until(() => fs.readFileSync(md, 'utf8').includes('<u>here</u>'), '⌘U underlined it');
+  const saved = fs.readFileSync(md, 'utf8');
+  assert.ok(saved.startsWith('# Title\n\nSome **bold** text.\n\n* one\n* two\n\n'), `untouched blocks stay as they were: ${JSON.stringify(saved)}`);
+  assert.ok(saved.endsWith('\n'), 'the final newline stays');
+  assert.ok(await selectWord('Title'));
+  await press('Digit2', { alt: true });
+  await until(() => fs.readFileSync(md, 'utf8').startsWith('## Title\n'), '⌘⌥2 made a level-2 heading');
+  await inPane(`document.querySelector('[data-act="bigger"]').click()`);
+  assert.equal(await inPane(`getComputedStyle(document.documentElement).getPropertyValue('--file-zoom').trim()`), '1.1', 'A+ made the text bigger');
+  await inPane(`document.querySelector('[data-act="smaller"]').click()`);
+  console.log('PASS markdown: the preview edits in place, ⌘B / ⌘U / ⌘⌥2, only the changed block rewritten, text size');
+  // comments: two collected and sent at once, then one sent straight away
+  const comment = async (word, body, how) => {
+    assert.ok(await selectWord(word));
+    await press('KeyM', { alt: true });
+    await until(() => inPane(`!!document.querySelector('.comment-pop textarea')`), 'the comment form');
+    await inPane(`(() => { const p = document.querySelector('.comment-pop'); p.querySelector('textarea').value = ${JSON.stringify(body)}; p.requestSubmit(p.querySelector('button[value="${how}"]')); })()`);
+  };
+  await comment('Some', 'Say more here', 'add');
+  await comment('two', 'Add a third item', 'add');
+  await until(() => inPane(`document.querySelectorAll('.comments li').length === 2`), 'two comments collected');
+  if (process.env.SHOT_DIR) { await sleep(400); fs.writeFileSync(path.join(process.env.SHOT_DIR, 'file-comments.png'), (await win.webContents.capturePage()).toPNG()); }
+  const before = typed().length;
+  await inPane(`document.querySelector('[data-act="send-all"]').click()`);
+  await until(() => { const t = typed().slice(before); return t.includes('Comments on notes.md') && t.includes('Say more here') && t.includes('Add a third item') && t.includes('line 3'); }, 'both comments reached the agent in one message').catch(async (e) => { console.error('typed:', JSON.stringify(typed().slice(before)), 'state:', await inPane(`document.querySelector('.bar .state').textContent`), 'queue:', await queue()); throw e; });
+  await until(() => inPane(`document.getElementById('comments').hidden`), 'sent comments leave the list');
+  const mid = typed().length;
+  await comment('Title', 'Rename this', 'send');
+  await until(() => typed().slice(mid).includes('Comment on notes.md, line 1') && typed().slice(mid).includes('Rename this'), 'one comment sent straight away');
+  console.log('PASS comments: collected and sent all at once, or one straight away, to the agent');
+  assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);
   console.log('gui-file: ok');
 })().catch((e) => { failed = true; console.error(e); }).finally(() => { site.close(); app.exit(failed ? 1 : 0); });

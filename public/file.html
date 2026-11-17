@@ -36,6 +36,36 @@
     .ed pre { flex: none; margin: 0; padding: 12px 10px 40px 12px; overflow: hidden; text-align: right; color: var(--color-muted); user-select: none; min-width: 3ch; }
     .ed textarea { flex: 1; min-width: 0; margin: 0; border: 0; outline: 0; resize: none; padding: 12px 16px 40px 6px; background: transparent; color: var(--color-ink); font: inherit; white-space: pre; overflow: auto; tab-size: 4; caret-color: var(--color-accent); }
     .ed textarea::selection { background: var(--color-selected, var(--color-hover)); }
+    .ed { font-size: calc(12.5px * var(--file-zoom, 1)); }
+    .md-view { zoom: var(--file-zoom, 1); }
+    .md-view[contenteditable='true'] { outline: none; caret-color: var(--color-accent); }
+    .md-view .mdb > :first-child { margin-top: 0; }
+    .md-view .mdb { margin-bottom: .75em; }
+    .bar .dot { color: var(--color-muted); margin-right: 4px; }
+    .embed .bar { padding-left: 8px; }
+    /* comments: a chip on the selection, a small form, and the list at the bottom */
+    .comment-chip { position: fixed; z-index: 50; padding: 4px 9px; border-radius: 7px; border: 1px solid var(--color-border); background: var(--color-raised, var(--color-panel)); color: var(--color-ink); font-size: var(--text-xs); box-shadow: var(--shadow-pop); cursor: pointer; }
+    .comment-chip[hidden] { display: none; }
+    .comment-pop { position: fixed; z-index: 51; left: 12px; right: 12px; bottom: 12px; max-width: 520px; margin: 0 auto; display: grid; gap: 8px; padding: 10px; border-radius: 10px; border: 1px solid var(--color-border); background: var(--color-raised, var(--color-panel)); box-shadow: var(--shadow-pop); }
+    .comment-pop q, .comments q { color: var(--color-muted); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+    .comment-pop textarea { resize: vertical; min-height: 60px; padding: 8px; border-radius: 7px; border: 1px solid var(--color-border); background: var(--color-panel); color: var(--color-ink); font: var(--text-sm) var(--font-body); outline: none; }
+    .comment-pop textarea:focus { border-color: var(--color-accent); }
+    .comment-pop div { display: flex; justify-content: flex-end; gap: 6px; }
+    .comment-pop button, .comments button { cursor: pointer; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--color-border); background: transparent; color: var(--color-secondary, var(--color-ink)); font-size: var(--text-xs); }
+    .comment-pop button:hover, .comments button:hover { background: var(--color-hover); color: var(--color-ink); }
+    .comment-pop button.primary, .comments .send-all { background: var(--color-ink); color: var(--color-panel); border-color: var(--color-ink); }
+    .comments { flex: none; max-height: 40%; overflow: auto; border-top: 1px solid var(--color-border); font-size: var(--text-sm); }
+    .comments[hidden] { display: none; }
+    .comments header { position: sticky; top: 0; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; background: var(--color-panel); }
+    .comments header .fold { all: unset; cursor: pointer; margin-right: auto; color: var(--color-ink); font-weight: 600; font-size: var(--text-xs); }
+    .comments header .fold span { color: var(--color-muted); font-weight: 400; }
+    .comments ol { list-style: none; margin: 0; padding: 0 8px 8px; display: grid; gap: 4px; }
+    .comments li { display: flex; align-items: flex-start; gap: 6px; padding: 6px 4px 6px 8px; border-radius: 7px; }
+    .comments li:hover { background: var(--color-hover); }
+    .comments .c-body { flex: 1; min-width: 0; }
+    .comments .c-where { margin: 0 0 2px; color: var(--color-muted); font-size: var(--text-xs); display: flex; gap: 6px; min-width: 0; }
+    .comments .c-text { margin: 0; color: var(--color-ink); white-space: pre-wrap; }
+    .comments li button { padding: 2px 7px; }
   </style>
   <script type="module" src="/file.mjs"></script>
 </head>

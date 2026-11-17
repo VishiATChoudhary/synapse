@@ -605,6 +605,7 @@ textarea.field { line-height: 1.5; resize: vertical; }
 .file-dir { display: flex; flex-direction: column; gap: 6px; font: var(--text-sm) var(--font-mono); padding-bottom: 20px; }
 .file-media img, .file-media video { max-width: 100%; border-radius: var(--radius-sm); }
 .file-pdf { flex: 1; min-height: 70vh; width: 100%; border: 0; }
+.file-frame { flex: 1; min-height: 60vh; width: calc(100% + 2 * var(--inspector-pad, 0px)); border: 0; border-radius: var(--radius-sm); }
 
 /* Desktop on macOS: the header strips double as the title bar, so leave room for the window buttons */
 .desktop .brand-row { padding-inline-start: calc(10px + var(--traffic-inset, 0px)); }

@@ -216,6 +216,13 @@ addEventListener('message', (ev) => {
   if (!f) return;
   if (ev.data?.type === 'synapse:file-close') closeFile(x);
   if (ev.data?.type === 'synapse:file-wide') { f.wide = !!ev.data.wide; syncFile(); }
+  // comments from the file pane: typed into this tab's agent and sent
+  if (ev.data?.type === 'synapse:file-comments') {
+    const reply = (r) => ev.source?.postMessage({ type: 'synapse:file-comments-result', ...r }, '*');
+    const text = String(ev.data.text || '').slice(0, 12000);
+    if (x.exited || x.kind === 'shell' || !text.trim()) return reply({ ok: false, error: x.kind === 'shell' ? 'this tab is a shell, not an agent' : 'this session has ended' });
+    Promise.resolve(synapse.pty.submit(x.pty, text)).then(() => reply({ ok: true }), (e) => reply({ ok: false, error: e.message }));
+  }
 });
 // the pane's width follows its left edge and is kept for next time
 {
