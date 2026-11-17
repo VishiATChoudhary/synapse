@@ -2127,7 +2127,8 @@ async function openSettings(start) {
     pane('agents', null,
       group('Integrations', card(row('Agent integrations', 'Add Synapse tools and prompt hooks to your agents’ settings. Existing files are backed up.', setupButton), setupReport)),
       group('Commands', el('p', 'set-desc set-pad', 'The command each agent starts with. New sessions use these; running ones keep theirs.'), commands),
-      group('Browser', row('Show the browser when an agent uses it', 'When an agent opens a page, its panel switches to the Browser tab so you can watch.', toggle(s.showBrowser !== false, async (on) => { await synapse.settings.set({ showBrowser: on }); toast(on ? 'The panel shows the browser when an agent opens a page' : 'The panel stays as it is when an agent opens a page'); }))),
+      group('Browser', row('Show the browser when an agent uses it', 'When an agent opens a page, its panel switches to the Browser tab so you can watch.', toggle(s.showBrowser !== false, async (on) => { await synapse.settings.set({ showBrowser: on }); toast(on ? 'The panel shows the browser when an agent opens a page' : 'The panel stays as it is when an agent opens a page'); })),
+        row('Agents only use the Synapse browser', 'Agents started here browse in Synapse, not in your Chrome tabs: Claude in Chrome, Playwright and similar tools are turned off for them.', toggle(s.synapseBrowserOnly !== false, async (on) => { await synapse.settings.set({ synapseBrowserOnly: on }); toast(on ? 'Agents browse in Synapse only' : 'Agents may also use your Chrome'); }))),
       group('Forks', row('Send forks right away', 'Send a fork’s question at once, instead of leaving it in the child’s prompt for you to send.', toggle(!!s.autoSendFork, async (on) => { M.autoSendFork = (await synapse.settings.set({ autoSendFork: on })).autoSendFork; toast(on ? 'Forks send their question right away' : 'A fork’s question waits in its prompt for you'); }))));
 
     // ---- Workspaces

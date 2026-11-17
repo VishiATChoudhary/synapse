@@ -14,7 +14,7 @@ fs.mkdirSync(path.join(home, 'state'));
 fs.writeFileSync(path.join(home, 'state', 'app.json'), JSON.stringify({ workspaces: [staging, other], protected: [staging] }));
 const HOOK = new URL('../hook.mjs', import.meta.url).pathname;
 const run = (input) => {
-  const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify(input), encoding: 'utf8', env: { ...process.env, SYNAPSE_HOME: path.join(home, 'state'), SYNAPSE_CLAUDE_HOME: path.join(home, 'claude'), SYNAPSE_DEMO: '' } });
+  const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify(input), encoding: 'utf8', env: { ...process.env, SYNAPSE_HOME: path.join(home, 'state'), SYNAPSE_CLAUDE_HOME: path.join(home, 'claude'), SYNAPSE_DEMO: '', SYNAPSE_APP: '' } });
   return r.stdout ? JSON.parse(r.stdout) : null;
 };
 const tool = (name, toolInput, cwd = staging) => run({ hook_event_name: 'PreToolUse', tool_name: name, tool_input: toolInput, cwd })?.hookSpecificOutput;

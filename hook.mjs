@@ -3,7 +3,8 @@
 //  UserPromptSubmit: injects new activity from every agent linked into this session, plus messages
 //                    sent to it, and prints a visible "synapse ..." line in the terminal.
 //  SessionStart / SubagentStart: teaches usage, even before the first link exists.
-//  PreToolUse (Claude): refuses edits and branch-changing git commands in a protected folder (lib.mjs protectedRoot).
+//  PreToolUse (Claude): refuses edits and branch-changing git commands in a protected folder (lib.mjs protectedRoot),
+//                    and, for agents running in the Synapse app, other browsers' tools (they use synapse_browser).
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import {
@@ -15,6 +16,15 @@ import { browserRule } from './browsers.mjs';
 
 const BUDGET = Number(process.env.SYNAPSE_BUDGET || 8000);
 const INTRO = fs.readFileSync(new URL('./skill/bootstrap.md', import.meta.url), 'utf8').trim();
+// Agents the Synapse app started use its browser (app/agent-browser.mjs) for web work, not the user's Chrome tabs.
+// Settings > Agents > Browser can turn this off (app.json synapseBrowserOnly: false).
+const synapseBrowserOnly = () => process.env.SYNAPSE_APP === '1' && readJSON(FILES.app, {}).synapseBrowserOnly !== false;
+const OTHER_BROWSERS = /^mcp__(claude-in-chrome|plugin_playwright_playwright|playwright|chrome-devtools|plugin_chrome-devtools[^_]*_chrome-devtools|puppeteer|browsermcp)__/;
+const SYNAPSE_BROWSER_RULE = 'You run inside the Synapse app, which has its own browser next to this chat: the user watches it and is signed in there. ' +
+  'For anything on the web (opening a page, checking a site or dashboard, testing a web app, filling a form), use the synapse_browser tool. ' +
+  'Do not use Claude in Chrome, the Codex Chrome plugin, Playwright, chrome-devtools or `open <url>`: those open tabs in the user\'s own Chrome, which is what they do not want. ' +
+  'To sign in, use synapse_browser action login: Synapse fills the user\'s saved login from their vault after they approve; never ask for a password. ' +
+  'If you have no synapse_browser tool, tell the user to restart this session in Synapse.';
 
 async function main() {
   // an answering fork for a friend's agent: no context in, nothing printed
@@ -25,7 +35,7 @@ async function main() {
   // Codex keeps its sessions under ~/.codex; everything else that runs this hook speaks for Claude
   const kind = /[\\/]\.codex[\\/]/.test(String(input.transcript_path || '')) ? 'codex' : 'claude';
   let browser = null;
-  try { browser = browserRule(input.cwd || process.cwd(), kind); } catch {}
+  try { browser = synapseBrowserOnly() ? SYNAPSE_BROWSER_RULE : browserRule(input.cwd || process.cwd(), kind); } catch {}
   if (event === 'PreToolUse') return guard(input, root);
   // Claude's session_id is its Synapse id; Codex's is not, so find ourselves in the process tree
   const edgesAll = readJSON(FILES.edges, []);
@@ -78,7 +88,8 @@ async function main() {
     const tabs = readJSON(path.join(DATA, 'agent-browser-tabs.json'), {})[me] || [];
     if (tabs.length) tabsNote = `The user has ${tabs.length === 1 ? 'this page' : 'these pages'} open in your browser inside Synapse, next to this chat:\n${tabs.map((t) => `- ${t.title || t.url} (${t.url})${t.active ? ' [showing]' : ''}`).join('\n')}\nWhen the user means "the browser" or these pages, use the synapse_browser tool (action read shows the page), not Claude in Chrome or any other browser. To sign in, use synapse_browser action login: Synapse fills the user's saved login from their vault after they approve; never ask for a password. If you have no synapse_browser tool, ask the user to restart this session in Synapse.`;
   }
-  // the workspace's rules, on every prompt: a protected folder, and which browser profile its agents use
+  if (synapseBrowserOnly() && !tabsNote) tabsNote = SYNAPSE_BROWSER_RULE;
+  // the workspace's rules, on every prompt: a protected folder, and which browser its agents use
   const rule = event !== 'UserPromptSubmit' ? null : [
     root ? `<protected-folder>\n${protectRule(root)}\n</protected-folder>` : null,
     tabsNote ? `<synapse-browser>\n${tabsNote}\n</synapse-browser>` : browser ? `<workspace-browser>\n${browser}\n</workspace-browser>` : null,
@@ -177,6 +188,12 @@ function guard(input, root) {
   const file = t.file_path || t.notebook_path;
   const target = file ? protectedRoot(path.resolve(input.cwd || process.cwd(), String(file))) : null;
   let why = null;
+  if (OTHER_BROWSERS.test(String(input.tool_name || '')) && synapseBrowserOnly()) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `${SYNAPSE_BROWSER_RULE} (The user can allow other browsers in Synapse Settings > Agents > Browser.)` },
+    }));
+    return;
+  }
   if (EDITS.has(input.tool_name) && target) why = `${file} is in ${target}, a protected folder.`;
   else if (input.tool_name === 'Bash' && root && GIT_CHANGES.test(String(t.command || '')) && !/\bworktree\s+add\b/.test(String(t.command))) why = `${root} is a protected folder.`;
   if (!why) return;

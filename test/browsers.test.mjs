@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-browsers-')));
 const home = path.join(tmp, 'home'), chrome = path.join(tmp, 'chrome');
-process.env.SYNAPSE_HOME = home; process.env.SYNAPSE_CHROME_DIR = chrome;
+process.env.SYNAPSE_HOME = home; process.env.SYNAPSE_CHROME_DIR = chrome; delete process.env.SYNAPSE_APP; // as if outside the app
 fs.mkdirSync(home, { recursive: true });
 
 // Chrome: a work profile with both extensions (its deviceId squeezed the way LevelDB block compression leaves it),
@@ -100,4 +100,24 @@ test('pages open in the agent\'s Synapse browser: its next prompt says so and po
   assert.doesNotMatch(said('sess-other'), /synapse-browser/, 'another agent hears nothing');
   fs.unlinkSync(path.join(home, 'agent-browser-tabs.json'));
   if (before === null) fs.unlinkSync(edges); else fs.writeFileSync(edges, before);
+});
+
+test('agents in the Synapse app browse in Synapse: every prompt says so, other browsers\' tools are refused, a setting turns it off', () => {
+  const run = (input, env = {}) => { const out = execFileSync(process.execPath, [path.join(ROOT, 'hook.mjs')], { input: JSON.stringify(input), env: { ...process.env, ...env } }).toString(); return out.trim() ? JSON.parse(out) : null; };
+  const app = { SYNAPSE_APP: '1' };
+  const ctx = run({ hook_event_name: 'UserPromptSubmit', cwd: other, prompt: 'check the site' }, app).hookSpecificOutput.additionalContext;
+  assert.match(ctx, /<synapse-browser>[\s\S]*synapse_browser[\s\S]*not use Claude in Chrome/);
+  assert.match(run({ hook_event_name: 'SessionStart', cwd: other }, app).hookSpecificOutput.additionalContext, /use the synapse_browser tool/);
+  const denied = run({ hook_event_name: 'PreToolUse', cwd: other, tool_name: 'mcp__claude-in-chrome__navigate', tool_input: { url: 'https://example.com' } }, app);
+  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /synapse_browser/);
+  assert.equal(run({ hook_event_name: 'PreToolUse', cwd: other, tool_name: 'mcp__plugin_playwright_playwright__browser_navigate', tool_input: {} }, app).hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(run({ hook_event_name: 'PreToolUse', cwd: other, tool_name: 'mcp__synapse__synapse_browser', tool_input: {} }, app), null, 'its own browser is fine');
+  assert.equal(run({ hook_event_name: 'PreToolUse', cwd: other, tool_name: 'mcp__claude-in-chrome__navigate', tool_input: {} }, { SYNAPSE_APP: '' }), null, 'agents outside the app keep Chrome');
+  const appFile = path.join(home, 'app.json'), before = fs.existsSync(appFile) ? fs.readFileSync(appFile, 'utf8') : null;
+  fs.writeFileSync(appFile, JSON.stringify({ synapseBrowserOnly: false }));
+  try {
+    assert.equal(run({ hook_event_name: 'PreToolUse', cwd: other, tool_name: 'mcp__claude-in-chrome__navigate', tool_input: {} }, app), null, 'turned off: Chrome allowed');
+    assert.doesNotMatch(run({ hook_event_name: 'UserPromptSubmit', cwd: other, prompt: 'x' }, app)?.hookSpecificOutput?.additionalContext || '', /synapse-browser/);
+  } finally { if (before === null) fs.unlinkSync(appFile); else fs.writeFileSync(appFile, before); }
 });

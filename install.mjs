@@ -83,12 +83,14 @@ function addHooks(d, events, matchers = {}) {
     // drop older synapse hook entries (e.g. a different node path), then add the current one
     for (const g of groups) g.hooks = (g.hooks || []).filter((h) => !(/synapse/i.test(h.command) && /[/\\]hook\.mjs/.test(h.command)) || h.command === HOOK);
     d.hooks[ev] = groups.filter((g) => g.hooks.length);
+    // an older install's matcher is brought up to date (PreToolUse gained the browser tools)
+    for (const g of d.hooks[ev]) if (matchers[ev] && g.hooks.some((h) => h.command === HOOK) && g.hooks.every((h) => h.command === HOOK)) g.matcher = matchers[ev];
     if (!d.hooks[ev].some((g) => g.hooks.some((h) => h.command === HOOK))) {
       d.hooks[ev].push({ ...(matchers[ev] ? { matcher: matchers[ev] } : {}), hooks: [{ type: 'command', command: HOOK, timeout: 5 }] });
     }
   }
 }
-if (installed('claude hooks', path.join(HOME, '.claude'))) editJSON('claude hooks', path.join(HOME, '.claude', 'settings.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart', 'PreToolUse'], { PreToolUse: 'Edit|Write|MultiEdit|NotebookEdit|Bash' })); // PreToolUse: protected folders
+if (installed('claude hooks', path.join(HOME, '.claude'))) editJSON('claude hooks', path.join(HOME, '.claude', 'settings.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart', 'PreToolUse'], { PreToolUse: 'Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__claude-in-chrome__.*|mcp__.*playwright.*|mcp__.*chrome-devtools.*|mcp__puppeteer__.*|mcp__browsermcp__.*' })); // PreToolUse: protected folders, and other browsers for agents in the app
 if (installed('codex hooks', CODEX)) editJSON('codex hooks', path.join(CODEX, 'hooks.json'), (d) => addHooks(d, ['UserPromptSubmit', 'SessionStart', 'SubagentStart']));
 
 // Codex: TOML, append a table if missing. Codex asks before every MCP tool call unless told otherwise, and

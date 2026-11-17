@@ -1061,7 +1061,7 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, safeWorktreeDelete: c.safeWorktreeDelete !== false, showBrowser: c.showBrowser !== false, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [] });
+const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, safeWorktreeDelete: c.safeWorktreeDelete !== false, showBrowser: c.showBrowser !== false, synapseBrowserOnly: c.synapseBrowserOnly !== false, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [] });
 handle('settings:get', () => settingsOut(config()));
 // an agent finished a turn while Synapse was in the background (the renderer decides when): say so, with the
 // start of its last reply; a click brings that session to the front
@@ -1140,6 +1140,7 @@ handle('settings:set', (patch) => {
   if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink;
   if ('autoSendFork' in patch) c.autoSendFork = !!patch.autoSendFork;
   if ('showBrowser' in patch) c.showBrowser = !!patch.showBrowser;
+  if ('synapseBrowserOnly' in patch) c.synapseBrowserOnly = !!patch.synapseBrowserOnly;
   if ('safeWorktreeDelete' in patch) c.safeWorktreeDelete = !!patch.safeWorktreeDelete;
   if ('notifyDone' in patch) c.notifyDone = !!patch.notifyDone;
   if ('doneSound' in patch) c.doneSound = DONE_SOUNDS.includes(patch.doneSound) ? patch.doneSound : 'bubbleTap';
