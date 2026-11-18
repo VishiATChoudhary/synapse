@@ -1865,7 +1865,8 @@ function initialize() {
       <div class="browser-bar"><button class="icon-button" data-browser="back" aria-label="Back" title="Back"${b?.canBack ? '' : ' disabled'}>${icon('arrow-left')}</button><button class="icon-button" data-browser="forward" aria-label="Forward" title="Forward"${b?.canForward ? '' : ' disabled'}>${icon('arrow-right')}</button><button class="icon-button" data-browser="reload" aria-label="Reload" title="Reload"${tab ? '' : ' disabled'}>${icon('refresh')}</button>
         <form id="browser-go" class="browser-go"><input id="browser-url" class="field" spellcheck="false" autocomplete="off" placeholder="Search or enter address" aria-label="Address" value="${escapeHtml(keep ?? url)}"></form>
         ${b?.logins?.length ? `<button class="icon-button" id="browser-vault" aria-label="Sign in with your vault" title="Sign in with your vault (${escapeHtml(b.logins.join(', '))})">${icon('key')}</button>` : ''}
-        <button class="icon-button" data-browser="${b?.popped ? 'dock' : 'pop'}" aria-label="${b?.popped ? 'Back to the panel' : 'Pop out'}" title="${b?.popped ? 'Back to the panel' : 'Pop out into its own window'}">${icon(b?.popped ? 'dock-in' : 'pop-out')}</button></div>
+        <button class="icon-button" data-browser="${b?.popped ? 'dock' : 'pop'}" aria-label="${b?.popped ? 'Back to the panel' : 'Pop out'}" title="${b?.popped ? 'Back to the panel' : 'Pop out into its own window'}">${icon(b?.popped ? 'dock-in' : 'pop-out')}</button>
+        <button class="icon-button" id="browser-more" aria-haspopup="menu" aria-label="Browser data" title="Clear site data or the browser's cache">${icon('more')}</button></div>
       ${ask}${body}${driving}</div>`;
     if (keep !== null) { $('browser-url').focus(); $('browser-url').setSelectionRange(keep.length, keep.length); }
     placeBrowser();
@@ -1923,6 +1924,20 @@ function initialize() {
       const users = browserOf(byId.get(selectedId))?.logins || [];
       if (users.length === 1) browserAct('login', { user: users[0] });
       else dropdown(v, [{ heading: 'Sign in with your vault' }, ...users.map((u) => ({ label: u, icon: 'key', run: () => browserAct('login', { user: u }) }))]);
+      return;
+    }
+    // a sign-in that got stuck: clear the site's data (you are signed out there only), or everything (everywhere)
+    const more = event.target.closest('#browser-more');
+    if (more) {
+      const b = browserOf(byId.get(selectedId)), tab = b?.tabs.find((x) => x.id === b.active);
+      let host = ''; try { host = /^https?:/.test(tab?.url || '') ? new URL(tab.url).hostname.replace(/^www\./, '') : ''; } catch {}
+      const clearAll = () => dropdown(more, [{ heading: 'Signs you out of every site in this browser' },
+        { label: 'Clear all browsing data', icon: 'x', danger: true, run: () => browserAct('clear-all').then((r) => r && toast('Browsing data cleared. You are signed out everywhere.')) },
+        { label: 'Cancel', run: () => {} }]);
+      dropdown(more, [
+        ...(host ? [{ label: `Clear data for ${host}`, hint: 'Cookies, storage and cache. Signs you out of this site only, then reloads.', icon: 'refresh', run: () => browserAct('clear-site').then((r) => r && toast(`Cleared ${r.site}: ${r.cookies} cookie${r.cookies === 1 ? '' : 's'}, storage and cache.`)) }] : []),
+        { label: 'Clear all browsing data…', hint: 'Every site. Signs you out everywhere.', icon: 'x', run: () => setTimeout(clearAll, 0) },
+      ]);
       return;
     }
     const b = event.target.closest('[data-browser]');

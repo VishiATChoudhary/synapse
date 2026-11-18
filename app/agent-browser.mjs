@@ -33,6 +33,34 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
   const local = (origin) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|[^/]+\.localhost|[^/]+\.test)(:\d+)?$/.test(origin || '');
 
   const ses = () => electronSession.fromPartition(PARTITION);
+  // the site a host belongs to (app.notion.so -> notion.so, foo.co.uk -> foo.co.uk): its sign-in cookies are often
+  // set on the parent domain, so clearing only the page's own origin would leave you signed in (or stuck)
+  const siteOf = (host) => {
+    const parts = String(host || '').replace(/^\[|\]$/g, '').split('.');
+    if (parts.length <= 2 || /^\d+$/.test(parts.at(-1))) return parts.join('.');
+    const two = parts.slice(-2).join('.');
+    return /^(co|com|net|org|gov|edu|ac|ltd|plc)\.[a-z]{2}$/.test(two) ? parts.slice(-3).join('.') : two;
+  };
+  // a site's cookies (its own and its subdomains'), storage and cache: for a sign-in that got stuck
+  async function clearSite(url) {
+    let u; try { u = new URL(url); } catch { throw new Error('Open the site first.'); }
+    if (!/^https?:$/.test(u.protocol)) throw new Error('Open the site first.');
+    const site = siteOf(u.hostname), s = ses();
+    const cookies = (await s.cookies.get({})).filter((c) => { const d = c.domain.replace(/^\./, ''); return d === site || d.endsWith(`.${site}`); });
+    await Promise.all(cookies.map((c) => s.cookies.remove(`http${c.secure ? 's' : ''}://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {})));
+    const origins = new Set([u.origin, `https://${site}`, `https://www.${site}`]);
+    for (const a of agents.values()) for (const t of a.tabs) { const o = originOf(t.view.webContents.getURL()); if (o && siteOf(new URL(o).hostname) === site) origins.add(o); }
+    await Promise.all([...origins].map((origin) => s.clearStorageData({ origin, storages: ['localstorage', 'indexdb', 'serviceworkers', 'cachestorage', 'websql', 'filesystem', 'shadercache'] }).catch(() => {})));
+    await s.clearCache();
+    return { site, cookies: cookies.length };
+  }
+  // everything: every site's cookies (you are signed out everywhere), storage, cache and saved HTTP auth
+  async function clearAll() {
+    const s = ses();
+    await s.clearStorageData();
+    await Promise.all([s.clearCache(), s.clearAuthCache(), s.clearHostResolverCache()]);
+  }
+  const reloadAll = (match = () => true) => { for (const a of agents.values()) for (const t of a.tabs) { const wc = t.view.webContents; if (!wc.isDestroyed() && match(wc.getURL())) wc.reload(); } };
   const entry = (id) => {
     if (!agents.has(id)) agents.set(id, { tabs: [], active: null, popped: null, paused: false, bounds: null, allowed: new Set(), logins: new Set() });
     return agents.get(id);
@@ -186,6 +214,13 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
       case 'pop': pop(id); break;
       case 'dock': dock(id); break;
       case 'external': if (wc && originOf(wc.getURL())) shell.openExternal(wc.getURL()); break;
+      // a sign-in that went wrong: this site's data, or everything; the open pages load again afterwards
+      case 'clear-site': {
+        const r = await clearSite(wc?.getURL() || '');
+        reloadAll((url) => { try { const h = new URL(url).hostname; return h === r.site || h.endsWith(`.${r.site}`); } catch { return false; } });
+        push(); return r;
+      }
+      case 'clear-all': await clearAll(); reloadAll(); push(); return { all: true };
       // you sign in with a vault login yourself (the key button): no question, you asked
       case 'login': {
         if (!wc) throw new Error('Open a page first.');
