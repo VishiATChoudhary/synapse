@@ -91,9 +91,9 @@ if (!isMainThread) {
           const file = transcriptFile(agent);
           const mtime = agent.format === 'demo' ? lastActivity : file && fs.statSync(file).mtimeMs;
           if (mtime) {
-            lastActivity = Math.max(lastActivity, mtime);
             if (previews.get(agent.id)?.mtime !== mtime) {
               const { messages } = readAgentMessages(agent, null, { tailBytes: 120_000, minMessages: 1 });
+              const said = Math.max(0, ...messages.map((m) => Date.parse(m.ts) || 0));
               const last = [...messages].reverse().find((message) => !message.tool);
               const preview = last?.text
                 .replace(/```[\s\S]*?(?:```|$)/g, ' Code snippet. ')
@@ -109,6 +109,14 @@ if (!isMainThread) {
               } else previews.set(agent.id, { ...previews.get(agent.id), mtime, preview, title });
               let model = ''; try { model = transcriptModel(file); } catch {}
               previews.get(agent.id).model = model;
+              previews.get(agent.id).said = said;
+            }
+            // last use is the last message in the conversation. Not the file's time (Claude rewrites the transcript
+            // when a session is resumed) and not a hook's updatedAt (it moves when Synapse restores the session on a
+            // restart): both reset every agent's idle and archive clock. updatedAt counts only while it works or asks.
+            if (agent.format !== 'demo') {
+              const active = ['busy', 'waiting', 'needs_input'].includes(agent.status);
+              lastActivity = Math.max(previews.get(agent.id)?.said || mtime, active ? agent.updatedAt || 0 : 0);
             }
             preview = previews.get(agent.id)?.preview || ''; title = agent.title || previews.get(agent.id)?.title || ''; model = previews.get(agent.id)?.model || '';
           }

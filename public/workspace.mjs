@@ -1088,7 +1088,7 @@ function initialize() {
         }
       }
       // a resting agent shows how long ago it last worked; one with a state shows that instead
-      row.querySelector('.session-time').textContent = ['working', 'needs', 'done'].includes(st) || agent.exited ? '' : relativeTime(agent.lastActivity);
+      row.querySelector('.session-time').textContent = ['working', 'needs', 'done'].includes(st) || agent.exited ? '' : relativeTime(usedAt(agent));
       // on hover: ✓ settles it (or brings it back), the box archives it (or brings it back)
       const isSettled = settledAt[agent.id] !== undefined, isArch = archived[agent.id] !== undefined;
       const acts = `${isSettled}|${isArch}`;
@@ -1969,7 +1969,7 @@ function initialize() {
     if (signature === inspectorSignature) return;
     inspectorSignature = signature;
     inspectorBody(agent).innerHTML = `
-      <section class="inspector-section"><div class="session-summary">${avatar(agent)}<div><strong>${escapeHtml(agent.name)}</strong><span class="session-provider">${escapeHtml(kindName(agent))}</span></div></div><div class="detail-row"><span>Status</span><span class="status-label">${status(agent)}${activityLabel(agent)}</span></div><div class="detail-row"><span>Last activity</span><span>${relativeTime(agent.lastActivity) === 'now' ? 'Just now' : `${relativeTime(agent.lastActivity)} ago`}</span></div><div class="folder-path">${icon('folder')}<span>${escapeHtml(agent.cwd)}</span></div></section>
+      <section class="inspector-section"><div class="session-summary">${avatar(agent)}<div><strong>${escapeHtml(agent.name)}</strong><span class="session-provider">${escapeHtml(kindName(agent))}</span></div></div><div class="detail-row"><span>Status</span><span class="status-label">${status(agent)}${activityLabel(agent)}</span></div><div class="detail-row"><span>Last activity</span><span>${relativeTime(agent.lastActivity) === 'now' ? 'Just now' : `${relativeTime(usedAt(agent))} ago`}</span></div><div class="folder-path">${icon('folder')}<span>${escapeHtml(agent.cwd)}</span></div></section>
       ${changesSection(agent)}
       ${sharingSection(agent)}
       <section class="inspector-section"><div class="inspector-title-row"><h3 class="inspector-label">Connected agents</h3><span class="count">${peers.length}</span></div>${peers.map((peer) => `<div class="connection-row">${avatar(peer.agent)}<button class="connection-info" data-agent="${escapeHtml(peer.agent.id)}"><strong>${escapeHtml(peer.agent.name)}</strong><span>${icon(peer.reads && peer.shares ? 'arrows' : peer.reads ? 'arrow-left' : 'arrow-right')}${peer.reads && peer.shares ? 'Two-way context' : peer.reads ? 'Reads context from' : 'Shares context with'}</span></button><button class="icon-button unlink-button" data-remove-links="${peer.edges.map((edge) => escapeHtml(edge.id)).join(',')}" aria-label="Disconnect ${escapeHtml(peer.agent.name)}" title="Disconnect">${icon('unlink')}</button></div>`).join('')}<button class="add-context" data-action="add-connection">${icon('plus')}Add connection</button><p class="inspector-note">Linked agents can share context and message each other across tools.</p></section>
