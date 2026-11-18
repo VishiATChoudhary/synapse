@@ -2056,8 +2056,17 @@ function initialize() {
     scroller.setAttribute('aria-busy', 'false');
     const data = cached.data, records = messageRecords(data);
     if (tab === 'conversation' && typeof data.terminal === 'string') {
-      const signature = selectedId + ':' + hash(data.terminal);
-      if (list.dataset.signature !== signature || reset) {
+      // an agent with no conversation yet (Codex writes none before the first prompt) is ready for it: its welcome
+      // screen is noise. The terminal shows only while the agent asks something there (an update or trust question)
+      const asking = /Update available|Update now|Do you trust|trust the (?:files|contents)|Press enter|[›❯>]\s*1\.\s|\(y\/n\)|sign in|log in/i.test(data.terminal);
+      const ready = agent.kind !== 'shell' && !agent.exited && !asking && data.terminal.trim().length > 0;
+      const working = agent.status === 'busy';
+      const signature = selectedId + ':' + (ready ? `ready:${working}` : hash(data.terminal));
+      if (ready && (list.dataset.signature !== signature || reset)) {
+        list.dataset.signature = signature;
+        list.innerHTML = working ? emptyState(`${kindName(agent)} is working`, 'The conversation shows here in a moment.', 'show-terminal', 'Show terminal', 'terminal')
+          : emptyState(`${kindName(agent)} is ready`, 'Send your first message below.', 'show-terminal', 'Show terminal', 'terminal');
+      } else if (!ready && (list.dataset.signature !== signature || reset)) {
         const bottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 90;
         list.dataset.signature = signature;
         list.innerHTML = `<div class="terminal-transcript-heading"><span>Live terminal output</span><button class="text-button" data-action="show-terminal">Show terminal ${icon('terminal')}</button></div><pre class="terminal-transcript">${escapeHtml(data.terminal || 'Session starting…')}</pre>`;

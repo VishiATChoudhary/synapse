@@ -327,8 +327,13 @@ function cleanEnv() {
 
 // the Chrome profile the folder's workspace uses, for Codex's Chrome plugin (browsers.mjs)
 function browserEnvFor(cwd) { try { return browsers.browserEnv(cwd); } catch { return {}; } }
+// Codex opens on an "Update available" menu when a release is out: Enter there (a first prompt sent by the app)
+// runs `npm install -g` instead. Sessions started here skip that check; codex updates as you install it.
+const quietCodex = (kind, command) => (kind === 'codex' && command ? command.replace(/^(\S*codex(?:\.cmd)?)(?=\s|$)/, '$1 -c check_for_update_on_startup=false') : command);
+
 async function spawnPty({ cwd, kind, command, cols = 120, rows = 36, extraEnv = {} }) {
   await integrationSetup;
+  command = quietCodex(kind, command);
   const id = String(nextPty++);
   const env = {
     ...cleanEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'synapse', LANG: process.env.LANG || 'en_US.UTF-8',
@@ -602,14 +607,27 @@ async function spawnFork({ parentPty, question, requestId, cols, rows }) {
 // Type the question into a fresh agent's prompt without sending it: wait until its TUI has drawn and
 // gone quiet, then paste it (bracketed, so newlines stay newlines). Enter is the human's to press,
 // unless the prompt came from the phone (send), where nobody is at the keyboard to press it.
+// A menu or question the agent opens before its prompt (an update offer, "Do you trust this folder?"): the first
+// prompt must not go into it, where its Enter would pick the highlighted choice
+const ASKING = /Update available|Update now|Do you trust|trust the (?:files|contents)|Press enter to continue|[›❯>]\s*1\.\s/i;
+const plain = (s) => s.replace(/\x1b\[[0-?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]/g, ' ');
+
 function prefill(id, text, send = false) {
   const t = ptys.get(id);
   if (!t || !text) return;
-  let quiet = null, seen = false;
-  const done = () => { clearTimeout(quiet); clearTimeout(cap); sub.dispose(); if (ptys.get(id) === t) send ? submit(id, text) : t.p.write(`\x1b[200~${text}\x1b[201~`); };
-  const sub = t.p.onData(() => { seen = true; clearTimeout(quiet); quiet = setTimeout(done, 900); });
+  let quiet = null, seen = false, burst = '', cap = null, asked = false;
+  const stop = () => { clearTimeout(quiet); clearTimeout(cap); sub.dispose(); };
+  const done = () => {
+    // what it drew since it last went quiet still asks something: wait for its next screen (you answer it in the
+    // terminal, or in the GUI's card), however long that takes
+    if (ASKING.test(plain(burst))) { asked = true; burst = ''; clearTimeout(cap); cap = setTimeout(stop, 30 * 60_000); return; }
+    if (asked && !burst) return; // nothing new drawn since the question
+    stop();
+    if (ptys.get(id) === t) send ? submit(id, text) : t.p.write(`\x1b[200~${text}\x1b[201~`);
+  };
+  const sub = t.p.onData((d) => { seen = true; burst = (burst + d).slice(-16_000); clearTimeout(quiet); quiet = setTimeout(done, 900); });
   // an agent that never draws gets the question anyway when it came from the phone: nobody here would retype it
-  const cap = setTimeout(() => { if (seen || send) done(); else sub.dispose(); }, send ? 8000 : 20000);
+  cap = setTimeout(() => { if (seen || send) done(); else stop(); }, send ? 8000 : 20000);
 }
 
 // Paste a message into an agent's prompt and send it. Enter comes a moment later: sent together with the
