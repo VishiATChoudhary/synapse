@@ -536,9 +536,21 @@ function listOpencodeModels() {
     });
   });
 }
+const CLAUDE_MODELS = [
+  ['opus', 'Opus 5.5', 'Most capable, for hard problems'],
+  ['sonnet', 'Sonnet 5.5', 'Fast and strong, for everyday coding'],
+  ['haiku', 'Haiku 5.5', 'Fastest, for quick small tasks'],
+  ['fable', 'Fable 5.2', ''],
+];
 async function modelsFor(kind) {
   const home = os.homedir();
-  if (kind === 'claude') return { current: null, models: [['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku'], ['fable', 'Fable']].map(([id, label]) => ({ id, label })) };
+  if (kind === 'claude') {
+    // Claude Code's aliases, which always point at the newest of each; the default is settings.json's model
+    const models = CLAUDE_MODELS.map(([id, label, hint]) => ({ id, label, hint }));
+    const set = readJSON(path.join(home, '.claude', 'settings.json'), {})?.model;
+    const current = typeof set === 'string' && set ? models.find((m) => m.id === set)?.label || set : null;
+    return { current, models };
+  }
   if (kind === 'codex') {
     const cache = readJSON(path.join(home, '.codex', 'models_cache.json'), {});
     const models = (Array.isArray(cache.models) ? cache.models : []).filter((m) => m?.slug && m.visibility !== 'hide' && MODEL_ID.test(m.slug))

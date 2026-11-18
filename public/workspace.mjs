@@ -2737,7 +2737,7 @@ function initialize() {
   const pickedModel = (kind) => getStorage(`synapse-new-model:${kind}`) || '';
   function loadModels(kind) {
     if (!modelLists.has(kind)) modelLists.set(kind, desktopCall('models', { kind }).catch(() => ({ models: [] })).then((r) => { modelLists.set(kind, r); if (newDraft.kind === kind) renderModel(); return r; }));
-    return modelLists.get(kind);
+    return Promise.resolve(modelLists.get(kind));
   }
   function renderModel() {
     const kind = newDraft.kind, list = modelLists.get(kind);
@@ -2746,6 +2746,7 @@ function initialize() {
     const picked = pickedModel(kind), shown = known?.models.find((m) => m.id === picked)?.label || picked;
     $('new-model').hidden = !['claude', 'codex', 'opencode'].includes(kind) || (known && !known.models.length);
     $('new-model').innerHTML = `${icon('activity')}<span>${escapeHtml(shown || (known?.current ? `Default (${known.current})` : 'Default model'))}</span>${icon('chevron-down')}`;
+    $('new-model').title = shown || known?.current || 'Model';
   }
   $('new-model').onclick = async () => {
     const kind = newDraft.kind, r = await loadModels(kind), picked = pickedModel(kind);
@@ -2757,7 +2758,7 @@ function initialize() {
       if (provider && provider !== group) { group = provider; items.push({ heading: provider }); }
       items.push({ label: provider ? m.id.slice(provider.length + 1) : m.label, hint: m.hint, icon: m.id === picked ? 'check' : null, run: set(m.id) });
     }
-    dropdown($('new-model'), items, (() => { const b = $('new-model').getBoundingClientRect(); return { x: b.left, y: b.bottom + 6 }; })());
+    dropdown($('new-model'), items, (() => { const b = $('new-model').getBoundingClientRect(); return { x: b.left, y: b.bottom + 6 }; })(), { search: r.models.length > 8 ? 'Search models' : '' });
   };
   $('new-todo').addEventListener('click', (event) => { if (event.target.closest('.new-todo-clear')) { newDraft.todo = null; renderNew(); $('new-input').focus(); } });
   $('new-project').onclick = () => {
@@ -3421,10 +3422,17 @@ function initialize() {
   // a small dropdown under a button, like a native menu: arrow keys move, Escape or a click outside closes it
   let openMenu = null;
   function closeMenu() { if (!openMenu) return; openMenu.el.remove(); openMenu.anchor.setAttribute('aria-expanded', 'false'); openMenu = null; }
-  function dropdown(anchor, items, at = null) {
+  function dropdown(anchor, items, at = null, { search = '' } = {}) {
     if (openMenu?.anchor === anchor) return closeMenu();
     closeMenu();
     const el = document.createElement('div'); el.className = 'pop-menu'; el.setAttribute('role', 'menu');
+    // a long list gets a search box: typing filters it (headings with nothing left hide too), Enter picks the first
+    let find = null;
+    if (search) {
+      find = Object.assign(document.createElement('input'), { type: 'search', className: 'pop-search', placeholder: search, spellcheck: false });
+      find.setAttribute('aria-label', search);
+      el.append(find);
+    }
     for (const item of items) {
       if (item === '-') { el.append(Object.assign(document.createElement('div'), { className: 'pop-sep' })); continue; }
       if (item.heading) { el.append(Object.assign(document.createElement('div'), { className: 'pop-heading', textContent: item.heading })); continue; }
@@ -3443,9 +3451,36 @@ function initialize() {
     el.style.left = `${Math.round(Math.max(8, Math.min(innerWidth - w - 8, left)))}px`;
     anchor.setAttribute('aria-expanded', 'true');
     openMenu = { el, anchor };
-    el.querySelector('button')?.focus({ preventScroll: true });
+    if (find) {
+      // it keeps its width while you type, and sits against the button (below it, or above when there is more room
+      // there) so it shrinks toward the button as the list narrows instead of covering the composer
+      el.style.minWidth = `${w}px`;
+      const below = innerHeight - r.bottom - 14, above = r.top - 14;
+      if (below >= Math.min(h, 320) || below >= above) { el.style.top = `${Math.round(r.bottom + 6)}px`; el.style.maxHeight = `${below}px`; }
+      else { el.style.top = 'auto'; el.style.bottom = `${Math.round(innerHeight - r.top + 6)}px`; el.style.maxHeight = `${above}px`; }
+      find.addEventListener('input', () => {
+        const q = find.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        let heading = null, shown = 0;
+        for (const node of el.children) {
+          if (node === find) continue;
+          if (node.classList.contains('pop-heading')) { heading = node; node.hidden = true; continue; }
+          if (node.classList.contains('pop-sep')) { node.hidden = q.length > 0; continue; }
+          const text = `${heading?.textContent || ''} ${node.textContent}`.toLowerCase();
+          node.hidden = !q.every((word) => text.includes(word));
+          if (!node.hidden) { shown++; if (heading) heading.hidden = false; }
+        }
+        el.classList.toggle('pop-empty', !shown);
+      });
+      find.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); [...el.querySelectorAll('button')].find((b) => !b.hidden)?.click(); }
+        if (e.key === 'ArrowDown') { e.preventDefault(); [...el.querySelectorAll('button')].find((b) => !b.hidden)?.focus(); }
+      });
+      find.focus({ preventScroll: true });
+    } else el.querySelector('button')?.focus({ preventScroll: true });
     el.addEventListener('keydown', (e) => {
-      const all = [...el.querySelectorAll('button')], i = all.indexOf(document.activeElement);
+      if (e.target === find) return;
+      const all = [...el.querySelectorAll('button')].filter((b) => !b.hidden), i = all.indexOf(document.activeElement);
+      if (e.key === 'ArrowUp' && i === 0 && find) { e.preventDefault(); return find.focus(); }
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); all[(i + (e.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length].focus(); }
       if (e.key === 'Escape') { e.stopPropagation(); closeMenu(); anchor.focus(); }
     });
@@ -3513,12 +3548,11 @@ function initialize() {
       const name = `${model[0].toUpperCase()}${model.slice(1)}`;
       if (!agent.modelName?.startsWith(name)) { agent.modelName = name; renderMain(); }
     }).catch((e) => toast(e.message));
-    dropdown($('provider-label'), [
-      { label: 'Opus', icon: agent.modelName?.startsWith('Opus') ? 'check' : '', run: pick('opus') },
-      { label: 'Sonnet', icon: agent.modelName?.startsWith('Sonnet') ? 'check' : '', run: pick('sonnet') },
-      { label: 'Haiku', icon: agent.modelName?.startsWith('Haiku') ? 'check' : '', run: pick('haiku') },
-      { label: 'Fable', icon: agent.modelName?.startsWith('Fable') ? 'check' : '', run: pick('fable') },
-    ]);
+    loadModels('claude').then((r) => {
+      if (selectedId !== agent.id) return;
+      const family = (m) => m.label.split(' ')[0];
+      dropdown($('provider-label'), [{ heading: 'Switch model' }, ...r.models.map((m) => ({ label: m.label, hint: m.hint, icon: agent.modelName?.startsWith(family(m)) ? 'check' : null, run: pick(m.id) }))]);
+    });
   });
   // Files wait above the message, images as thumbnails and the rest as chips with their name (× removes one),
   // and go in as paths when it is sent: Claude Code and Codex read files and images from paths.

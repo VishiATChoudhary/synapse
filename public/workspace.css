@@ -1278,3 +1278,25 @@ button.todo-group-head:hover .todo-group-name { text-decoration: underline; text
 .pop-menu button > span:not(.pop-gap) { display: flex; flex-direction: column; min-width: 0; }
 .pop-hint { color: var(--color-muted); font-size: var(--text-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pop-menu button > .icon:last-child:not(:first-child) { width: 14px; height: 14px; color: var(--color-accent); }
+
+/* a long menu's search box (the model list): sticks to the top while the list scrolls */
+.pop-menu .pop-search { position: sticky; top: -5px; z-index: 1; display: block; width: 100%; margin: -5px 0 4px; padding: 9px 11px; border: 0; border-bottom: 1px solid var(--color-border); border-radius: var(--radius-md) var(--radius-md) 0 0; background: var(--color-raised); color: var(--color-ink); font: var(--text-base) var(--font-body); outline: none; }
+.pop-menu .pop-search::placeholder { color: var(--color-faint); }
+.pop-menu button[hidden], .pop-menu .pop-heading[hidden], .pop-menu .pop-sep[hidden] { display: none; }
+.pop-menu.pop-empty::after { content: 'No match'; display: block; padding: 8px 11px; font-size: var(--text-sm); color: var(--color-faint); }
+
+/* The composer's bar goes by its own width, not the window's: a side panel can make it narrow in a wide window.
+   Chips shrink and cut long names (agent, model, branch) instead of running over the send button, and the
+   hints step aside first. */
+.composer-toolbar { container-type: inline-size; }
+.composer-toolbar > .new-agent, .composer-toolbar > .provider-label { min-width: 0; flex: 0 1 auto; white-space: nowrap; overflow: hidden; }
+.composer-toolbar > .new-agent > span, .composer-toolbar > .provider-label > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-toolbar > .new-agent > span:not(.agent-avatar) { flex: 0 1 auto; }
+.composer-toolbar > .new-agent > .agent-avatar, .composer-toolbar > .provider-label > .agent-avatar, .composer-toolbar > .new-agent > svg, .composer-toolbar > .provider-label > svg { flex: none; }
+.composer-toolbar > .new-agent { max-width: 240px; }
+.composer-toolbar > .send-button, .composer-toolbar > .stop-button, .composer-toolbar > .attach-button, .composer-toolbar > .changes-chip { flex: none; }
+@container (max-width: 560px) { .composer-toolbar .composer-shortcut { display: none; } .composer-toolbar > .send-button { margin-inline-start: auto; } }
+@container (max-width: 460px) { .composer-toolbar .composer-channel { display: none; } .composer-toolbar > .new-agent { max-width: 150px; } }
+@container (max-width: 340px) { .composer-toolbar > .new-agent .agent-avatar + span { display: none; } }
+.composer-toolbar > #new-agent { flex-shrink: 0; }
+@container (max-width: 340px) { .composer-toolbar > #new-agent { flex-shrink: 1; } }

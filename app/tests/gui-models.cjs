@@ -22,6 +22,8 @@ fs.writeFileSync(path.join(home, '.codex', 'models_cache.json'), JSON.stringify(
   { slug: 'hidden-one', display_name: 'Hidden', visibility: 'hide', priority: 0 },
 ] }));
 fs.writeFileSync(path.join(home, '.codex', 'config.toml'), 'model = "gpt-b"\n');
+fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ model: 'opus' }));
 fs.writeFileSync(path.join(home, '.config', 'opencode', 'opencode.json'), JSON.stringify({ model: 'down/endpoint' }));
 const profiles = Object.fromEntries(['claude', 'codex', 'opencode'].map((k) => [k, { command: path.join(bin, k), label: k }]));
 fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], skipLogin: true, profiles: { shell: { command: '', label: 'shell' }, ...profiles } }));
@@ -62,8 +64,8 @@ async function newSession(kind, model) {
   await until(() => win.webContents.mainFrame.frames.some((f) => f.url.includes('?desktop=1')), 'GUI frame');
   await until(() => ui(`typeof document.getElementById('new-model') === 'object'`), 'GUI ready');
 
-  let r = await newSession('claude', 'Sonnet');
-  assert.deepEqual(r.items, ['Default model', 'Opus', 'Sonnet', 'Haiku', 'Fable']);
+  let r = await newSession('claude', 'Sonnet 5.5');
+  assert.deepEqual(r.items, ['Default (Opus 5.5)', 'Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.2']);
   assert.equal(r.line[0], 'claude'); assert.match(r.line[1], /--model sonnet/);
   console.log('PASS claude: picked Sonnet, started with --model sonnet');
 
