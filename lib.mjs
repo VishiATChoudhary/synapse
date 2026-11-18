@@ -80,7 +80,9 @@ function alive(pid) {
 
 // ---------------------------------------------------------------- transcripts
 
-const NOISE = /^<(command-|local-command|system-reminder|task-notification|bash-|user-prompt-submit-hook|environment_context|user_instructions|permissions)/;
+// what agents put into the conversation as the user without you typing it: Claude's command and hook wrappers,
+// Codex's environment block and the AGENTS.md instructions it sends ahead of the first prompt
+const NOISE = /^(<(command-|local-command|system-reminder|task-notification|bash-|user-prompt-submit-hook|environment_context|user_instructions|permissions|INSTRUCTIONS>)|#\s*AGENTS\.md instructions\b)/;
 
 // A slash command the user ran (`/goal ship it`): Claude logs it as <command-name>/<command-args> tags. Keep it
 // as the command line it was typed as; its expanded prompt is a meta entry and stays out.
