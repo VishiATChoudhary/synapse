@@ -2038,7 +2038,7 @@ function canvasMenu({ hit, agent, group, x, y, hiddenCount }, r = $('#canvas-fra
 // Settings: a window of its own, sections on the left (with a search across all of them), the chosen one on the right.
 // Every change saves to ~/.synapse/app.json as it is made.
 const SETTINGS_PANES = [
-  ['general', 'General', '◐'], ['notifications', 'Notifications', '◔'], ['agents', 'Agents', '✳'], ['workspaces', 'Workspaces', '▤'], ['logins', 'Logins', '⚿'],
+  ['general', 'General', '◐'], ['notifications', 'Notifications', '◔'], ['agents', 'Agents', '✳'], ['workspaces', 'Workspaces', '▤'], ['connectors', 'Connectors', '⌁'], ['plugins', 'Claude plugins', '✚'], ['logins', 'Logins', '⚿'],
   ['appearance', 'Appearance', '◑'], ['shortcuts', 'Shortcuts', '⌘'], ['phone', 'Phone', '◫'], ['people', 'People & agent talk', '◎'],
 ];
 async function openSettings(start) {
@@ -2188,6 +2188,134 @@ async function openSettings(start) {
     pane('logins', 'Agents sign in with these in the Synapse browser. You approve each sign-in, and the password goes into the page, never to the agent.',
       group('Add a login', card(loginForm, loginNote)),
       group('Saved logins', loginList));
+
+    // ---- Connectors: MCP servers set up once for every agent (connectors.mjs). One connector is one account, so two
+    // Linear workspaces are two connectors; agents get them under the connector's name.
+    const AGENT_NAMES = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' };
+    const connList = el('div', 'login-list conn-list'), connOthers = el('div', 'login-list conn-list');
+    let connData = { presets: {}, agents: [], connectors: [], others: [] };
+    const STATUS = { ready: 'Connected', 'needs-login': 'Not signed in yet', reconnect: 'Signed out: connect again', 'needs-key': 'Needs its API key', off: 'Off' };
+    const drawConnectors = async () => {
+      try { connData = await synapse.connectors.list(); } catch (e) { connList.replaceChildren(el('p', 'set-desc set-pad', e.message)); return; }
+      paintPresetChoice();
+      if (!connData.connectors.length) connList.replaceChildren(el('p', 'login-empty', 'No connectors yet. Add one above: every agent gets it.'));
+      else connList.replaceChildren(...connData.connectors.map((c) => {
+        const r = el('div', 'login-row conn-row'); r.dataset.connector = c.name; r.dataset.status = c.status;
+        const text = el('div', 'login-text');
+        text.append(el('div', 'login-site', `${c.label} · ${c.name}`), el('div', `login-user conn-status ${c.status}`, [STATUS[c.status] || c.status, c.account && c.status === 'ready' ? `as ${c.account}` : '', c.transport === 'stdio' ? `runs ${c.command}` : new URL(c.url).host].filter(Boolean).join(' · ')));
+        const chips = el('div', 'conn-agents');
+        for (const a of connData.agents) {
+          const b = button(AGENT_NAMES[a] || a, async () => { try { await synapse.connectors.update(c.id, { agents: { [a]: !c.agents[a] } }); drawConnectors(); } catch (e) { toast(e.message, true); } }, c.agents[a] ? 'on' : '');
+          b.title = c.agents[a] ? `${AGENT_NAMES[a]} has it. Click to take it away.` : `Give it to ${AGENT_NAMES[a]}`; b.dataset.agent = a; chips.append(b);
+        }
+        r.append(el('span', 'login-badge', (c.label[0] || '?').toUpperCase()), text, chips);
+        if (c.auth === 'oauth' && c.enabled) {
+          const go = button(c.status === 'ready' ? 'Reconnect' : 'Connect', () => connectorLogin(c, go), c.status === 'ready' ? '' : 'primary');
+          go.dataset.act = 'connect'; r.append(go);
+        }
+        r.append(toggle(c.enabled, async (on) => { await synapse.connectors.update(c.id, { enabled: on }); drawConnectors(); }));
+        const rm = button('Remove', async () => { try { await synapse.connectors.remove(c.id); toast(`Removed ${c.name} from your agents`); drawConnectors(); } catch (e) { toast(e.message, true); } });
+        rm.dataset.act = 'remove'; r.append(rm);
+        return r;
+      }));
+      // what the agents have of their own: one click makes it a connector, so every agent gets it
+      const byName = new Map();
+      for (const o of connData.others) { if (!byName.has(o.name)) byName.set(o.name, { ...o, agents: [] }); byName.get(o.name).agents.push(o.agent); }
+      connOthers.replaceChildren(...(byName.size ? [...byName.values()].map((o) => {
+        const r = el('div', 'login-row'); r.dataset.other = o.name;
+        const text = el('div', 'login-text'); text.append(el('div', 'login-site', o.name), el('div', 'login-user', `Only in ${o.agents.map((a) => AGENT_NAMES[a] || a).join(', ')}${o.how ? ` · ${o.how}` : ''}`));
+        r.append(el('span', 'login-badge', (o.name[0] || '?').toUpperCase()), text);
+        const from = o.agents.find((a) => a !== 'codex');
+        if (from) { const b = button('Use everywhere', async () => { try { const c = await synapse.connectors.adopt(from, o.name); toast(c.status === 'ready' ? `${o.name} now goes to every agent` : `Added ${o.name}: connect it to finish`); drawConnectors(); } catch (e) { toast(e.message, true); } }); b.dataset.act = 'adopt'; r.append(b); }
+        return r;
+      }) : [el('p', 'login-empty', 'Nothing else: every MCP server your agents have comes from here.')]));
+    };
+    async function connectorLogin(c, btn) {
+      btn.disabled = true; const was = btn.textContent; btn.textContent = 'Waiting for sign-in…';
+      try { const r = await synapse.connectors.login(c.id); toast(`Connected ${r.label}${r.account ? ` as ${r.account}` : ''}. New agent sessions have it.`); }
+      catch (e) { toast(e.message, true); }
+      finally { btn.disabled = false; btn.textContent = was; drawConnectors(); }
+    }
+    const connForm = el('form', 'login-form conn-form'); connForm.autocomplete = 'off';
+    const [svcBox, svcIn] = (() => { const w = el('label', 'login-field'); const i = el('select', 'set-input'); w.append(el('span', 'login-label', 'Service'), i); return [w, i]; })();
+    const [nameBox, nameIn] = field('Name (one per account)', 'text', 'linear-work', 'off');
+    const [urlBox, urlIn] = field('Server URL', 'url', 'https://…/mcp', 'off');
+    const [authBox, authIn] = (() => { const w = el('label', 'login-field'); const i = el('select', 'set-input'); for (const [v, l] of [['oauth', 'Sign in (OAuth)'], ['bearer', 'API key'], ['none', 'No sign-in']]) { const o = el('option', '', l); o.value = v; i.append(o); } w.append(el('span', 'login-label', 'Sign-in'), i); return [w, i]; })();
+    const [keyBox, keyIn] = field('API key', 'password', 'Paste the key', 'new-password');
+    const [cidBox, cidIn] = field('OAuth client id (if it has no sign-up)', 'text', 'From the service’s console', 'off');
+    const [csecBox, csecIn] = field('Client secret', 'password', '', 'new-password');
+    const [cmdBox, cmdIn] = field('Command', 'text', 'npx -y some-mcp-server', 'off');
+    const [envBox, envIn] = field('Environment (KEY=value, one per line)', 'text', 'API_KEY=…', 'off');
+    const addConn = el('button', 'set-btn primary', 'Add and connect'); addConn.type = 'submit';
+    const connNote = el('p', 'login-note', '');
+    connForm.append(svcBox, nameBox, urlBox, authBox, keyBox, cidBox, csecBox, cmdBox, envBox, addConn);
+    function paintPresetChoice() {
+      if (!svcIn.options.length) {
+        for (const [k, p] of Object.entries(connData.presets)) { const o = el('option', '', p.label); o.value = k; svcIn.append(o); }
+        const o = el('option', '', 'Local command'); o.value = 'stdio'; svcIn.append(o);
+      }
+      paintForm();
+    }
+    function paintForm() {
+      const k = svcIn.value, p = connData.presets[k] || {}, stdio = k === 'stdio';
+      urlBox.hidden = stdio || k !== 'custom'; authBox.hidden = stdio || !['custom', 'linear', 'github'].includes(k);
+      if (!authBox.hidden && !authIn.dataset.touched) authIn.value = p.auth || 'oauth';
+      const auth = stdio ? 'none' : authBox.hidden ? p.auth : authIn.value;
+      keyBox.hidden = auth !== 'bearer'; cidBox.hidden = csecBox.hidden = !(p.client || (k === 'custom' && auth === 'oauth' && cidIn.value));
+      if (k === 'custom' && auth === 'oauth') cidBox.hidden = false;
+      cmdBox.hidden = envBox.hidden = !stdio;
+      const taken = new Set(connData.connectors.map((c) => c.name)), base = stdio ? 'server' : k;
+      if (!nameIn.dataset.touched) { let n = base, i = 2; while (taken.has(n)) n = `${base}-${i++}`; nameIn.value = n; }
+      connNote.textContent = p.note || (auth === 'bearer' && p.keyHint ? `${p.keyHint}. Kept in your keychain; agents never see it.` : 'Tokens stay in your keychain: agents only get a small bridge that uses them. Add the same service twice for two accounts.');
+      addConn.textContent = auth === 'oauth' ? 'Add and connect' : 'Add';
+    }
+    svcIn.onchange = () => { nameIn.dataset.touched = ''; authIn.dataset.touched = ''; paintForm(); };
+    authIn.onchange = () => { authIn.dataset.touched = '1'; paintForm(); };
+    nameIn.oninput = () => { nameIn.dataset.touched = '1'; };
+    connForm.onsubmit = async (e) => {
+      e.preventDefault(); addConn.disabled = true;
+      const k = svcIn.value, stdio = k === 'stdio', p = connData.presets[k] || {};
+      const env = Object.fromEntries(envIn.value.split(/[\n,]+/).map((l) => l.trim()).filter(Boolean).map((l) => [l.split('=')[0].trim(), l.slice(l.indexOf('=') + 1).trim()]));
+      const [command, ...args] = cmdIn.value.trim().match(/"[^"]*"|\S+/g) || [];
+      try {
+        const c = await synapse.connectors.add({ preset: stdio ? 'custom' : k, transport: stdio ? 'stdio' : 'http', name: nameIn.value, label: stdio || k === 'custom' ? nameIn.value : p.label, url: urlIn.value || undefined, auth: authBox.hidden ? undefined : authIn.value, token: keyIn.value || undefined, clientId: cidIn.value || undefined, clientSecret: csecIn.value || undefined, command, args: args.map((a) => a.replace(/^"|"$/g, '')), env });
+        for (const i of [nameIn, urlIn, keyIn, cidIn, csecIn, cmdIn, envIn]) i.value = '';
+        nameIn.dataset.touched = '';
+        await drawConnectors();
+        if (c.auth === 'oauth' && c.status !== 'ready') { const b = connList.querySelector(`[data-connector="${c.name}"] [data-act="connect"]`); if (b) connectorLogin(c, b); }
+        else toast(`Added ${c.name}. New agent sessions have it.`);
+      } catch (err) { toast(err.message, true); }
+      finally { addConn.disabled = false; }
+    };
+    drawConnectors();
+    pane('connectors', 'MCP servers for all your agents at once: Claude Code, Codex and OpenCode. Agents that are running pick up changes when they start again.',
+      group('Add a connector', card(connForm, connNote)),
+      group('Your connectors', connList),
+      group('Also set up in your agents', connOthers));
+
+    // ---- Claude plugins: what Claude Code's marketplaces offer, installed and turned on or off through its CLI
+    const plugSearch = el('input', 'set-input'); plugSearch.type = 'search'; plugSearch.placeholder = 'Search plugins';
+    const plugList = el('div', 'login-list plug-list');
+    let plugAll = null;
+    const drawPlugins = async () => {
+      if (!plugAll) { try { plugAll = await synapse.plugins.list(); } catch (e) { plugList.replaceChildren(el('p', 'set-desc set-pad', e.message)); return; } }
+      const q = plugSearch.value.trim().toLowerCase();
+      const shown = plugAll.filter((p) => !q || `${p.name} ${p.market} ${p.description}`.toLowerCase().includes(q)).slice(0, q ? 200 : 80);
+      if (!shown.length) { plugList.replaceChildren(el('p', 'login-empty', plugAll.length ? 'No plugin matches.' : 'No marketplaces yet. Add one with: claude plugin marketplace add <repo>')); return; }
+      plugList.replaceChildren(...shown.map((p) => {
+        const r = el('div', 'login-row'); r.dataset.plugin = p.id;
+        const text = el('div', 'login-text'); text.append(el('div', 'login-site', `${p.name}  ·  ${p.market}${p.version ? `  ·  ${p.version}` : ''}`), el('div', 'login-user', p.description || ''));
+        r.append(el('span', 'login-badge', (p.name[0] || '?').toUpperCase()), text);
+        const act = (action, label) => { const b = button(label, async () => { b.disabled = true; b.textContent = `${label}…`; try { await synapse.plugins.action(action, p.id); plugAll = null; toast(`${p.name}: ${action === 'install' ? 'installed' : action === 'uninstall' ? 'removed' : action + 'd'}. New Claude sessions have it.`); } catch (e) { toast(e.message, true); } drawPlugins(); }); b.dataset.act = action; return b; };
+        if (p.installed) { r.append(toggle(p.enabled, async (on) => { await synapse.plugins.action(on ? 'enable' : 'disable', p.id); p.enabled = on; })); r.append(act('uninstall', 'Remove')); }
+        else r.append(act('install', 'Install'));
+        return r;
+      }));
+    };
+    plugSearch.oninput = () => drawPlugins();
+    drawPlugins();
+    pane('plugins', 'Claude Code plugins add skills, commands, hooks and MCP servers to Claude. Installed for your user, they reach every Claude session started after.',
+      group('Plugins', card(plugSearch), plugList));
 
     // ---- Appearance, shortcuts, phone, people: drawn by their own helpers
     const looks = el('div', 'looks'); drawLooks(looks);

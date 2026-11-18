@@ -40,6 +40,11 @@ contextBridge.exposeInMainWorld('synapse', {
   },
   messages: { take: (id) => call('messages:take', { id }) },
   models: (kind) => call('models:list', { kind }),
+  connectors: {
+    list: () => call('connectors:list'), add: (input) => call('connectors:add', input), update: (id, patch) => call('connectors:update', { id, patch }),
+    remove: (id) => call('connectors:remove', { id }), login: (id, browser) => call('connectors:login', { id, browser }), adopt: (agent, name) => call('connectors:adopt', { agent, name }), sync: () => call('connectors:sync'),
+  },
+  plugins: { list: () => call('plugins:list'), action: (action, id) => call('plugins:action', { action, id }) },
   sessions: { load: () => call('sessions:load'), save: (data) => call('sessions:save', data) },
   workspace: { load: () => call('workspace:load'), save: (key, value) => call('workspace:save', { key, value }) },
   phone: {

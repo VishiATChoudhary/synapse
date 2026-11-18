@@ -16,6 +16,8 @@
     "remote.mjs",
     "talk.mjs",
     "todos.mjs",
+    "connectors.mjs",
+    "connector-bridge.mjs",
     "saved.mjs",
     "browsers.mjs",
     "account.mjs",

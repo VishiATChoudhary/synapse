@@ -194,3 +194,12 @@ body.gui-mode .menu { --paper: var(--color-paper); --ink: var(--color-ink); --in
 .login-tag { font-size: 11px; color: var(--color-muted); padding: 2px 8px; border: 1px solid var(--color-border); border-radius: 999px; }
 .login-empty { margin: 0; padding: 18px 16px; font-size: var(--text-sm, 13px); color: var(--color-muted); }
 @media (max-width: 760px) { .login-form { grid-template-columns: 1fr; } }
+.conn-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.conn-form .login-field[hidden] { display: none; }
+.conn-form > .set-btn { grid-column: -2 / -1; justify-self: end; }
+.conn-agents { display: flex; gap: 4px; flex: none; }
+.conn-agents .set-btn { padding: 3px 9px; font-size: 11.5px; opacity: .55; }
+.conn-agents .set-btn.on { opacity: 1; background: color-mix(in srgb, var(--color-accent, #6e8bff) 22%, transparent); border-color: color-mix(in srgb, var(--color-accent, #6e8bff) 50%, transparent); color: var(--color-ink); }
+.conn-status.ready { color: var(--color-success, #3fb950); }
+.conn-status.reconnect, .conn-status.needs-login { color: var(--color-warning, #d29922); }
+.plug-list .login-user { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }

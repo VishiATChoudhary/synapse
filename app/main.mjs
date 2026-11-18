@@ -23,6 +23,7 @@ import { createDiscovery } from '../discovery.mjs';
 import * as chats from './history.mjs';
 import { createAgentBrowser } from './agent-browser.mjs';
 import * as vault from './vault.mjs';
+import * as connectors from '../connectors.mjs';
 import { createLogins } from './logins.mjs';
 import headless from '@xterm/headless';
 
@@ -1081,6 +1082,68 @@ async function autoSetup() {
 }
 handle('integrations:preview', () => setupIntegrations(true));
 handle('integrations:install', () => setupIntegrations(false));
+// ---------------------------------------------------------------- connectors (Settings > Connectors, connectors.mjs)
+// The agents start the bridge with Synapse's own Node (the wrapper install.mjs writes), so it works with no Node installed.
+function bridgeNode() {
+  if (!process.versions.electron) return process.execPath;
+  const node = path.join(DATA, 'bin', WIN ? 'synapse-node.cmd' : 'synapse-node');
+  if (!fs.existsSync(node)) {
+    fs.mkdirSync(path.dirname(node), { recursive: true });
+    fs.writeFileSync(node, WIN ? `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${process.execPath}" %*\r\n` : `#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\nexec '${process.execPath.replace(/'/g, "'\\''")}' "$@"\n`, { mode: 0o755 });
+  }
+  return node;
+}
+const CONNECTORS = path.join(ROOT, '..', 'connectors.mjs'), BRIDGE = path.join(ROOT, '..', 'connector-bridge.mjs');
+const CLAUDE_CLI = process.env.SYNAPSE_CLAUDE_CLI || 'claude'; // tests point this at a stand-in
+let syncing = Promise.resolve('');
+// write the connectors into the agents' configs, one sync at a time, in a child (the claude CLI calls take a moment)
+function syncConnectors() {
+  syncing = syncing.catch(() => '').then(() => new Promise((resolve) => {
+    const child = spawn(process.execPath, [CONNECTORS, 'sync', bridgeNode(), BRIDGE, CLAUDE_CLI], { env: { ...cleanEnv(), ELECTRON_RUN_AS_NODE: '1', SYNAPSE_HOME: DATA }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; }); child.stderr.on('data', (d) => { out += d; });
+    const t = setTimeout(() => child.kill(), 60_000);
+    child.on('close', () => { clearTimeout(t); resolve(out.trim()); });
+    child.on('error', () => { clearTimeout(t); resolve(''); });
+  }));
+  return syncing;
+}
+function connectorsOut() {
+  const inv = connectors.inventory();
+  return {
+    presets: connectors.PRESETS, agents: Object.keys(inv),
+    connectors: connectors.list().map(connectors.view),
+    // what the agents have set up themselves (not through Synapse), by server name
+    others: Object.entries(inv).flatMap(([agent, servers]) => Object.entries(servers).filter(([n, e]) => !e.managed && n !== 'synapse').map(([name, e]) => ({ agent, name, how: e.how }))),
+  };
+}
+// Sign in: a window of its own per connector (its own cookies, so a second account never sees the first one's login).
+// Google refuses sign-in inside apps, so Gmail and Google services go to the browser, where you pick the account.
+const signins = new Map();
+async function connectorLogin(id, browser) {
+  if (signins.has(id)) { signins.get(id).w?.focus(); throw new Error('Already signing in: finish it in the window.'); }
+  const entry = { w: null }; signins.set(id, entry);
+  const open = (url, c) => {
+    if (browser || /(^|\.)google\.com$/.test(new URL(url).hostname)) return shell.openExternal(url);
+    const w = entry.w = new BrowserWindow({ width: 560, height: 760, parent: win || undefined, title: `Connect ${c.label}`, autoHideMenuBar: true, webPreferences: { partition: `persist:connector-${c.id}`, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    w.webContents.setWindowOpenHandler(({ url: u }) => { w.loadURL(u); return { action: 'deny' }; });
+    w.loadURL(url);
+    return new Promise((_, reject) => w.on('closed', () => reject(new Error('The sign-in window was closed.'))));
+  };
+  try { const r = await connectors.login(id, open); await syncConnectors(); return r; }
+  finally { if (entry.w && !entry.w.isDestroyed()) entry.w.destroy(); signins.delete(id); win?.focus(); }
+}
+handle('connectors:list', () => connectorsOut());
+handle('connectors:add', async (input) => { const c = connectors.add(input || {}); await syncConnectors(); return connectors.view(c); });
+handle('connectors:update', async ({ id, patch }) => { const c = connectors.update(id, patch || {}); await syncConnectors(); return connectors.view(c); });
+handle('connectors:remove', async ({ id }) => { connectors.remove(id); await syncConnectors(); return connectorsOut(); });
+handle('connectors:login', ({ id, browser }) => connectorLogin(id, !!browser));
+handle('connectors:adopt', async ({ agent, name }) => { const c = connectors.adopt(agent, name); await syncConnectors(); return connectors.view(c); });
+handle('connectors:sync', () => syncConnectors());
+handle('plugins:list', () => connectors.plugins());
+// paths in the agents' configs follow the app (an update or a move): written again at each start
+app.whenReady().then(() => setTimeout(() => { if (connectors.list().length) syncConnectors(); }, 4000));
+handle('plugins:action', ({ action, id }) => connectors.pluginAction(action, id, CLAUDE_CLI, cleanEnv()));
 handle('project:add', ({ path: p }) => addWorkspace(p));
 // Right-click > Protect: agents in the folder only read and pull (hook.mjs, lib.mjs protectRule). The worktrees its repo
 // has now are noted, so the ones made later (by agents following the rule) open in the sidebar by themselves.
