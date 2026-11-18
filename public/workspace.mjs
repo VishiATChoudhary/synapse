@@ -2722,6 +2722,7 @@ function initialize() {
     $('new-branch').innerHTML = `${icon('branch')}<span>${escapeHtml(w.home ? 'Main checkout' : w.branch || w.name)}</span>${icon('chevron-down')}`;
     const profile = desktop.profiles[newDraft.kind] || {};
     $('new-agent').innerHTML = `${avatar({ kind: newDraft.kind, name: profile.label || newDraft.kind })}<span>${escapeHtml(profile.label || newDraft.kind)}</span>${icon('chevron-down')}`;
+    renderModel();
     $('new-lead').textContent = newDraft.kind === 'shell' ? 'Open a terminal in' : 'What should we do in';
     $('new-input').placeholder = newDraft.kind === 'shell' ? 'Opens a shell in this folder. Type a command to run, or leave empty.' : 'Describe the task. Leave empty to just start the agent.';
     const command = String(profile.command || (newDraft.kind === 'shell' ? 'your shell' : newDraft.kind)).replace(/^exec\s+/, '').replace(/^\S*\//, '');
@@ -2731,6 +2732,33 @@ function initialize() {
     $('new-todo').hidden = !todo || newDraft.kind === 'shell';
     if (todo) $('new-todo').innerHTML = `${icon('todo')}<span class="new-todo-text">For your todo: ${escapeHtml(todo.text)}</span><button type="button" class="new-todo-clear" aria-label="Start without the todo" title="Start without the todo">${icon('x')}</button>`;
   }
+  // the model to start on (Claude, Codex, OpenCode): the agent's own default unless one is picked, remembered per agent
+  const modelLists = new Map();
+  const pickedModel = (kind) => getStorage(`synapse-new-model:${kind}`) || '';
+  function loadModels(kind) {
+    if (!modelLists.has(kind)) modelLists.set(kind, desktopCall('models', { kind }).catch(() => ({ models: [] })).then((r) => { modelLists.set(kind, r); if (newDraft.kind === kind) renderModel(); return r; }));
+    return modelLists.get(kind);
+  }
+  function renderModel() {
+    const kind = newDraft.kind, list = modelLists.get(kind);
+    if (!list) loadModels(kind);
+    const known = list && !(list instanceof Promise) ? list : null;
+    const picked = pickedModel(kind), shown = known?.models.find((m) => m.id === picked)?.label || picked;
+    $('new-model').hidden = !['claude', 'codex', 'opencode'].includes(kind) || (known && !known.models.length);
+    $('new-model').innerHTML = `${icon('activity')}<span>${escapeHtml(shown || (known?.current ? `Default (${known.current})` : 'Default model'))}</span>${icon('chevron-down')}`;
+  }
+  $('new-model').onclick = async () => {
+    const kind = newDraft.kind, r = await loadModels(kind), picked = pickedModel(kind);
+    const set = (id) => () => { setStorage(`synapse-new-model:${kind}`, id); renderModel(); $('new-input').focus(); };
+    const items = [{ label: r.current ? `Default (${r.current})` : 'Default model', hint: 'What the agent is set to use', icon: picked ? null : 'check', run: set('') }, '-'];
+    let group = null;
+    for (const m of r.models) {
+      const provider = kind === 'opencode' ? m.id.split('/')[0] : null;
+      if (provider && provider !== group) { group = provider; items.push({ heading: provider }); }
+      items.push({ label: provider ? m.id.slice(provider.length + 1) : m.label, hint: m.hint, icon: m.id === picked ? 'check' : null, run: set(m.id) });
+    }
+    dropdown($('new-model'), items, (() => { const b = $('new-model').getBoundingClientRect(); return { x: b.left, y: b.bottom + 6 }; })());
+  };
   $('new-todo').addEventListener('click', (event) => { if (event.target.closest('.new-todo-clear')) { newDraft.todo = null; renderNew(); $('new-input').focus(); } });
   $('new-project').onclick = () => {
     const seen = new Set();
@@ -2758,7 +2786,7 @@ function initialize() {
       const shell = newDraft.kind === 'shell';
       const todo = !shell && newDraft.todo && todoList().find((t) => t.id === newDraft.todo);
       const first = todo ? `${prompt || todo.text}\n\n(This is Synapse todo ${todo.id}. When it is done, tick it with synapse_todo_update.)` : prompt;
-      const result = await desktopCall('new-session', { cwd: newDraft.cwd, kind: newDraft.kind, prompt: shell ? '' : first });
+      const result = await desktopCall('new-session', { cwd: newDraft.cwd, kind: newDraft.kind, prompt: shell ? '' : first, model: shell ? '' : pickedModel(newDraft.kind) });
       desktop = await desktopCall('state'); applyState(rawState);
       $('new-input').value = ''; newDraft.todo = null; attachments.delete(NEW); renderAttachments(); paintMentionBar();
       if (tagged.length) connectWhenMatched(result.id, tagged);

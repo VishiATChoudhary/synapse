@@ -618,6 +618,7 @@ textarea.field { line-height: 1.5; resize: vertical; }
 .breadcrumbs > .crumb-project, .breadcrumbs > .crumb-sep { flex: none; }
 /* dropdown menus */
 .pop-menu { position: fixed; z-index: var(--z-dropdown); min-width: 220px; padding: 5px; border-radius: var(--radius-md); background: var(--color-raised); box-shadow: var(--shadow-pop); animation: pop-in var(--dur-micro) var(--ease-out); }
+.pop-menu { max-height: calc(100vh - 16px); overflow-y: auto; }
 .pop-menu button { width: 100%; display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: var(--radius-xs); font-size: var(--text-base); color: var(--color-secondary); text-align: start; }
 .pop-menu button > span:not(.pop-gap) { flex: 1; }
 .pop-menu button:hover, .pop-menu button:focus-visible { background: var(--color-hover); color: var(--color-ink); outline: none; }

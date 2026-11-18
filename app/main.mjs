@@ -514,6 +514,59 @@ function resumeCommand(kind, resume, profiles) {
   }
 }
 
+// The models a new session can start on, per kind (the New session screen lists them). An empty list means the
+// agent picks its own. Claude takes aliases; Codex lists what it cached from its server; OpenCode asks its CLI.
+const MODEL_ID = /^[\w.:@/#+-]{1,160}$/;
+let opencodeModels = { at: 0, list: null };
+function listOpencodeModels() {
+  if (opencodeModels.list && Date.now() - opencodeModels.at < 10 * 60_000) return Promise.resolve(opencodeModels.list);
+  return new Promise((resolve) => {
+    const cmd = (config().profiles?.opencode?.command || 'opencode').split(' ')[0];
+    const p = spawn(WIN ? cmd : SHELL, WIN ? ['models'] : ['-lc', `exec ${cmd} models`], { env: cleanEnv(), stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, shell: WIN });
+    let out = '';
+    const stop = setTimeout(() => p.kill(), 20_000);
+    p.stdout.on('data', (d) => { out += d; });
+    p.on('error', () => {});
+    p.on('close', () => {
+      clearTimeout(stop);
+      const list = out.split('\n').map((l) => l.trim()).filter((l) => /^[\w.-]+\/\S+$/.test(l) && MODEL_ID.test(l));
+      if (list.length) opencodeModels = { at: Date.now(), list };
+      resolve(list);
+    });
+  });
+}
+async function modelsFor(kind) {
+  const home = os.homedir();
+  if (kind === 'claude') return { current: null, models: [['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku'], ['fable', 'Fable']].map(([id, label]) => ({ id, label })) };
+  if (kind === 'codex') {
+    const cache = readJSON(path.join(home, '.codex', 'models_cache.json'), {});
+    const models = (Array.isArray(cache.models) ? cache.models : []).filter((m) => m?.slug && m.visibility !== 'hide' && MODEL_ID.test(m.slug))
+      .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99)).map((m) => ({ id: m.slug, label: m.display_name || m.slug, hint: m.description || '' }));
+    let current = null;
+    try { current = /^\s*model\s*=\s*"([^"]+)"/m.exec(fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8'))?.[1] || null; } catch {}
+    return { current, models };
+  }
+  if (kind === 'opencode') {
+    let current = null;
+    for (const f of ['opencode.json', 'opencode.jsonc', 'config.json']) { const c = readJSON(path.join(home, '.config', 'opencode', f), null); if (c?.model) { current = c.model; break; } }
+    return { current, models: (await listOpencodeModels()).map((id) => ({ id, label: id })) };
+  }
+  return { current: null, models: [] };
+}
+// A start command and env for a chosen model. OpenCode's TUI has no model flag: a private server (--standalone)
+// reads its config from OPENCODE_CONFIG_CONTENT, the shared background service would ignore it.
+function withModel(kind, command, model) {
+  if (!model || !MODEL_ID.test(model) || !command) return { command, env: {} };
+  const q = WIN ? `"${model}"` : `'${model}'`;
+  if (kind === 'claude') return { command: `${command} --model ${q}`, env: {} };
+  if (kind === 'codex') return { command: `${command} -m ${q}`, env: {} };
+  if (kind === 'opencode') {
+    let extra = {}; try { extra = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT || '{}'); } catch {}
+    return { command: `${command} --standalone`, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...extra, model }) } };
+  }
+  return { command, env: {} };
+}
+
 async function spawnFork({ parentPty, question, requestId, cols, rows }) {
   const t = ptys.get(parentPty);
   if (!t) throw new Error('parent session is gone');
@@ -936,7 +989,8 @@ handle('flags', () => ({ demo: DEMO, packaged: app.isPackaged, view: process.env
 handle('pty:spawn', async (a) => {
   // a liaison (⌘N, ask a friend): talks with friends' agents for the agent it names, see liaisonFor in ops.mjs
   const liaison = a.liaisonFor && typeof a.liaisonFor.id === 'string' ? { SYNAPSE_LIAISON_FOR: a.liaisonFor.id.slice(0, 200), SYNAPSE_LIAISON_NAME: String(a.liaisonFor.name || '').slice(0, 80) } : {};
-  const r = await spawnPty({ ...a, extraEnv: liaison });
+  const m = typeof a.model === 'string' && a.model ? withModel(a.kind, a.command, a.model) : { command: a.command, env: {} };
+  const r = await spawnPty({ ...a, command: m.command, extraEnv: { ...m.env, ...liaison } });
   if (a.phoneReq) { // a terminal the phone asked for: its first prompt goes in once the agent is ready
     phone.spawned(a.phoneReq, r.id);
     prefill(r.id, phonePrompts.get(a.phoneReq), true);
@@ -950,6 +1004,7 @@ handle('phone:allow', ({ id }) => phone.allow(id));
 handle('phone:remove', ({ id }) => phone.remove(id));
 handle('phone:shares', () => phone.liveShares());
 handle('phone:unshare', ({ id }) => phone.stopShare(id));
+handle('models:list', ({ kind }) => modelsFor(String(kind || '')));
 handle('pty:write', ({ id, data }) => { ptys.get(id)?.p.write(data); });
 handle('pty:submit', ({ id, text }) => {
   if (!ptys.has(id)) throw new Error('This session has ended.');
@@ -983,10 +1038,11 @@ handle('pty:restore', ({ cwd, kind, resume, cols, rows }) => {
 handle('sessions:load', () => readJSON(SESSIONS, null));
 handle('sessions:save', (data) => writeJSON(SESSIONS, data));
 const UI_STATE = path.join(DATA, 'workspace-ui.json');
-const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-inspector-tab', 'synapse-panel-width']);
+const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-inspector-tab', 'synapse-panel-width', 'synapse-new-kind']);
+const uiKey = (key) => UI_KEYS.has(key) || /^synapse-new-model:[\w-]{1,40}$/.test(key); // the New session screen's model, per agent
 handle('workspace:load', () => readJSON(UI_STATE, {}));
 handle('workspace:save', ({ key, value }) => {
-  if (!UI_KEYS.has(key) || typeof value !== 'string' || value.length > 768 * 1024) throw new Error('Invalid workspace preference.');
+  if (!uiKey(key) || typeof value !== 'string' || value.length > 768 * 1024) throw new Error('Invalid workspace preference.');
   writeJSON(UI_STATE, { ...readJSON(UI_STATE, {}), [key]: value });
 });
 handle('canvas', () => ensureCanvas());

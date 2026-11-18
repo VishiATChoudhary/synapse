@@ -278,7 +278,10 @@ function readOpenCode(transcript, from) {
       if (role === 'user') { if (text && !NOISE.test(text)) all.push({ role, text, ts: r.time_created }); continue; }
       if (role !== 'assistant') continue;
       const tools = ps.filter((p) => p.type === 'tool').map((p) => toolLine(v2 ? p.name : p.tool, p.state?.input));
-      if (text || tools.length) all.push({ role, text: [text, ...tools].filter(Boolean).join('\n'), ts: r.time_created, tool: !text });
+      // a model that fails (an endpoint down, a key expired) leaves no text, only the error: show it, or the chat just waits
+      const err = d.error ? d.error.data?.message || d.error.message || d.error.name : !text && !tools.length ? d.retry?.error?.message : null;
+      const problem = err ? `⚠ OpenCode: ${String(err).slice(0, 400)}${d.retry && !d.error ? ` (retrying, attempt ${d.retry.attempt})` : ''}` : '';
+      if (text || tools.length || problem) all.push({ role, text: [text, ...tools, problem].filter(Boolean).join('\n'), ts: r.time_created, tool: !text && !problem });
     }
   } catch {} finally { try { db.close(); } catch {} }
   return windowFrom(all, from);

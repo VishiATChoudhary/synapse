@@ -389,7 +389,7 @@ function sforkFilter(get) {
   };
 }
 
-async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resume = null, cwd = worktreePath, title = kind, prompt = null, liaisonFor = null, drawer = false } = {}) {
+async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resume = null, cwd = worktreePath, title = kind, prompt = null, liaisonFor = null, drawer = false, model = null } = {}) {
   closeCanvas();
   const prof = M.profiles[kind] || { command: kind };
   const s = { id: nextId++, worktree: worktreePath, sessions: [], path: [] };
@@ -400,7 +400,7 @@ async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resu
   try {
     const made = await makeSession(s, {
       kind, title,
-      spawn: (cols, rows) => (resume ? synapse.pty.restore({ cwd, kind, resume, cols, rows }) : synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows, phoneReq, ...(prompt ? { prompt } : {}), ...(liaisonFor ? { liaisonFor } : {}) })),
+      spawn: (cols, rows) => (resume ? synapse.pty.restore({ cwd, kind, resume, cols, rows }) : synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows, phoneReq, ...(prompt ? { prompt } : {}), ...(model && !split ? { model } : {}), ...(liaisonFor ? { liaisonFor } : {}) })),
     });
     if (resume) made.resume = resume;
     if (drawer) { made.drawer = true; made.title = 'terminal'; }
@@ -3931,7 +3931,8 @@ async function desktopAction(action, args) {
       if (!Object.hasOwn(M.profiles, args.kind)) throw new Error('Choose an installed agent profile.');
       const prompt = typeof args.prompt === 'string' && args.prompt.trim() && args.kind !== 'shell' ? args.prompt.slice(0, 12000) : null;
       const before = new Set(M.slots.map((s) => s.id));
-      await newSlot(cwd, args.kind, null, null, { prompt, drawer: !!args.drawer });
+      const model = typeof args.model === 'string' && args.model ? args.model.slice(0, 160) : null; // a model from the New session screen's list
+      await newSlot(cwd, args.kind, null, null, { prompt, drawer: !!args.drawer, model });
       const made = M.slots.find((s) => !before.has(s.id));
       if (!made?.sessions[0]) throw new Error('The session could not start. Check the agent command in Settings.');
       return { id: `desktop-${made.sessions[0].key}` };
@@ -3945,6 +3946,7 @@ async function desktopAction(action, args) {
       if (args.op === 'pr') return synapse.git.pr(dir);
       throw new Error('Unknown git action.');
     }
+    case 'models': return synapse.models(String(args.kind || ''));
     case 'paste': return synapse.files.fromClipboard();
     case 'save-file': return synapse.files.save(String(args.name || ''), String(args.data || ''));
     case 'attach': { if (!args.id && typeof args.cwd === 'string') return synapse.files.pick(args.cwd); const { s } = ownSession(args.id); return synapse.files.pick(s.worktree); }
