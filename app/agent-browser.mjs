@@ -4,7 +4,7 @@
 // Agents reach it over a local HTTP endpoint (127.0.0.1, random port, a token in ~/.synapse/agent-browser.json,
 // readable by you only). Before an agent first opens a site, you allow it (once, always, or deny) in the panel.
 // You can take over at any time: the agent's actions wait until you hand it back.
-import { BrowserWindow, WebContentsView, session as electronSession, shell } from 'electron';
+import { BrowserWindow, WebContentsView, session as electronSession, shell, systemPreferences } from 'electron';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -18,6 +18,7 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
   const FILE = path.join(dataDir, 'agent-browser.json');
   const SITES = path.join(dataDir, 'agent-browser-sites.json');
   const LOGINS = path.join(dataDir, 'agent-browser-logins.json');
+  const MIC = path.join(dataDir, 'agent-browser-mic.json'); // sites always allowed your microphone (and camera)
   const TABS = path.join(dataDir, 'agent-browser-tabs.json'); // agent id -> its open pages, for the prompt hook // site -> vault logins agents may always use there
   const token = crypto.randomBytes(24).toString('hex');
   const agents = new Map(); // agent id -> { tabs: [{ id, view }], active, popped, paused, bounds, allowed:Set }
@@ -27,6 +28,7 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
 
   const readSites = () => { try { return new Set(JSON.parse(fs.readFileSync(SITES, 'utf8'))); } catch { return new Set(); } };
   const saveSites = (s) => fs.writeFileSync(SITES, JSON.stringify([...s], null, 2), { mode: 0o600 });
+  const readMic = () => { try { return new Set(JSON.parse(fs.readFileSync(MIC, 'utf8'))); } catch { return new Set(); } };
   const readLogins = () => { try { return JSON.parse(fs.readFileSync(LOGINS, 'utf8')); } catch { return {}; } };
   const loginsHere = (url) => { try { return vault ? vault.loginsFor(url) : []; } catch { return []; } };
   const originOf = (url) => { try { const u = new URL(url); return /^https?:$/.test(u.protocol) ? u.origin : null; } catch { return null; } };
@@ -62,7 +64,7 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
   }
   const reloadAll = (match = () => true) => { for (const a of agents.values()) for (const t of a.tabs) { const wc = t.view.webContents; if (!wc.isDestroyed() && match(wc.getURL())) wc.reload(); } };
   const entry = (id) => {
-    if (!agents.has(id)) agents.set(id, { tabs: [], active: null, popped: null, paused: false, bounds: null, allowed: new Set(), logins: new Set() });
+    if (!agents.has(id)) agents.set(id, { tabs: [], active: null, popped: null, paused: false, bounds: null, allowed: new Set(), logins: new Set(), mic: new Set() });
     return agents.get(id);
   };
   // a tab whose page is gone (it closed itself, like a sign-in popup calling window.close()) is never used again
@@ -239,6 +241,9 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
     if (q.kind === 'login') {
       if (choice === 'always') { const l = readLogins(); l[q.origin] = [...new Set([...(l[q.origin] || []), q.base])]; fs.writeFileSync(LOGINS, JSON.stringify(l, null, 2), { mode: 0o600 }); }
       if (choice === 'always' || choice === 'once') entry(q.agent).logins.add(`${q.origin} ${q.base}`);
+    } else if (q.kind === 'mic') {
+      if (choice === 'always') { const m = readMic(); m.add(q.origin); fs.writeFileSync(MIC, JSON.stringify([...m], null, 2), { mode: 0o600 }); }
+      if (choice === 'always' || choice === 'once') entry(q.agent).mic.add(q.origin);
     } else {
       if (choice === 'always') { const s = readSites(); s.add(q.origin); saveSites(s); }
       if (choice === 'always' || choice === 'once') entry(q.agent).allowed.add(q.origin);
@@ -251,10 +256,11 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
 
   // ------------------------------------------------------------ what agents do
   const allowedFor = (id, origin) => !origin || local(origin) || entry(id).allowAll || entry(id).allowed.has(origin) || readSites().has(origin);
-  function ask(id, origin, login = null) {
-    if (!login && allowedFor(id, origin)) return Promise.resolve(true);
+  const micFor = (id, origin) => entry(id).mic.has(origin) || readMic().has(origin);
+  function ask(id, origin, login = null, kind = login ? 'login' : 'site') {
+    if (kind === 'site' && allowedFor(id, origin)) return Promise.resolve(true);
+    if (kind === 'mic' && micFor(id, origin)) return Promise.resolve(true);
     if (login && (entry(id).logins.has(`${origin} ${login.base}`) || (readLogins()[origin] || []).includes(login.base))) return Promise.resolve(true);
-    const kind = login ? 'login' : 'site';
     const existing = [...asks.values()].find((q) => q.agent === id && q.origin === origin && q.kind === kind);
     if (existing) return existing.promise;
     const askId = crypto.randomBytes(4).toString('hex');
@@ -464,7 +470,22 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
       fs.writeFileSync(FILE, JSON.stringify({ port: server.address().port, token, pid: process.pid }), { mode: 0o600 });
       fs.chmodSync(FILE, 0o600);
     });
-    ses().setPermissionRequestHandler((_wc, permission, cb) => cb(['clipboard-sanitized-write', 'fullscreen'].includes(permission)));
+    // a page gets the microphone (or camera) only after you allow its site, for the agent whose tab asks; then macOS
+    // asks once for Synapse itself. Everything else but the clipboard and fullscreen is refused.
+    const ownerOf = (wc) => { for (const [id, a] of agents) if (a.tabs.some((t) => alive(t) && t.view.webContents === wc)) return id; return null; };
+    const osAllows = async (types) => {
+      if (process.platform !== 'darwin') return true;
+      for (const t of types) if (systemPreferences.getMediaAccessStatus(t) !== 'granted' && !(await systemPreferences.askForMediaAccess(t).catch(() => false))) return false;
+      return true;
+    };
+    ses().setPermissionRequestHandler((wc, permission, cb, details) => {
+      if (permission !== 'media') return cb(['clipboard-sanitized-write', 'fullscreen'].includes(permission));
+      const id = ownerOf(wc), origin = originOf(details?.requestingUrl || wc.getURL());
+      if (!id || !origin) return cb(false);
+      const types = (details?.mediaTypes?.length ? details.mediaTypes : ['audio']).map((t) => (t === 'audio' ? 'microphone' : 'camera'));
+      ask(id, origin, null, 'mic').then((ok) => (ok ? osAllows(types) : false)).then((ok) => cb(!!ok), () => cb(false));
+    });
+    ses().setPermissionCheckHandler((wc, permission, origin) => (permission === 'media' ? !!(wc && ownerOf(wc) && origin && micFor(ownerOf(wc), originOf(origin))) : true));
   }
   function stop() { try { server?.close(); } catch {} try { fs.unlinkSync(TABS); } catch {} try { const f = JSON.parse(fs.readFileSync(FILE, 'utf8')); if (f.pid === process.pid) fs.unlinkSync(FILE); } catch {} }
 

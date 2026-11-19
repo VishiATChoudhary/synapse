@@ -71,6 +71,10 @@
     "gatekeeperAssess": false,
     "entitlements": "app/build/entitlements.mac.plist",
     "entitlementsInherit": "app/build/entitlements.mac.inherit.plist",
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "A site you allow in Synapse's browser (a voice agent, a call) can use your microphone.",
+      "NSCameraUsageDescription": "A site you allow in Synapse's browser (a video call) can use your camera."
+    },
     "notarize": true,
     "extraResources": [
       {
