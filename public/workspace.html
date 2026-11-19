@@ -30,7 +30,7 @@
         <button class="icon-button sidebar-close" id="sidebar-close" aria-label="Close navigation"><span data-icon="panel-left"></span></button>
       </div>
       <div class="side-tools">
-        <div class="side-search"><span data-icon="search"></span><input id="sidebar-filter" type="search" placeholder="Search" autocomplete="off" spellcheck="false" aria-label="Filter sessions"><button type="button" class="side-search-key" id="open-search" title="Search everything" aria-label="Open search"><kbd>⌘K</kbd></button></div>
+        <button type="button" class="side-search search-pill" id="open-search" aria-haspopup="dialog" aria-label="Search or jump to (⌘K)"><span data-icon="search"></span><span class="pill-text" id="pill-text" aria-live="polite">Search or jump to…</span><kbd class="side-search-key">⌘K</kbd></button>
         <button class="icon-button" id="group-by" aria-label="Group and sort sessions" title="Group and sort"><span data-icon="sort"></span></button>
         <button class="icon-button desktop-only" id="add-project" aria-label="Add project" title="Add project"><span data-icon="folder-plus"></span></button>
         <button class="icon-button" id="connect-agent" aria-label="Connect an agent" title="Connect an agent"><span data-icon="compose"></span></button>
@@ -135,11 +135,13 @@
       </div>
     </main>
   </div>
-  <dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
-    <h2 class="sr-only" id="search-title">Search sessions</h2>
-    <div class="search-input-row"><span data-icon="search"></span><input id="search-input" placeholder="Search agents, projects, or folders…" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="search-results" aria-autocomplete="list"><button class="key-button" id="close-search" aria-label="Close search">Esc</button></div>
-    <div class="search-results" id="search-results" role="listbox" aria-label="Sessions"></div>
-    <div class="search-footer"><span><kbd>↑</kbd><kbd>↓</kbd> to navigate</span><span><kbd>↵</kbd> to open</span><span id="search-count"></span></div>
+  <dialog class="search-dialog palette" id="search-dialog" aria-labelledby="search-title">
+    <div class="palette-inner" id="palette-inner">
+      <h2 class="sr-only" id="search-title">Search and commands</h2>
+      <div class="search-input-row"><span data-icon="search"></span><span class="scope-chip" id="search-scope" hidden></span><input id="search-input" placeholder="Search or jump to…" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="search-results" aria-autocomplete="list"><button class="key-button" id="close-search" aria-label="Close search">Esc</button></div>
+      <div class="search-results" id="search-results" role="listbox" aria-label="Results"></div>
+      <div class="search-footer"><span><kbd>↑</kbd><kbd>↓</kbd> to move</span><span><kbd>↵</kbd> to open</span><span id="search-count"></span></div>
+    </div>
   </dialog>
   <dialog class="action-dialog" id="action-dialog" aria-labelledby="dialog-title">
     <form id="action-form">

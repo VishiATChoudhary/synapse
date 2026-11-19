@@ -63,9 +63,7 @@ const shot = async (name) => { if (process.env.LINKS_SHOTS) fs.writeFileSync(pat
   }
 
   // the GUI, through Settings > view
-  await js(`document.querySelector('#settings').click()`);
-  await until(() => js(`!!document.querySelector('#modal .view-seg')`), 'view in settings');
-  await js(`document.querySelector('#modal .view-seg [data-view="gui"]').click()`);
+  await js(`document.querySelector('#mode-gui').click()`);
   await until(() => js(`!document.querySelector('#desktop-workspace').hidden`), 'the GUI is shown');
   await until(async () => { gui = win.webContents.mainFrame.frames.find((f) => f.url.includes('?desktop=1')); return gui; }, 'GUI frame', 30000);
   const desk = () => ui(`new Promise((ok) => { const request = 'state-' + Math.random(); addEventListener('message', (e) => { if (e.data?.request === request) ok(e.data.value?.sessions || []); }); parent.postMessage({ type: 'synapse:desktop-call', request, action: 'state', args: {} }, '*'); setTimeout(() => ok([]), 3000); })`);

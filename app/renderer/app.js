@@ -2038,7 +2038,7 @@ function canvasMenu({ hit, agent, group, x, y, hiddenCount }, r = $('#canvas-fra
 // Settings: a window of its own, sections on the left (with a search across all of them), the chosen one on the right.
 // Every change saves to ~/.synapse/app.json as it is made.
 const SETTINGS_PANES = [
-  ['general', 'General', '◐'], ['notifications', 'Notifications', '◔'], ['agents', 'Agents', '✳'], ['workspaces', 'Workspaces', '▤'], ['connectors', 'Connectors', '⌁'], ['plugins', 'Claude plugins', '✚'], ['logins', 'Logins', '⚿'],
+  ['general', 'General', '◐'], ['notifications', 'Notifications', '◔'], ['agents', 'Agents', '✳'], ['workspaces', 'Workspaces', '▤'], ['connectors', 'Connectors', '⌁'], ['logins', 'Logins', '⚿'],
   ['appearance', 'Appearance', '◑'], ['shortcuts', 'Shortcuts', '⌘'], ['phone', 'Phone', '◫'], ['people', 'People & agent talk', '◎'],
 ];
 async function openSettings(start) {
@@ -2065,11 +2065,6 @@ async function openSettings(start) {
     const pane = (key, intro, ...groups) => { const p = el('div', 'set-pane'); p.dataset.pane = key; if (intro) p.append(el('p', 'set-intro', intro)); p.append(...groups); panes[key] = p; };
 
     // ---- General
-    const viewSeg = el('div', 'set-seg view-seg');
-    for (const [v, label] of [['gui', 'GUI'], ['terminal', 'Terminal']]) {
-      const b = button(label, () => { close(); if (v === 'gui') openWorkspace(); else showWorkspace(false); }, (v === 'gui') === workspaceOpen ? 'on' : '');
-      b.dataset.view = v; viewSeg.append(b);
-    }
     const updVal = el('span', 'set-desc'), updBtn = button('Check now', null);
     const showUpd = (u) => {
       const at = `Version ${u.current || '?'}`;
@@ -2093,7 +2088,6 @@ async function openSettings(start) {
     ]) { const b = button(label, () => { close(); setTimeout(run, 0); }); b.title = title; tools.append(b); }
     pane('general', null,
       group('Window',
-        row('View', 'GUI shows sessions, connections and friends as a workspace. Terminal is the raw terminals with forks.', viewSeg),
         row('Open Synapse at login', 'So friends’ questions get answered while you work.', toggle(!!s.openAtLogin, async (on, cb) => { cb.checked = (await synapse.settings.set({ openAtLogin: on })).openAtLogin; toast(cb.checked ? 'Synapse opens at login' : 'Synapse no longer opens at login'); }))),
       group('Synapse', updRow, row('Tour', 'The six steps a new install starts with.', button('Replay', () => { close(); showOnboarding(false); }))),
       group('Quick open', row('Tools', 'Activity, friends, forks and splits.', tools)));
@@ -2288,10 +2282,6 @@ async function openSettings(start) {
       finally { addConn.disabled = false; }
     };
     drawConnectors();
-    pane('connectors', 'MCP servers for all your agents at once: Claude Code, Codex and OpenCode. Agents that are running pick up changes when they start again.',
-      group('Add a connector', card(connForm, connNote)),
-      group('Your connectors', connList),
-      group('Also set up in your agents', connOthers));
 
     // ---- Claude plugins: what Claude Code's marketplaces offer, installed and turned on or off through its CLI
     const plugSearch = el('input', 'set-input'); plugSearch.type = 'search'; plugSearch.placeholder = 'Search plugins';
@@ -2314,8 +2304,13 @@ async function openSettings(start) {
     };
     plugSearch.oninput = () => drawPlugins();
     drawPlugins();
-    pane('plugins', 'Claude Code plugins add skills, commands, hooks and MCP servers to Claude. Installed for your user, they reach every Claude session started after.',
-      group('Plugins', card(plugSearch), plugList));
+    // connectors and Claude's plugins on one page: both add tools to your agents
+    const plugIntro = el('p', 'set-desc set-pad', 'Skills, commands, hooks and MCP servers from Claude Code’s marketplaces. They reach every Claude session started after.');
+    pane('connectors', 'MCP servers for all your agents at once: Claude Code, Codex and OpenCode. Agents that are running pick up changes when they start again.',
+      group('Add a connector', card(connForm, connNote)),
+      group('Your connectors', connList),
+      group('Also set up in your agents', connOthers),
+      group('Claude plugins', plugIntro, card(plugSearch), plugList));
 
     // ---- Appearance, shortcuts, phone, people: drawn by their own helpers
     const looks = el('div', 'looks'); drawLooks(looks);
@@ -3950,7 +3945,6 @@ function showWorkspace(open) {
   document.body.classList.toggle('gui-mode', open);
   $('#mode-gui').setAttribute('aria-pressed', String(open));
   $('#mode-terminal').setAttribute('aria-pressed', String(!open));
-  localStorage.setItem('synapse-desktop-view', open ? 'gui' : 'terminal');
   if (open) { closeCanvas(); syncWorkspace(true); }
   else { for (const place of [...docks.keys()]) undock(place); render(); if (activityOpen) $('#activity').focus(); else top(focusedSlot())?.term.focus(); }
 }
@@ -4090,7 +4084,6 @@ async function desktopAction(action, args) {
       if (branch.some((id) => statusOf(sess(s, id)) === 'working')) return { closed: false };
       closeSession(s, x.id); render(); return { closed: true };
     }
-    case 'terminal': { if (args.id) { const { s, x } = ownSession(args.id); M.focused = s.id; focusPath(s, x.id); } showWorkspace(false); return; }
     case 'model': {
       const { x } = ownSession(args.id); if (x.exited) throw new Error('This session has ended.');
       if (!['opus', 'sonnet', 'haiku', 'fable'].includes(args.model)) throw new Error('Choose Opus, Sonnet, Haiku or Fable.');
@@ -4290,7 +4283,8 @@ if (WIN) {
   const flags = await synapse.flags();
   M.home = flags.home || '';
   // the GUI's server is already starting (main starts it with the app): make sure, while the sessions come back
-  const wantGui = (flags.view || localStorage.getItem('synapse-desktop-view') || 'gui') === 'gui';
+  // Synapse is GUI only: the Terminal view (raw terminals with forks) is gone; tests may still ask for it
+  const wantGui = flags.view !== 'terminal';
   if (wantGui) synapse.canvas().catch(() => {});
   await refresh();
   // first run: the checkout we were started from is the sample workspace

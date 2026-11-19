@@ -71,10 +71,7 @@ const friend = (name) => `[...document.querySelectorAll('#friends-pop .friend')]
   assert.equal(asked.to.handle, 'mara'); assert.equal(asked.target, 'their api agent'); assert.match(asked.agent.id, /^codex-/);
 
   // Settings > view: GUI
-  await js(`document.querySelector('#settings').click()`);
-  await until(() => js(`!!document.querySelector('#modal .view-seg')`), 'view in settings');
-  assert.equal(await js(`document.querySelector('#modal .view-seg .on').textContent`), 'Terminal');
-  await js(`document.querySelector('#modal .view-seg [data-view="gui"]').click()`);
+  await js(`document.querySelector('#mode-gui').click()`);
   await until(() => js(`!document.querySelector('#desktop-workspace').hidden`), 'the GUI is shown');
   await until(() => { gui = win.webContents.mainFrame.frames.find((f) => f.url.includes('?desktop=1')); return gui; }, 'GUI frame');
   await until(() => ui(`!!document.querySelector('[data-view="connections"]')`).catch(() => false), 'GUI ready', 20000);

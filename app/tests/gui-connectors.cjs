@@ -120,7 +120,7 @@ async function addAccount(name) {
   console.log('PASS bring in: Claude’s own server now reaches every agent, its env kept as a secret');
 
   // Claude plugins: listed from the marketplace, installed, turned off
-  await js(`document.querySelector('[data-settings-pane="plugins"]').click()`);
+  assert.ok(await js(`!document.querySelector('[data-settings-pane="plugins"]')`), 'no tab of its own: plugins sit in Connectors');
   await until(() => js(`!!document.querySelector('[data-plugin="linter@acme"] [data-act="install"]')`), 'plugins listed');
   await js(`document.querySelector('[data-plugin="linter@acme"] [data-act="install"]').click()`);
   await until(() => rd(installedJson).plugins['linter@acme'] && js(`!!document.querySelector('[data-plugin="linter@acme"] input.switch')`), 'installed');

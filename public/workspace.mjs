@@ -948,7 +948,7 @@ function initialize() {
       ]),
       ...(doneSet.has(agent.id) ? [{ label: 'Mark as seen', icon: 'check', run: () => { doneSet.delete(agent.id); saveMarks(); renderSidebar(); } }] : []),
       arch ? { label: 'Unarchive', icon: 'archive', run: () => archive(agent.id, false) } : { label: 'Archive', icon: 'archive', run: () => archive(agent.id, true) },
-      ...(agent.owned ? ['-', { label: 'Open in Terminal mode', icon: 'terminal', run: () => runDesktop('terminal', { id: agent.id }) }, { label: 'Close session', danger: true, run: () => runDesktop('close', { id: agent.id }) }] : []),
+      ...(agent.owned ? ['-', { label: 'Close session', danger: true, run: () => runDesktop('close', { id: agent.id }) }] : []),
     ];
   }
   function archive(id, on) {
@@ -2963,7 +2963,7 @@ function initialize() {
     }
     const people = friendOptions();
     if (!people || !friends.agents.length) {
-      const why = !friends.agents.length ? 'Start an agent first. It is the one you share, or the one that receives theirs.' : friends.people.length ? 'None of your trusted people has added you back yet. Once they do, you can share agents with each other.' : 'Add someone you trust first: their email or @handle in Friends (top right of Terminal view) or Settings.';
+      const why = !friends.agents.length ? 'Start an agent first. It is the one you share, or the one that receives theirs.' : friends.people.length ? 'None of your trusted people has added you back yet. Once they do, you can share agents with each other.' : 'Add someone you trust first: their email or @handle in Friends or Settings.';
       openModal('Add connection', `${connectionTabs()}<p class="dialog-copy">${escapeHtml(why)}</p>`, 'Done');
       return;
     }
@@ -3053,7 +3053,7 @@ function initialize() {
   // ⌘K finds sessions and runs actions, like a command palette: new session in a project, go to a view, settings
   function paletteActions() {
     const agent = view === 'session' ? byId.get(selectedId) : null, out = [];
-    const add = (label, iconName, run, hint = '') => out.push({ label, icon: iconName, run, hint });
+    const add = (label, iconName, run, hint = '') => out.push({ label, icon: iconName, run, hint, done: /^Go to /.test(label) ? `Opened ${label.slice(6)}` : label === 'Settings' ? 'Opened Settings' : label === 'Switch light / dark' ? 'Theme switched' : /^(Hide|Show) sidebar$/.test(label) ? `Sidebar ${label.startsWith('Hide') ? 'hidden' : 'shown'}` : null });
     add('New session', 'compose', () => connectAgent(), embedded ? '⌘N' : '');
     if (embedded) add('New terminal', 'terminal', () => showNew(null, 'shell'), '⌘T');
     if (embedded) for (const p of desktop?.projects || []) {
@@ -3066,7 +3066,6 @@ function initialize() {
       add(`Rename "${titleOf(agent)}"`, 'edit', renameAgent);
       if (agent.owned) {
         if (['claude', 'codex'].includes(agent.kind)) add('Fork this conversation', 'branch', forkSession);
-        add('Open this session in Terminal', 'terminal', () => runDesktop('terminal', { id: agent.id }));
         add('Split side by side', 'panel-right', () => runDesktop('split', { id: agent.id, direction: 'right' }), '⌘D');
         add('Close this session', 'x', () => runDesktop('close', { id: agent.id }));
       }
@@ -3082,34 +3081,161 @@ function initialize() {
     add('Keyboard shortcuts and help', 'help', showHelp);
     return out;
   }
-  function renderSearch() {
+  // ⌘K: the sidebar's search pill grows into the palette (one box: its real left, top, width, height and corners
+  // ease from pill to panel), the results stay in place as you type (rows that still match slide to their new
+  // place, the rest fade out, new ones blur in one after another), a scope ("Search in" Projects, say) becomes a
+  // chip in the field, and on a pick it folds back into the pill, which says what happened before asking again
+  let searchScope = null, paletteState = 'closed', pillTimer = null, pillTyping = null;
+  const PILL_TEXT = 'Search or jump to…';
+  const stillMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const SCOPES = { sessions: ['Sessions', 'message'], projects: ['Projects', 'folder'], actions: ['Actions', 'grid'] };
+  const projectsForPalette = () => {
+    const seen = new Map();
+    for (const agent of state.agents) if (agent.project) seen.set(agent.project, (seen.get(agent.project) || 0) + 1);
+    return [...seen].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+  };
+  function searchEntries() {
     const query = $('search-input').value.trim().toLowerCase(), words = query.split(/\s+/).filter(Boolean);
-    const sessions = searchSessions(state.agents, query).slice(0, query ? 12 : 8).map((agent) => ({ agent }));
-    const actions = paletteActions().map((action) => ({ action, score: words.length ? words.map((w) => wordScore(w, action.label)).reduce((a, b) => (a < 0 || b < 0 ? -1 : a + b), 0) : 0 }))
-      .filter((hit) => hit.score >= 0).sort((a, b) => b.score - a.score).slice(0, query ? 8 : 6);
-    searchHits = [...sessions, ...actions];
+    const score = (label) => (words.length ? words.map((w) => wordScore(w, label)).reduce((a, b) => (a < 0 || b < 0 ? -1 : a + b), 0) : 0);
+    const groups = [];
+    const scope = searchScope?.kind;
+    const pool = scope === 'project' ? state.agents.filter((agent) => agent.project === searchScope.name) : state.agents;
+    if (!scope || scope === 'sessions' || scope === 'project') {
+      const sessions = searchSessions(pool, query).slice(0, scope ? 40 : query ? 10 : 6);
+      if (sessions.length) groups.push(['Sessions', sessions.map((agent) => ({ key: `a:${agent.id}`, agent }))]);
+    }
+    if (scope === 'projects') {
+      const projects = projectsForPalette().map((p) => ({ p, s: score(p.name) })).filter((x) => x.s >= 0).sort((a, b) => b.s - a.s);
+      if (projects.length) groups.push(['Projects', projects.map(({ p }) => ({ key: `p:${p.name}`, project: p }))]);
+    }
+    if (!scope || scope === 'actions') {
+      const actions = paletteActions().map((action) => ({ action, s: score(action.label) })).filter((x) => x.s >= 0).sort((a, b) => b.s - a.s).slice(0, scope ? 60 : query ? 8 : 5);
+      if (actions.length) groups.push(['Actions', actions.map(({ action }) => ({ key: `c:${action.label}`, action }))]);
+    }
+    if (!scope) {
+      const scopes = Object.entries(SCOPES).filter(([, [label]]) => score(label) >= 0 || !words.length).map(([kind, [label, iconName]]) => ({ key: `s:${kind}`, scope: { kind, label, icon: iconName } }));
+      if (scopes.length && (!words.length || scopes.length < 3)) groups.push(['Search in', scopes]);
+    }
+    return { query, groups };
+  }
+  const hitHtml = (hit, index) => {
+    const attrs = `type="button" class="search-result${hit.agent ? '' : ' action-result'}" id="search-result-${index}" data-search-index="${index}" role="option" aria-selected="${index === searchIndex}" tabindex="-1"`;
+    if (hit.agent) return `<button ${attrs}>${avatar(hit.agent)}<span class="result-info"><strong>${escapeHtml(titleOf(hit.agent))}</strong><small>${escapeHtml(hit.agent.project)} · ${escapeHtml(titleOf(hit.agent) === hit.agent.name ? kindName(hit.agent) : hit.agent.name)}</small></span>${status(hit.agent)}${icon('arrow-right')}</button>`;
+    if (hit.project) return `<button ${attrs}><span class="action-icon">${icon('folder')}</span><span class="result-info"><strong>${escapeHtml(hit.project.name)}</strong></span><kbd>${hit.project.count} session${hit.project.count === 1 ? '' : 's'}</kbd>${icon('arrow-right')}</button>`;
+    if (hit.scope) return `<button ${attrs}><span class="action-icon">${icon(hit.scope.icon)}</span><span class="result-info"><strong>${escapeHtml(hit.scope.label)}</strong></span>${icon('arrow-right')}</button>`;
+    return `<button ${attrs}><span class="action-icon">${icon(hit.action.icon)}</span><span class="result-info"><strong>${escapeHtml(hit.action.label)}</strong></span>${hit.action.hint ? `<kbd>${escapeHtml(hit.action.hint)}</kbd>` : ''}${icon('arrow-right')}</button>`;
+  };
+  function renderSearch() {
+    const { query, groups } = searchEntries();
+    searchHits = groups.flatMap(([, hits]) => hits);
     searchIndex = Math.max(0, Math.min(searchIndex, searchHits.length - 1));
-    const row = (hit, index) => hit.agent
-      ? `<button type="button" class="search-result" id="search-result-${index}" data-search-agent="${escapeHtml(hit.agent.id)}" role="option" aria-selected="${index === searchIndex}" tabindex="-1">${avatar(hit.agent)}<span class="result-info"><strong>${escapeHtml(titleOf(hit.agent))}</strong><small>${escapeHtml(hit.agent.project)} · ${escapeHtml(titleOf(hit.agent) === hit.agent.name ? kindName(hit.agent) : hit.agent.name)}</small></span>${status(hit.agent)}${icon('arrow-right')}</button>`
-      : `<button type="button" class="search-result action-result" id="search-result-${index}" data-search-action="${index}" role="option" aria-selected="${index === searchIndex}" tabindex="-1"><span class="action-icon">${icon(hit.action.icon)}</span><span class="result-info"><strong>${escapeHtml(hit.action.label)}</strong></span>${hit.action.hint ? `<kbd>${escapeHtml(hit.action.hint)}</kbd>` : ''}${icon('arrow-right')}</button>`;
-    const heading = (text) => `<p class="search-heading">${text}</p>`;
-    $('search-results').innerHTML = searchHits.length
-      ? (sessions.length ? heading('Sessions') + sessions.map((hit, i) => row(hit, i)).join('') : '') + (actions.length ? heading('Actions') + actions.map((hit, i) => row(hit, sessions.length + i)).join('') : '')
-      : `<p class="search-empty">Nothing matches “${escapeHtml(query)}”.</p>`;
-    $('search-count').textContent = `${sessions.length} ${sessions.length === 1 ? 'session' : 'sessions'} · ${actions.length} ${actions.length === 1 ? 'action' : 'actions'}`;
+    const entries = [];
+    let index = 0;
+    for (const [label, hits] of groups) {
+      entries.push({ key: `h:${label}`, html: `<p class="search-heading">${escapeHtml(label)}</p>` });
+      for (const hit of hits) entries.push({ key: hit.key, html: hitHtml(hit, index++), row: true });
+    }
+    if (!entries.length) entries.push({ key: `empty:${query}`, html: `<p class="search-empty">Nothing matches “${escapeHtml(query)}”.</p>` });
+    const list = $('search-results'), motion = !stillMotion() && paletteState === 'open';
+    const old = new Map([...list.children].filter((e) => !e.classList.contains('leave')).map((e) => [e.dataset.key, e]));
+    const before = new Map([...old].map(([key, e]) => [key, e.offsetTop]));
+    const keep = new Set(entries.map((x) => x.key));
+    for (const [key, e] of old) if (!keep.has(key)) {
+      if (!motion) { e.remove(); continue; }
+      e.style.top = `${e.offsetTop}px`; e.classList.remove('arrive'); e.classList.add('leave'); e.removeAttribute('id');
+      setTimeout(() => e.remove(), 120);
+    }
+    let arriving = 0;
+    const nodes = entries.map((entry) => {
+      let e = old.get(entry.key);
+      if (e && e.dataset.html !== entry.html) { const t = document.createElement('template'); t.innerHTML = entry.html; const fresh = t.content.firstElementChild; for (const a of [...e.attributes]) if (!['data-key', 'data-html', 'class', 'style'].includes(a.name)) e.removeAttribute(a.name); for (const a of fresh.attributes) if (a.name !== 'class') e.setAttribute(a.name, a.value); e.className = fresh.className; e.innerHTML = fresh.innerHTML; }
+      if (!e) {
+        const t = document.createElement('template'); t.innerHTML = entry.html; e = t.content.firstElementChild;
+        if (motion || paletteState === 'opening') { e.classList.add('arrive'); e.style.setProperty('--d', `${40 + Math.min(arriving++ * 15, 80)}ms`); }
+      }
+      e.dataset.key = entry.key; e.dataset.html = entry.html;
+      return e;
+    });
+    const leaving = [...list.querySelectorAll(':scope > .leave')];
+    list.replaceChildren(...nodes, ...leaving);
+    if (motion) for (const e of nodes) {
+      const was = before.get(e.dataset.key); if (was == null) continue;
+      const delta = was - e.offsetTop;
+      if (delta) e.animate([{ transform: `translateY(${delta}px)` }, { transform: 'none' }], { duration: 300, easing: 'cubic-bezier(.2,.9,.3,1)' });
+    }
+    const n = searchHits.filter((h) => !h.scope).length;
+    $('search-count').textContent = `${n} ${n === 1 ? 'result' : 'results'}`;
     if (searchHits.length) $('search-input').setAttribute('aria-activedescendant', `search-result-${searchIndex}`); else $('search-input').removeAttribute('aria-activedescendant');
-    $('search-results').querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+    list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+    fitPalette();
   }
+  function paintScope() {
+    const chip = $('search-scope');
+    chip.hidden = !searchScope;
+    if (searchScope) chip.innerHTML = `${icon(searchScope.kind === 'project' ? 'folder' : SCOPES[searchScope.kind][1])}<span>${escapeHtml(searchScope.label)}</span>`;
+    $('search-input').placeholder = searchScope ? `Search ${searchScope.kind === 'project' ? 'sessions' : searchScope.label.toLowerCase()}…` : PILL_TEXT;
+  }
+  function setScope(scope) { searchScope = scope; $('search-input').value = ''; searchIndex = 0; paintScope(); renderSearch(); $('search-input').focus(); }
   function runHit(hit) {
-    $('search-dialog').close();
-    if (hit.agent) navigate('session', hit.agent.id); else hit.action.run();
+    if (hit.scope) return setScope(hit.scope);
+    if (hit.project) return setScope({ kind: 'project', label: hit.project.name, name: hit.project.name });
+    if (hit.agent) { closePalette(`Opened ${titleOf(hit.agent)}`); navigate('session', hit.agent.id); return; }
+    closePalette(hit.action.done || hit.action.label);
+    hit.action.run();
   }
-
+  // where the pill is: the sidebar's, or (sidebar closed) a pill-sized spot at the top of the page
+  function pillRect() {
+    const pill = $('open-search');
+    if (pill.offsetParent) { const r = pill.getBoundingClientRect(); if (r.width) return r; }
+    return { left: innerWidth / 2 - 140, top: 52, width: 280, height: 34 };
+  }
+  function placePalette(rect, radius) {
+    const d = $('search-dialog');
+    d.style.left = `${rect.left}px`; d.style.top = `${rect.top}px`; d.style.width = `${rect.width}px`;
+    if (rect.height != null) d.style.height = `${rect.height}px`;
+    d.style.borderRadius = `${radius}px`;
+  }
+  function fitPalette() {
+    if (paletteState !== 'open') return;
+    const from = pillRect(), width = Math.min(580, innerWidth - 24);
+    const left = Math.max(12, Math.min(from.left, innerWidth - width - 12)), top = Math.max(8, Math.min(from.top, innerHeight * 0.4));
+    placePalette({ left, top, width, height: $('palette-inner').scrollHeight + 2 }, 16);
+  }
   function openSearch() {
     if ($('action-dialog').open) return;
-    $('search-input').value = ''; searchIndex = 0; renderSearch();
-    if (!$('search-dialog').open) $('search-dialog').showModal();
+    const d = $('search-dialog');
+    if (paletteState === 'open' || paletteState === 'opening') { $('search-input').focus(); return; }
+    clearTimeout(pillTimer); sayPill(PILL_TEXT, true);
+    searchScope = null; paintScope();
+    $('search-input').value = ''; searchIndex = 0; $('search-results').replaceChildren();
+    const from = pillRect();
+    d.classList.remove('shown', 'folding');
+    d.classList.add('instant'); placePalette(from, from.height / 2);
+    paletteState = 'opening';
+    if (!d.open) d.showModal();
+    renderSearch();
     $('search-input').focus();
+    void d.offsetWidth; d.classList.remove('instant');
+    requestAnimationFrame(() => { paletteState = 'open'; d.classList.add('shown'); fitPalette(); });
+  }
+  function closePalette(outcome = null) {
+    const d = $('search-dialog');
+    if (paletteState === 'closed' || paletteState === 'closing') return;
+    paletteState = 'closing';
+    const done = () => { if (paletteState !== 'closing') return; paletteState = 'closed'; if (d.open) d.close(); d.classList.remove('shown', 'folding'); if (outcome) sayPill(outcome); };
+    if (stillMotion()) return done();
+    d.classList.remove('shown'); // contents blur out first, then the panel folds back into the pill
+    setTimeout(() => { const to = pillRect(); d.classList.add('folding'); placePalette(to, to.height / 2); setTimeout(done, 380); }, 90);
+  }
+  // the pill says what happened, letter by letter, then asks again
+  function sayPill(text, now = false) {
+    const el = $('pill-text'); clearInterval(pillTyping);
+    if (now || stillMotion()) { el.textContent = text; return; }
+    const from = el.textContent; let i = 0; const n = Math.max(from.length, text.length);
+    pillTyping = setInterval(() => { i += 2; el.textContent = text.slice(0, i) + from.slice(i); if (i >= n) { clearInterval(pillTyping); el.textContent = text; } }, 16);
+    $('open-search').classList.toggle('told', text !== PILL_TEXT);
+    clearTimeout(pillTimer);
+    if (text !== PILL_TEXT) pillTimer = setTimeout(() => sayPill(PILL_TEXT), 1800);
   }
 
   function updateConnection(isConnected) {
@@ -3538,7 +3664,6 @@ function initialize() {
       ...sessionActions(agent).filter((item) => item !== '-' && !item.heading && /^(Snooze|Wake|Mark|Archive|Unarchive|Link|Send a message|Start a plan)/.test(item.label)),
       ...(agent.owned ? [
         ...(forkable ? [{ label: 'Fork conversation', icon: 'branch', run: forkSession, action: 'fork' }] : []),
-        { label: 'Open in Terminal mode', icon: 'terminal', run: desk('terminal') },
         '-',
         { label: 'View fork tree', action: 'fork-tree', run: desk('fork-tree') },
         { label: 'Split side by side', action: 'split', keys: '⌘D', run: desk('split', { direction: 'right' }) },
@@ -3565,20 +3690,12 @@ function initialize() {
   $('help-button').onclick = $('demo-help').onclick = showHelp;
   $('desktop-settings').onclick = () => desktopCall('settings').catch((e) => toast(e.message));
   $('open-search').onclick = openSearch;
-  const filterInput = $('sidebar-filter');
-  filterInput.addEventListener('input', () => { sidebarQuery = filterInput.value; renderSidebar(); $('project-list').scrollTop = 0; });
-  filterInput.addEventListener('keydown', (event) => {
-    const rows = () => [...$('project-list').querySelectorAll('.session-row')].filter((row) => row.offsetParent);
-    if (event.key === 'Escape' && filterInput.value) { event.preventDefault(); event.stopPropagation(); filterInput.value = ''; sidebarQuery = ''; renderSidebar(); }
-    else if (event.key === 'Enter') { const first = rows()[0]; if (first) { event.preventDefault(); navigate('session', first.dataset.agent); } }
-    else if (event.key === 'ArrowDown') { const first = rows()[0]; if (first) { event.preventDefault(); first.focus(); } }
-  });
   // arrow keys walk the visible session rows; Up from the first returns to the search box
   $('project-list').addEventListener('keydown', (event) => {
     if (!['ArrowDown', 'ArrowUp'].includes(event.key) || event.altKey || !event.target.classList?.contains('session-row')) return;
     const rows = [...$('project-list').querySelectorAll('.session-row')].filter((row) => row.offsetParent), i = rows.indexOf(event.target);
     event.preventDefault();
-    if (event.key === 'ArrowUp' && i === 0) return filterInput.focus();
+    if (event.key === 'ArrowUp' && i === 0) return $('open-search').focus();
     rows[Math.max(0, Math.min(rows.length - 1, i + (event.key === 'ArrowDown' ? 1 : -1)))]?.focus();
   });
   // the model, for Claude Code: /model sent to the session, as if typed
@@ -3681,7 +3798,7 @@ function initialize() {
       try { insertPaths(await saveDropped([...event.dataTransfer.files])); } catch (e) { toast(e.message); }
     });
   }
-  $('close-search').onclick = () => $('search-dialog').close();
+  $('close-search').onclick = () => closePalette();
   $('close-dialog').onclick = $('cancel-dialog').onclick = () => $('action-dialog').close();
   $('theme-toggle').onclick = () => {
     const theme = document.documentElement.dataset.theme === 'night' ? 'signal' : 'night';
@@ -3703,6 +3820,7 @@ function initialize() {
   $('search-input').addEventListener('keydown', (event) => {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); searchIndex = Math.max(0, Math.min(searchHits.length - 1, searchIndex + (event.key === 'ArrowDown' ? 1 : -1))); renderSearch(); }
     if (event.key === 'Enter' && searchHits[searchIndex]) { event.preventDefault(); runHit(searchHits[searchIndex]); }
+    if (event.key === 'Backspace' && !event.target.value && searchScope) { event.preventDefault(); setScope(searchScope.kind === 'project' ? { kind: 'projects', label: 'Projects' } : null); }
   });
   $('action-form').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -3717,16 +3835,19 @@ function initialize() {
   for (const dialog of [$('search-dialog'), $('action-dialog')]) dialog.addEventListener('click', (event) => {
     if (event.target !== dialog) return;
     const rect = dialog.getBoundingClientRect();
-    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close();
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog === $('search-dialog') ? closePalette() : dialog.close();
   });
+  // Escape folds the palette back; closed some other way, it is simply closed
+  $('search-dialog').addEventListener('cancel', (event) => { event.preventDefault(); closePalette(); });
+  $('search-dialog').addEventListener('close', () => { paletteState = 'closed'; $('search-dialog').classList.remove('shown', 'folding'); });
+  addEventListener('resize', () => fitPalette());
   document.addEventListener('click', async (event) => {
     const button = event.target.closest('button'); if (!button) return;
     if (button.dataset.createWorktree) return runDesktop('worktree', { key: button.dataset.createWorktree });
     if (button.dataset.newSessionCwd) return connectAgent(button.dataset.newSessionCwd);
     if (button.dataset.agent) return navigate('session', button.dataset.agent);
     if (button.dataset.view) return navigate(button.dataset.view);
-    if (button.dataset.searchAgent) { $('search-dialog').close(); return navigate('session', button.dataset.searchAgent); }
-    if (button.dataset.searchAction) { const hit = searchHits[Number(button.dataset.searchAction)]; if (hit?.action) return runHit(hit); }
+    if (button.dataset.searchIndex) { const hit = searchHits[Number(button.dataset.searchIndex)]; if (hit) return runHit(hit); }
     if (button.dataset.project) {
       const key = button.dataset.project; collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
       // folding the one under the pointer: it stays folded until the pointer leaves, then hover unfolds it again
@@ -3782,7 +3903,6 @@ function initialize() {
     if (button.hasAttribute('data-copy-message')) { const message = renderedMessages.get(button.closest('[data-message-key]').dataset.messageKey); if (message && await copyText(message.text)) { button.innerHTML = icon('check'); setTimeout(() => { button.innerHTML = icon('copy'); }, 1200); } return; } // the button itself says it worked
     const action = button.dataset.action;
     if (action === 'connect') connectAgent();
-    if (action === 'desktop-terminal') runDesktop('terminal', { id: selectedId });
     if (action === 'show-terminal') { persistDraft(); tab = 'terminal'; renderMain(true); syncDocks('main'); }
     if (action === 'add-connection') addConnection();
     if (action === 'friend-connection') addConnection('share');
@@ -3826,8 +3946,8 @@ function initialize() {
     if (event.metaKey && !event.shiftKey && !event.altKey && ['ArrowLeft', 'ArrowRight'].includes(event.key) && !editing && !paneKey) {
       event.preventDefault(); $(event.key === 'ArrowLeft' ? 'nav-back' : 'nav-forward').click(); return;
     }
-    if ((event.metaKey || event.ctrlKey) && ['k', 'f'].includes(event.key.toLowerCase())) { event.preventDefault(); openSearch(); return; }
-    if (event.key === '/' && !editing && !$('action-dialog').open && !$('search-dialog').open) { event.preventDefault(); if (sidebarOpen) $('sidebar-filter').focus(); else openSearch(); }
+    if ((event.metaKey || event.ctrlKey) && ['k', 'f'].includes(event.key.toLowerCase())) { event.preventDefault(); paletteState === 'open' ? closePalette() : openSearch(); return; }
+    if (event.key === '/' && !editing && !$('action-dialog').open && !$('search-dialog').open) { event.preventDefault(); openSearch(); }
     if (event.key === 'Escape' && !$('action-dialog').open && !$('search-dialog').open) {
       if (view === 'activity' || view === 'canvas') navigate(byId.has(selectedId) ? 'session' : 'overview', selectedId);
       else if (narrow.matches && sidebarOpen) { setSidebar(false, false); $('sidebar-toggle').focus(); }
