@@ -48,6 +48,7 @@ const DEFAULT_PROFILES = {
   claude: { command: 'claude', label: 'Claude Code' },
   codex: { command: 'codex', label: 'Codex' },
   gemini: { command: 'gemini', label: 'Gemini CLI' },
+  antigravity: { command: 'agy', label: 'Antigravity' },
   opencode: { command: 'opencode', label: 'OpenCode' },
   'cursor-agent': { command: 'cursor-agent', label: 'Cursor Agent' },
   copilot: { command: 'copilot', label: 'Copilot CLI' },
@@ -58,6 +59,8 @@ function config() {
   const c = readJSON(FILES.app, {});
   let dirty = false;
   if (!c.profiles) { c.profiles = DEFAULT_PROFILES; dirty = true; }
+  // agents added after a profile list was saved: offered once, editable like the rest
+  for (const k of ['antigravity']) if (c.profiles && !c.profiles[k]) { c.profiles[k] = DEFAULT_PROFILES[k]; dirty = true; }
   if (!c.workspaces) { c.workspaces = []; dirty = true; }
   if (c.autoSymlink === undefined) { c.autoSymlink = true; dirty = true; }
   if (c.autoSendFork === undefined) { c.autoSendFork = false; dirty = true; }
@@ -543,6 +546,25 @@ function listOpencodeModels() {
     });
   });
 }
+// Antigravity (Google's agy) lists the models your account has, one "id<tab>name" a line
+let agyModels = { at: 0, list: null };
+function listAgyModels() {
+  if (agyModels.list && Date.now() - agyModels.at < 10 * 60_000) return Promise.resolve(agyModels.list);
+  return new Promise((resolve) => {
+    const cmd = (config().profiles?.antigravity?.command || 'agy').split(' ')[0];
+    const p = spawn(WIN ? cmd : SHELL, WIN ? ['models'] : ['-lc', `exec ${cmd} models`], { env: cleanEnv(), stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, shell: WIN });
+    let out = '';
+    const stop = setTimeout(() => p.kill(), 30_000);
+    p.stdout.on('data', (d) => { out += d; });
+    p.on('error', () => {});
+    p.on('close', () => {
+      clearTimeout(stop);
+      const list = out.split('\n').map((l) => l.split('\t')).filter(([id, label]) => label && MODEL_ID.test(id.trim())).map(([id, label]) => ({ id: id.trim(), label: label.trim() }));
+      if (list.length) agyModels = { at: Date.now(), list };
+      resolve(list);
+    });
+  });
+}
 const CLAUDE_MODELS = [
   ['opus', 'Opus 5.5', 'Most capable, for hard problems'],
   ['sonnet', 'Sonnet 5.5', 'Fast and strong, for everyday coding'],
@@ -571,6 +593,7 @@ async function modelsFor(kind) {
     for (const f of ['opencode.json', 'opencode.jsonc', 'config.json']) { const c = readJSON(path.join(home, '.config', 'opencode', f), null); if (c?.model) { current = c.model; break; } }
     return { current, models: (await listOpencodeModels()).map((id) => ({ id, label: id })) };
   }
+  if (kind === 'antigravity') return { current: null, models: await listAgyModels() };
   return { current: null, models: [] };
 }
 // A start command and env for a chosen model. OpenCode's TUI has no model flag: a private server (--standalone)
@@ -580,6 +603,7 @@ function withModel(kind, command, model) {
   const q = WIN ? `"${model}"` : `'${model}'`;
   if (kind === 'claude') return { command: `${command} --model ${q}`, env: {} };
   if (kind === 'codex') return { command: `${command} -m ${q}`, env: {} };
+  if (kind === 'antigravity') return { command: `${command} --model ${q}`, env: {} };
   if (kind === 'opencode') {
     let extra = {}; try { extra = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT || '{}'); } catch {}
     return { command: `${command} --standalone`, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...extra, model }) } };

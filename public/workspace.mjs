@@ -332,8 +332,8 @@ const ICONS = {
   hand: '<path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12m0-1.5v-6a1.5 1.5 0 0 1 3 0V12m0-5.5a1.5 1.5 0 0 1 3 0V14a7 7 0 0 1-7 7h-.6a6 6 0 0 1-4.6-2.2L3.5 16a1.6 1.6 0 0 1 2.4-2l2.1 1.8"/>',
 };
 const icon = (name) => `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ICONS.message}</svg>`;
-const KIND_NAMES = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', opencode: 'OpenCode', 'cursor-agent': 'Cursor', amp: 'Amp', copilot: 'Copilot CLI', superset: 'Superset', shell: 'Shell' };
-const KIND_INITIALS = { claude: 'Cl', codex: 'Cx', gemini: 'G', opencode: 'Oc', 'cursor-agent': 'Cu', amp: 'A', copilot: 'Co', superset: 'S', shell: '>_' };
+const KIND_NAMES = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', antigravity: 'Antigravity', opencode: 'OpenCode', 'cursor-agent': 'Cursor', amp: 'Amp', copilot: 'Copilot CLI', superset: 'Superset', shell: 'Shell' };
+const KIND_INITIALS = { claude: 'Cl', codex: 'Cx', gemini: 'G', antigravity: 'Ag', opencode: 'Oc', 'cursor-agent': 'Cu', amp: 'A', copilot: 'Co', superset: 'S', shell: '>_' };
 const kindName = (agent) => KIND_NAMES[agent.kind] || agent.kind;
 // real logos where we have them (app/renderer/logos), initials otherwise
 const LOGOS = new Set(['amp', 'claude', 'codex', 'copilot', 'cursor-agent', 'gemini', 'opencode', 'shell']);
@@ -2785,7 +2785,7 @@ function initialize() {
     if (!list) loadModels(kind);
     const known = list && !(list instanceof Promise) ? list : null;
     const picked = pickedModel(kind), shown = known?.models.find((m) => m.id === picked)?.label || picked;
-    $('new-model').hidden = !['claude', 'codex', 'opencode'].includes(kind) || (known && !known.models.length);
+    $('new-model').hidden = !['claude', 'codex', 'opencode', 'antigravity'].includes(kind) || (known && !known.models.length);
     $('new-model').innerHTML = `${icon('activity')}<span>${escapeHtml(shown || (known?.current ? `Default (${known.current})` : 'Default model'))}</span>${icon('chevron-down')}`;
     $('new-model').title = shown || known?.current || 'Model';
   }

@@ -15,6 +15,7 @@ for (const d of [state, bin, path.join(home, '.codex'), path.join(home, '.config
 // stand-ins: note how they were started, then wait like an agent at its prompt
 const agent = (name, extra = '') => fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${extra}printf '%s|%s|%s\\n' ${name} "$*" "$OPENCODE_CONFIG_CONTENT" >> ${JSON.stringify(log)}\nexec cat\n`, { mode: 0o755 });
 agent('claude'); agent('codex');
+agent('agy', `if [ "$1" = models ]; then printf 'Fetching available models...\\ngemini-4-neon\\tGemini 4 Neon\\ngemini-3.8-flash-low\\tGemini 3.8 Flash (Low)\\n'; exit 0; fi\n`);
 agent('opencode', `if [ "$1" = models ]; then printf 'opencode/big-pickle\\nanthropic/claude-sonnet-5-5\\nnot a model line\\n'; exit 0; fi\n`);
 fs.writeFileSync(path.join(home, '.codex', 'models_cache.json'), JSON.stringify({ models: [
   { slug: 'gpt-b', display_name: 'GPT B', visibility: 'list', priority: 2 },
@@ -26,6 +27,7 @@ fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
 fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ model: 'opus' }));
 fs.writeFileSync(path.join(home, '.config', 'opencode', 'opencode.json'), JSON.stringify({ model: 'down/endpoint' }));
 const profiles = Object.fromEntries(['claude', 'codex', 'opencode'].map((k) => [k, { command: path.join(bin, k), label: k }]));
+profiles.antigravity = { command: path.join(bin, 'agy'), label: 'antigravity' };
 fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], skipLogin: true, profiles: { shell: { command: '', label: 'shell' }, ...profiles } }));
 Object.assign(process.env, { HOME: home, SYNAPSE_HOME: state, SYNAPSE_CLOUD: 'http://127.0.0.1:9', SYNAPSE_DESKTOP_VIEW: 'gui', SHELL: '/bin/sh', PATH: `${bin}:${process.env.PATH}` });
 for (const key of Object.keys(process.env)) if (key.startsWith('SYNAPSE_SHOT') || key === 'SYNAPSE_DEBUG' || key === 'SYNAPSE_DEMO' || key === 'OPENCODE_CONFIG_CONTENT') delete process.env[key];
@@ -79,6 +81,11 @@ async function newSession(kind, model) {
   assert.equal(r.line[0], 'opencode'); assert.match(r.line[1], /--standalone/);
   assert.equal(JSON.parse(r.line[2]).model, 'opencode/big-pickle');
   console.log('PASS opencode: lists models by provider, started on a private server with the model');
+
+  r = await newSession('antigravity', 'Gemini 4 Neon');
+  assert.deepEqual(r.items, ['Default model', 'Gemini 4 Neon', 'Gemini 3.8 Flash (Low)'], 'agy models: id<tab>name lines, its progress line left out');
+  assert.equal(r.line[0], 'agy'); assert.match(r.line[1], /--model gemini-4-neon/);
+  console.log('PASS antigravity: lists agy models, started with --model gemini-4-neon');
 
   // the pick is remembered per agent; back to Default starts the agent as configured
   r = await newSession('claude', null);
