@@ -97,6 +97,10 @@ function claudeSlash(t) {
 // <pasted_content id="…"> … </pasted_content id="…">: keep what was pasted, drop the wrapper
 export const unwrapPaste = (t) => String(t ?? '').replace(/^[ \t]*<\\?\/?pasted_content(?: id="[^"]*")?>[ \t]*$/gm, '').replace(/\n{3,}/g, '\n\n');
 
+// what Synapse typed into an idle agent's prompt to hand it messages from other agents (the app's wakePrompt):
+// those show in the Messages tab, not as something you said in the conversation
+export const relayed = (t) => /^\s*Synapse: messages from other agents\b/.test(unwrapPaste(t));
+
 export function claudeMessage(e) {
   if (e.isMeta || e.isSidechain || e.isCompactSummary) return null;
   const content = e.message?.content;
@@ -104,7 +108,7 @@ export function claudeMessage(e) {
     const parts = typeof content === 'string' ? [content]
       : Array.isArray(content) ? content.filter((b) => b.type === 'text').map((b) => b.text) : [];
     const text = parts.map((t) => claudeSlash(t) ?? t).filter((t) => !NOISE.test(t.trim())).map(unwrapPaste).join('\n').trim();
-    return text ? { role: 'user', text, ts: e.timestamp } : null;
+    return text && !relayed(text) ? { role: 'user', text, ts: e.timestamp } : null;
   }
   if (e.type === 'assistant' && Array.isArray(content)) {
     const parts = [];
@@ -133,7 +137,7 @@ export function codexMessage(e) {
   }
   if (p.type === 'message' && (p.role === 'user' || p.role === 'assistant')) {
     const text = (p.content || []).map((c) => c.text || '').join('\n').trim();
-    if (!text || NOISE.test(text)) return null;
+    if (!text || NOISE.test(text) || (p.role === 'user' && relayed(text))) return null;
     return { role: p.role, text, ts: e.timestamp };
   }
   if (p.type === 'function_call' || p.type === 'custom_tool_call') {
@@ -277,7 +281,7 @@ function readOpenCode(transcript, from) {
       const role = v2 ? r.type : d.role;
       const ps = v2 ? d.content || [] : parts.get(r.id) || [];
       const text = (v2 && role === 'user' ? d.text || '' : ps.filter((p) => p.type === 'text' && !p.synthetic && !p.ignored).map((p) => p.text || '').join('\n')).trim();
-      if (role === 'user') { if (text && !NOISE.test(text)) all.push({ role, text, ts: r.time_created }); continue; }
+      if (role === 'user') { if (text && !NOISE.test(text) && !relayed(text)) all.push({ role, text, ts: r.time_created }); continue; }
       if (role !== 'assistant') continue;
       const tools = ps.filter((p) => p.type === 'tool').map((p) => toolLine(v2 ? p.name : p.tool, p.state?.input));
       // a model that fails (an endpoint down, a key expired) leaves no text, only the error: show it, or the chat just waits

@@ -42,7 +42,7 @@ const clip = (text) => {
   const cut = line.slice(0, 64); const space = cut.lastIndexOf(' ');
   return `${(space > 40 ? cut.slice(0, space) : cut).replace(/[\s,.;:]+$/, '')}…`;
 };
-const ownWords = (text) => typeof text === 'string' && text.trim() && !/^\s*(<|#\s*AGENTS\.md|\[Request interrupted|Caveat:)/.test(text);
+const ownWords = (text) => typeof text === 'string' && text.trim() && !/^\s*(<|#\s*AGENTS\.md|\[Request interrupted|Caveat:|Synapse: messages from other agents)/.test(text);
 // the model a session runs, from its newest transcript entry: claude-opus-5-5 reads "Opus 5.5"
 export function modelName(id) {
   const m = String(id || '').match(/^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/);
