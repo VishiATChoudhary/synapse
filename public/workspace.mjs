@@ -2075,10 +2075,12 @@ function initialize() {
     scroller.setAttribute('aria-busy', 'false');
     const data = cached.data, records = messageRecords(data);
     if (tab === 'conversation' && typeof data.terminal === 'string') {
-      // an agent with no conversation yet (Codex writes none before the first prompt) is ready for it: its welcome
-      // screen is noise. The terminal shows only while the agent asks something there (an update or trust question)
+      // Codex with no conversation yet (it writes none before the first prompt) is ready for it: its welcome screen is
+      // noise. The terminal shows only while it asks something there (an update or trust question). Other agents
+      // land here before Synapse has matched them to their transcript (a resumed Claude, say): their terminal is the
+      // only view of the conversation, so it stays
       const asking = /Update available|Update now|Do you trust|trust the (?:files|contents)|Press enter|[›❯>]\s*1\.\s|\(y\/n\)|sign in|log in/i.test(data.terminal);
-      const ready = agent.kind !== 'shell' && !agent.exited && !asking && data.terminal.trim().length > 0;
+      const ready = agent.kind === 'codex' && !agent.exited && !asking && data.terminal.trim().length > 0;
       const working = agent.status === 'busy';
       const signature = selectedId + ':' + (ready ? `ready:${working}` : hash(data.terminal));
       if (ready && (list.dataset.signature !== signature || reset)) {
