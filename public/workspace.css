@@ -758,6 +758,13 @@ body:not(.sidebar-sorting) .project-group.folded:not(.hover-off):is(:hover, :has
 .changes-chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: var(--radius-pill); font-size: var(--text-xs); color: var(--color-secondary); background: var(--color-hover); }
 .changes-chip:hover { background: var(--color-selected); color: var(--color-ink); }
 .changes-chip .icon { width: 12px; height: 12px; }
+.branch-pill { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 300px; height: 26px; padding: 0 9px; border: 0; border-radius: var(--radius-pill); font: inherit; font-size: var(--text-xs); color: var(--color-secondary); background: var(--color-hover); cursor: pointer; }
+.branch-pill:hover { background: var(--color-selected); color: var(--color-ink); }
+.branch-pill .icon { width: 12px; height: 12px; flex: none; }
+.branch-pill .branch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, ui-monospace, monospace); }
+.branch-tag { flex: none; padding: 1px 6px; border-radius: var(--radius-pill); background: var(--color-selected); color: var(--color-secondary); font-size: 10px; }
+.branch-tag.local { color: oklch(55% 0.13 60); background: oklch(95% 0.04 70); }
+@media (max-width: 760px) { .branch-pill .branch-tag { display: none; } }
 .add { color: var(--color-success); font-variant-numeric: tabular-nums; }
 .del { color: var(--color-error, #e5484d); font-variant-numeric: tabular-nums; }
 .branch-row { display: flex; align-items: center; gap: 8px; font-size: var(--text-base); margin-bottom: 6px; }

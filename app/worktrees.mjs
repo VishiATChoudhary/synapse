@@ -215,7 +215,10 @@ export function changes(dir) {
     try { for (const line of git(dir, ['diff', '--numstat', `${base}...HEAD`]).split('\n').filter(Boolean)) { const [a, d] = line.split('\t'); baseAdd += NUM(a); baseDel += NUM(d); } } catch { base = null; }
   } else base = null;
   let remote = false; try { remote = !!git(dir, ['remote']); } catch {}
-  return { git: true, branch, upstream, ahead, behind, remote, files, add: files.reduce((n, f) => n + f.add, 0), del: files.reduce((n, f) => n + f.del, 0), base, baseAdd, baseDel };
+  // a linked worktree has its own git dir inside the main repo's; a branch with no upstream may still be on origin
+  let worktree = false; try { worktree = path.resolve(dir, git(dir, ['rev-parse', '--git-dir'])) !== path.resolve(dir, git(dir, ['rev-parse', '--git-common-dir'])); } catch {}
+  const published = !!upstream || (!!branch && has(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`]));
+  return { git: true, branch, upstream, worktree, published, ahead, behind, remote, files, add: files.reduce((n, f) => n + f.add, 0), del: files.reduce((n, f) => n + f.del, 0), base, baseAdd, baseDel };
 }
 export function commitAll(dir, message) {
   const text = String(message || '').trim();

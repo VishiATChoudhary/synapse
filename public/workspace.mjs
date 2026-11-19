@@ -1687,6 +1687,17 @@ function initialize() {
     const n = c?.git ? c.files.length : 0;
     chip.hidden = !n;
     if (n) chip.innerHTML = `${icon('branch')}<span>${n} file${n === 1 ? '' : 's'}</span> ${plusMinus(c.add, c.del)}`;
+    // the branch this session works on, top right: a worktree or the main checkout, and whether it is only local
+    const pill = $('branch-pill');
+    pill.hidden = !c?.git;
+    if (c?.git) {
+      const tags = [c.worktree && ['worktree', 'Worktree: its own folder, separate from the main checkout'],
+        !c.published && c.remote && c.branch && ['local only', 'Only on this machine: not pushed to the remote yet'],
+        !c.remote && ['no remote', 'This repository has no remote'],
+        c.published && c.ahead && [`↑${c.ahead}`, `${c.ahead} commit${c.ahead === 1 ? '' : 's'} not pushed`]].filter(Boolean);
+      pill.innerHTML = `${icon('branch')}<span class="branch-name">${escapeHtml(c.branch || 'detached HEAD')}</span>${tags.map(([t, tip]) => `<span class="branch-tag${t === 'local only' ? ' local' : ''}" title="${escapeHtml(tip)}">${escapeHtml(t)}</span>`).join('')}`;
+      pill.title = `${c.branch || 'Detached HEAD'}${c.worktree ? ' · worktree' : ' · main checkout'}${c.upstream ? ` · tracks ${c.upstream}` : c.published ? ' · on origin' : c.remote ? ' · only local' : ''}\nClick for changes`;
+    }
   }
   function changesSection(agent) {
     if (!embedded || !agent.owned) return '';
@@ -2352,7 +2363,7 @@ function initialize() {
     const agent = byId.get(selectedId);
     $('message-input').placeholder = !$('approval-card').hidden && approvalFor === agent?.id ? 'Or write a message for after you answer…' : agent ? (agent.owned ? 'Ask anything. @ agents, / commands' : `Message ${agent.name}…`) : 'Message your agent…';
     $('attach-files').hidden = !agent?.owned;
-    if (agent?.owned) loadChanges(agent).then(paintChangesChip); else $('changes-chip').hidden = true;
+    if (agent?.owned) loadChanges(agent).then(paintChangesChip); else { $('changes-chip').hidden = true; $('branch-pill').hidden = true; }
     const waitingNow = agent?.owned && !agent.exited && (['waiting', 'needs_input'].includes(agent.status) || (!agent.backendId && agent.kind && agent.kind !== 'shell'));
     if (waitingNow ? approvalFor !== agent.id && approvalPolling !== agent.id : approvalFor) paintApproval();
     $('message-input').setAttribute('aria-label', agent ? `Message ${agent.name}` : 'Message this agent');
@@ -3727,7 +3738,7 @@ function initialize() {
     if (button.dataset.approvalNav !== undefined) return answerApproval(null, { nav: Number(button.dataset.approvalNav) });
     if (button.dataset.git) return gitAction(button.dataset.git);
     if (button.dataset.changeFile) { const agent = byId.get(selectedId); return openFile(button.dataset.changeFile, agent?.cwd); }
-    if (button.id === 'changes-chip') { inspectorOpen = true; setStorage('synapse-inspector', 'open'); inspectorFile = null; inspectorSignature = ''; syncInspector(); return; }
+    if (button.id === 'changes-chip' || button.id === 'branch-pill') { inspectorOpen = true; setStorage('synapse-inspector', 'open'); inspectorFile = null; inspectorSignature = ''; syncInspector(); return; }
     if (button.dataset.workToggle) {
       const key = button.dataset.workToggle, open = !openFolds.has(key);
       open ? openFolds.add(key) : openFolds.delete(key);

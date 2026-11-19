@@ -256,6 +256,18 @@ async function reach(a, b) {
   await click('[data-action="close-inspector"]');
   console.log('PASS Changes panel: chip, changed files, commit from the GUI');
 
+  // the branch, top right: its name, and "local only" until it is on the remote
+  const branchName = execFileSync('git', ['-C', repo, 'branch', '--show-current'], { encoding: 'utf8' }).trim();
+  const pill = () => ui(`(() => { const p = document.querySelector('#branch-pill'); return p.hidden ? '' : p.textContent; })()`);
+  await until(async () => (await pill()).includes(branchName) && (await pill()).includes('no remote'), 'branch pill shows the branch, no remote');
+  const bare = path.join(fixture, 'origin.git');
+  execFileSync('git', ['init', '-q', '--bare', bare]); execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', bare]);
+  fs.writeFileSync(path.join(repo, 'more.txt'), 'x\n'); // new activity so the GUI reads the checkout again
+  await until(async () => (await pill()).includes('local only'), 'a branch not on the remote is local only');
+  execFileSync('git', ['-C', repo, 'push', '-q', '-u', 'origin', branchName]); fs.rmSync(path.join(repo, 'more.txt'));
+  await until(async () => { const t = await pill(); return t.includes(branchName) && !t.includes('local only') && !t.includes('worktree'); }, 'pushed: no longer local only');
+  console.log('PASS branch pill: name, no remote, local only, pushed');
+
   // Snooze: right-click a session, snooze it, it steps into the Snoozed shelf; Wake brings it back
   await ui(`document.querySelector(${JSON.stringify(session('second'))}).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 200 }))`);
   await until(() => ui(`[...document.querySelectorAll('.pop-menu button')].some((b) => b.textContent === 'Snooze 1 hour')`), 'row menu offers snooze');
