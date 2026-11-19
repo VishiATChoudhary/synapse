@@ -932,14 +932,34 @@ export function findAgent(agents, query) {
 // `label` is what is shown (a name given in the canvas or with `synapse rename-project` wins),
 // `autoLabel` is the generated one. `worktree` is set when cwd is in a linked worktree.
 const projectCache = new Map();
+// Where a folder's repository is, read from the files git keeps (no git process): the checkout's top, its git dir,
+// the repo's shared git dir and the branch checked out ('HEAD' when detached). null outside a repository.
+export function gitLocate(dir) {
+  let d; try { d = fs.realpathSync(dir); } catch { return null; }
+  if (/[\\/]\.git(?:[\\/]|$)/.test(d)) return null; // inside a git dir, not a checkout
+  for (;;) {
+    const dot = path.join(d, '.git');
+    let st = null; try { st = fs.statSync(dot); } catch {}
+    if (st) {
+      let gitDir = dot;
+      if (st.isFile()) { const m = fs.readFileSync(dot, 'utf8').match(/^gitdir:\s*(.+)$/m); if (!m) return null; gitDir = path.resolve(d, m[1].trim()); }
+      let common = gitDir; try { common = path.resolve(gitDir, fs.readFileSync(path.join(gitDir, 'commondir'), 'utf8').trim()); } catch {}
+      let head; try { head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim(); } catch { return null; } // a worktree whose repo is gone
+      const branch = head.startsWith('ref: refs/heads/') ? head.slice(16) : 'HEAD';
+      return { top: d, gitDir, common, branch };
+    }
+    const up = path.dirname(d); if (up === d) return null; d = up;
+  }
+}
+
 export function projectOf(cwd) {
   let p = projectCache.get(cwd);
   if (!p) {
     let key = null, label = path.basename(cwd), worktree = null;
     try {
-      // path.resolve: git answers C:/forward/slashes on Windows, everything else there uses backslashes
-      const [top, common] = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'],
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).trim().split('\n').map((p) => (p ? path.resolve(p) : p));
+      // from the files git keeps, not a git process: this ran for every folder while sessions came back at launch
+      const g = gitLocate(cwd); if (!g) throw new Error('not a repository');
+      const { top, common } = g;
       key = path.basename(common) === '.git' ? path.dirname(common) : common;
       label = path.basename(key);
       if (top && top !== key) worktree = { path: top, name: path.basename(top) }; // a linked worktree, not the repo's own folder

@@ -2041,6 +2041,20 @@ const SETTINGS_PANES = [
   ['general', 'General', '◐'], ['notifications', 'Notifications', '◔'], ['agents', 'Agents', '✳'], ['workspaces', 'Workspaces', '▤'], ['connectors', 'Connectors', '⌁'], ['logins', 'Logins', '⚿'],
   ['appearance', 'Appearance', '◑'], ['shortcuts', 'Shortcuts', '⌘'], ['phone', 'Phone', '◫'], ['people', 'People & agent talk', '◎'],
 ];
+// line icons for the settings sections (the GUI's own style: 24 grid, 1.6 stroke)
+const SET_ICONS = {
+  general: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  notifications: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
+  agents: '<path d="M12 3.5l1.7 5L19 10l-5.3 1.6L12 17l-1.7-5.4L5 10l5.3-1.5z"/><path d="M18.5 15.5l.6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6z"/>',
+  workspaces: '<path d="M3 7V5a2 2 0 0 1 2-2h4l3 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',
+  connectors: '<path d="M9 2.5v4.5M15 2.5v4.5M6 7h12v3.5a6 6 0 0 1-12 0z"/><path d="M12 16.5v5"/>',
+  logins: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9m-4 4 3 3m-6 0 2 2"/>',
+  appearance: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none"/>',
+  shortcuts: '<path d="M9 6.5A2.5 2.5 0 1 0 6.5 9h11A2.5 2.5 0 1 0 15 6.5v11a2.5 2.5 0 1 0 2.5-2.5h-11A2.5 2.5 0 1 0 9 17.5z"/>',
+  phone: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18h2"/>',
+  people: '<circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M16 4.6a3.2 3.2 0 0 1 0 6.3M18 14.3c1.7.7 2.8 2.4 3 4.7"/>',
+};
+const setIcon = (key) => { const sp = el('span', 'set-glyph'); sp.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SET_ICONS[key] || ''}</svg>`; return sp; };
 async function openSettings(start) {
   let s = {};
   try { s = await synapse.settings.get(); } catch {}
@@ -2310,7 +2324,7 @@ async function openSettings(start) {
       group('Add a connector', card(connForm, connNote)),
       group('Your connectors', connList),
       group('Also set up in your agents', connOthers),
-      group('Claude plugins', plugIntro, card(plugSearch), plugList));
+      group('Claude plugins', plugIntro, plugSearch, plugList));
 
     // ---- Appearance, shortcuts, phone, people: drawn by their own helpers
     const looks = el('div', 'looks'); drawLooks(looks);
@@ -2355,9 +2369,9 @@ async function openSettings(start) {
     main.append(head, scroller);
     nav.append(el('div', 'set-nav-title', 'Settings'), search);
     const links = new Map();
-    for (const [key, label, glyph] of SETTINGS_PANES) {
+    for (const [key, label] of SETTINGS_PANES) {
       const b = el('button', 'set-link'); b.type = 'button'; b.dataset.settingsPane = key;
-      b.append(el('span', 'set-glyph', glyph), el('span', '', label));
+      b.append(setIcon(key), el('span', '', label));
       b.onclick = () => { search.value = ''; show(key); };
       nav.append(b); links.set(key, b);
     }

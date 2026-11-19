@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
-import { FILES, readJSON, listAgents, readAgentMessages, projectOf, projectOfAgent, transcriptFile, colorOf, unwrapPaste } from './lib.mjs';
+import { FILES, readJSON, gitLocate, listAgents, readAgentMessages, projectOf, projectOfAgent, transcriptFile, colorOf, unwrapPaste } from './lib.mjs';
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
@@ -15,8 +15,7 @@ function discoverProjects() {
     const p = projectOf(ws);
     let g = groups.get(p.key);
     if (!g) { g = { key: p.key, label: p.label, path: p.key.startsWith('project:') ? ws : p.key, color: colorOf(p.key), worktrees: [] }; groups.set(p.key, g); }
-    let branch = '';
-    try { branch = git(ws, ['rev-parse', '--abbrev-ref', 'HEAD']); } catch {}
+    const branch = gitLocate(ws)?.branch || ''; // read from .git/HEAD: this runs every second for every workspace
     let real = ws;
     try { real = fs.realpathSync(ws); } catch {}
     g.worktrees.push({ path: ws, branch, name: c.worktreeNames?.[ws] || path.basename(ws), home: ws === g.path || real === g.path, // the repo's own folder, not a worktree

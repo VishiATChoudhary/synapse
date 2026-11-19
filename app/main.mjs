@@ -7,11 +7,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
-import { git, listChoices, listWorktrees, createWorktree, openWorktree, deleteWorktree, safeDeleteWorktree, fetchBranches, pullRequests, choicePullRequest, changes, commitAll, pushBranch, pullRequest } from './worktrees.mjs';
+import { git, listChoices, listWorktrees, createWorktree, openWorktree, deleteWorktree, safeDeleteWorktree, fetchBranches, pullRequests, choicePullRequest, changesAsync, commitAll, pushBranch, pullRequest } from './worktrees.mjs';
 import * as saved from '../saved.mjs';
-import { DATA, FILES, WIN, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, readAgentMessages, takeInbox } from '../lib.mjs';
+import { DATA, FILES, WIN, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, readAgentMessages, takeInbox, gitLocate } from '../lib.mjs';
 import { createEdge, allowTalkRequest, dismissTalkRequest, setMode, removeEdge } from '../ops.mjs';
 import { openRequests, talkPerHour, talkModel, clampPerHour } from '../talk.mjs';
 import { isConnected, sharedWorkspaces, stopWorkspace } from '../remote.mjs';
@@ -33,7 +33,7 @@ if (process.env.SYNAPSE_USER_DATA) app.setPath('userData', path.resolve(process.
 const SHELL = WIN ? 'powershell.exe' : process.env.SHELL || '/bin/zsh';
 const DEMO = process.argv.includes('--demo');
 const discovery = createDiscovery({ projects: true });
-await discovery.refresh();
+discovery.refresh().catch(() => {}); // not awaited: the window comes first; handle('state') waits for a scan itself
 // A new install has no app.json yet: only this app creates it, so its absence at launch means a first run.
 const FIRST_RUN = !fs.existsSync(FILES.app);
 // What the app showed once (the intro, the onboarding), in a file nothing else writes. In app.json a settings
@@ -182,13 +182,11 @@ function knownWorkspaces() {
   const out = new Set();
   for (const p of seen) {
     try { if (!fs.statSync(p).isDirectory()) continue; } catch { continue; }
-    let top = p;
-    try { top = git(p, ['rev-parse', '--show-toplevel']); } catch {}
+    // from the files git keeps, not two git processes per folder (166 folders took 3s of a blocked main thread)
+    const g = gitLocate(p), top = g?.top || p;
     out.add(top);
-    try {
-      const repo = git(top, ['rev-parse', '--path-format=absolute', '--git-common-dir']).replace(/\/\.git\/?$/, '');
-      if (repo !== top && fs.existsSync(repo)) out.add(repo);
-    } catch {}
+    const repo = g && path.basename(g.common) === '.git' ? path.dirname(g.common) : null;
+    if (repo && repo !== top && fs.existsSync(repo)) out.add(repo);
   }
   out.delete(os.homedir());
   return [...out];
@@ -202,7 +200,7 @@ function scanLibrary(force) {
   lastScan = Date.now();
   for (const ws of knownWorkspaces()) try { linkIntoLibrary(ws); } catch {}
 }
-setTimeout(() => scanLibrary(true), 1000);
+setTimeout(() => scanLibrary(true), 30_000); // well after start: it walks every known folder
 // What the library tab lists: every folder in WS_HOME, links resolved, dangling ones skipped.
 function library() {
   scanLibrary();
@@ -305,16 +303,19 @@ const INHERITED = /^(CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_P
 // An app started from the Dock has launchd's bare PATH, and the login shell the pty runs never reads
 // .zshrc, which is where PATH usually grows (claude's installer adds ~/.local/bin there). Ask an interactive
 // login shell once for the PATH a terminal would have had.
-let shellPath;
-function userPath() {
-  if (shellPath !== undefined) return shellPath;
-  if (WIN) return (shellPath = null); // Windows hands GUI apps the same PATH a terminal gets
-  try {
-    const out = execFileSync(SHELL, ['-ilc', 'printf "\\0%s\\0" "$PATH"'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, TERM: 'dumb' } });
-    shellPath = out.split('\0')[1] || null;
-  } catch { shellPath = null; }
-  return shellPath;
-}
+// The shell takes up to a second (it blocked the app at start): it runs in the background at launch, the last
+// answer is kept in ~/.synapse so the next launch has it at once, and a terminal waits for it only the first time.
+const SHELL_PATH_FILE = path.join(DATA, 'shell-path.json');
+let shellPath = WIN ? null : readJSON(SHELL_PATH_FILE, {}).path;
+const shellPathReady = WIN ? Promise.resolve(null) : new Promise((resolve) => {
+  const child = execFile(SHELL, ['-ilc', 'printf "\\0%s\\0" "$PATH"'], { encoding: 'utf8', timeout: 5000, env: { ...process.env, TERM: 'dumb' } }, (err, out) => {
+    const found = err ? null : String(out).split('\0')[1] || null;
+    if (found) { shellPath = found; writeJSON(SHELL_PATH_FILE, { path: found }); } else if (shellPath === undefined) shellPath = null;
+    resolve(shellPath);
+  });
+  child.stdin?.end(); // an interactive shell would otherwise wait on its input until the timeout
+});
+function userPath() { return shellPath ?? null; }
 function cleanEnv() {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !INHERITED.test(k)));
   const seen = new Set();
@@ -333,6 +334,7 @@ const quietCodex = (kind, command) => (kind === 'codex' && command ? command.rep
 
 async function spawnPty({ cwd, kind, command, cols = 120, rows = 36, extraEnv = {} }) {
   await integrationSetup;
+  if (shellPath === undefined) await shellPathReady; // first launch ever: the PATH a terminal would have
   command = quietCodex(kind, command);
   const id = String(nextPty++);
   const env = {
@@ -1378,7 +1380,7 @@ handle('files:save', ({ name, data }) => {
   fs.writeFileSync(file, bytes);
   return { path: file };
 });
-handle('git:changes', async ({ dir }) => changes(String(dir)));
+handle('git:changes', async ({ dir }) => changesAsync(String(dir)));
 handle('git:commit', async ({ dir, message }) => commitAll(String(dir), message));
 handle('git:push', async ({ dir }) => pushBranch(String(dir)));
 handle('git:pr', async ({ dir }) => { const r = await pullRequest(String(dir)); if (/^https:\/\/github\.com\//.test(r.url)) shell.openExternal(r.url); return r; });

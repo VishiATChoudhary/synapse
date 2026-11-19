@@ -18,11 +18,13 @@ import * as todos from './todos.mjs';
 
 const PORT = Number(process.env.PORT || 4747);
 const discovery = createDiscovery();
-await discovery.refresh();
+// listen first: /api/state waits for a scan itself, so the app's GUI is not held up by the first full one
+const firstScan = discovery.refresh().catch(() => {});
 const agents = () => discovery.agents;
 
 // Seed the demo state once: links and a few messages between the fixture agents.
 if (process.env.SYNAPSE_DEMO && !fs.existsSync(FILES.edges)) {
+  await firstScan;
   const { DEMO_EDGES, DEMO_MESSAGES, DEMO_LAYOUT } = await import('./demo.mjs');
   const all = agents();
   const by = (n) => all.find((a) => a.name === n);
@@ -173,6 +175,7 @@ async function handleRequest(req, res) {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname;
   res.setHeader('x-content-type-options', 'nosniff');
+  if (p.startsWith('/api/')) await firstScan; // the page itself loads meanwhile
   const hostname = new URL(`http://${req.headers.host || 'localhost'}`).hostname;
   if (!['localhost', '127.0.0.1', '[::1]'].includes(hostname)) return json(res, 403, { error: 'Use the local Synapse address.' });
   // Browser-originated writes must come from this local app, including the legacy canvas.

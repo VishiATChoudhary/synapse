@@ -220,6 +220,42 @@ export function changes(dir) {
   const published = !!upstream || (!!branch && has(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`]));
   return { git: true, branch, upstream, worktree, published, ahead, behind, remote, files, add: files.reduce((n, f) => n + f.add, 0), del: files.reduce((n, f) => n + f.del, 0), base, baseAdd, baseDel };
 }
+const agit = async (cwd, args) => {
+  try { return (await exec('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 5000, maxBuffer: 32 << 20 })).stdout.trim(); }
+  catch (e) { throw new Error((e.stderr || e.message || '').toString().trim()); }
+};
+const ahas = async (cwd, args) => { try { await agit(cwd, args); return true; } catch { return false; } };
+// the same, without blocking: the app's main process runs this each time the GUI shows a session
+export async function changesAsync(dir) {
+  if (!await ahas(dir, ['rev-parse', '--is-inside-work-tree'])) return { git: false };
+  const branch = await agit(dir, ['branch', '--show-current']) || null;
+  const hasHead = await ahas(dir, ['rev-parse', '--verify', 'HEAD']);
+  const stat = new Map();
+  if (hasHead) for (const line of (await agit(dir, ['diff', '--numstat', 'HEAD', '--'])).split('\n').filter(Boolean)) {
+    const [a, d, ...p] = line.split('\t'); stat.set(p.join('\t'), [NUM(a), NUM(d)]);
+  }
+  // raw, not trimmed: a status line starts with a meaningful space (" M file")
+  const raw = (await exec('git', ['-C', dir, 'status', '--porcelain=v1', '--untracked-files=all'], { encoding: 'utf8', timeout: 5000, maxBuffer: 32 << 20 })).stdout;
+  const files = raw.split('\n').filter(Boolean).slice(0, 500).map((line) => {
+    const code = line.slice(0, 2), rest = line.slice(3), file = rest.includes(' -> ') ? rest.split(' -> ').pop() : rest;
+    const clean = file.replace(/^"|"$/g, '');
+    const [add, del] = code === '??' ? [lineCount(path.join(dir, clean)), 0] : stat.get(clean) || [0, 0];
+    return { path: clean, status: code === '??' ? 'A' : code.trim()[0] || 'M', add, del };
+  });
+  let upstream = null, ahead = 0, behind = 0, base = null, baseAdd = 0, baseDel = 0;
+  try { upstream = await agit(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']); } catch {}
+  if (upstream) { try { [behind, ahead] = (await agit(dir, ['rev-list', '--left-right', '--count', '@{u}...HEAD'])).split(/\s+/).map(Number); } catch {} }
+  try { base = await agit(dir, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']); } catch {}
+  if (!base) for (const b of ['origin/main', 'origin/master', 'main', 'master']) if (await ahas(dir, ['rev-parse', '--verify', '--quiet', b])) { base = b; break; }
+  if (base && hasHead && base.replace(/^origin\//, '') !== branch) {
+    try { for (const line of (await agit(dir, ['diff', '--numstat', `${base}...HEAD`])).split('\n').filter(Boolean)) { const [a, d] = line.split('\t'); baseAdd += NUM(a); baseDel += NUM(d); } } catch { base = null; }
+  } else base = null;
+  let remote = false; try { remote = !!await agit(dir, ['remote']); } catch {}
+  // a linked worktree has its own git dir inside the main repo's; a branch with no upstream may still be on origin
+  let worktree = false; try { worktree = path.resolve(dir, await agit(dir, ['rev-parse', '--git-dir'])) !== path.resolve(dir, await agit(dir, ['rev-parse', '--git-common-dir'])); } catch {}
+  const published = !!upstream || (!!branch && await ahas(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`]));
+  return { git: true, branch, upstream, worktree, published, ahead, behind, remote, files, add: files.reduce((n, f) => n + f.add, 0), del: files.reduce((n, f) => n + f.del, 0), base, baseAdd, baseDel };
+}
 export function commitAll(dir, message) {
   const text = String(message || '').trim();
   if (!text) throw new Error('Write a commit message first.');
