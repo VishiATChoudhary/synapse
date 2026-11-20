@@ -2037,9 +2037,11 @@ function canvasMenu({ hit, agent, group, x, y, hiddenCount }, r = $('#canvas-fra
 }
 // Settings: a window of its own, sections on the left (with a search across all of them), the chosen one on the right.
 // Every change saves to ~/.synapse/app.json as it is made.
-const SETTINGS_PANES = [
-  ['general', 'General', '◐'], ['notifications', 'Notifications', '◔'], ['agents', 'Agents', '✳'], ['workspaces', 'Workspaces', '▤'], ['cleanup', 'Cleanup', '♻'], ['connectors', 'Connectors', '⌁'], ['logins', 'Logins', '⚿'],
-  ['appearance', 'Appearance', '◑'], ['shortcuts', 'Shortcuts', '⌘'], ['phone', 'Phone', '◫'], ['people', 'People & agent talk', '◎'],
+const SETTINGS_PANES = [ // key, label, glyph, the sidebar group it sits under (like T3 Code's settings)
+  ['general', 'General', '◐', ''], ['appearance', 'Appearance', '◑', ''], ['notifications', 'Notifications', '◔', ''], ['shortcuts', 'Shortcuts', '⌘', ''],
+  ['agents', 'Agents', '✳', 'Agents'], ['browser', 'Browser', '◎', 'Agents'], ['connectors', 'Connectors', '⌁', 'Agents'], ['logins', 'Logins', '⚿', 'Agents'],
+  ['workspaces', 'Workspaces', '▤', 'Code'], ['cleanup', 'Cleanup', '♻', 'Code'],
+  ['people', 'People & agent talk', '◎', 'People'], ['phone', 'Phone', '◫', 'People'],
 ];
 // line icons for the settings sections (the GUI's own style: 24 grid, 1.6 stroke)
 const SET_ICONS = {
@@ -2049,6 +2051,7 @@ const SET_ICONS = {
   workspaces: '<path d="M3 7V5a2 2 0 0 1 2-2h4l3 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',
   cleanup: '<path d="M4 7h16M9.5 7V4.5h5V7M6 7l1 12.5a1.5 1.5 0 0 0 1.5 1.4h7a1.5 1.5 0 0 0 1.5-1.4L18 7"/><path d="M10 11v6M14 11v6"/>',
   connectors: '<path d="M9 2.5v4.5M15 2.5v4.5M6 7h12v3.5a6 6 0 0 1-12 0z"/><path d="M12 16.5v5"/>',
+  browser: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.6 3.5 5.6 3.5 8.5s-1 5.9-3.5 8.5c-2.5-2.6-3.5-5.6-3.5-8.5s1-5.9 3.5-8.5"/>',
   logins: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9m-4 4 3 3m-6 0 2 2"/>',
   appearance: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none"/>',
   shortcuts: '<path d="M9 6.5A2.5 2.5 0 1 0 6.5 9h11A2.5 2.5 0 1 0 15 6.5v11a2.5 2.5 0 1 0 2.5-2.5h-11A2.5 2.5 0 1 0 9 17.5z"/>',
@@ -2145,10 +2148,13 @@ async function openSettings(start) {
     pane('agents', null,
       group('Integrations', card(row('Agent integrations', 'Add Synapse tools and prompt hooks to your agents’ settings. Existing files are backed up.', setupButton), setupReport)),
       group('Commands', el('p', 'set-desc set-pad', 'The command each agent starts with. New sessions use these; running ones keep theirs.'), commands),
-      group('Browser', row('Show the browser when an agent uses it', 'When an agent opens a page, its panel switches to the Browser tab so you can watch.', toggle(s.showBrowser !== false, async (on) => { await synapse.settings.set({ showBrowser: on }); toast(on ? 'The panel shows the browser when an agent opens a page' : 'The panel stays as it is when an agent opens a page'); })),
-        row('Ask before an agent opens a new site', 'Off: agents open any site without asking. Signing in with a saved login always asks.', toggle(s.browserAskSites === true, async (on) => { await synapse.settings.set({ browserAskSites: on }); toast(on ? 'Agents ask before opening a site they have not used' : 'Agents open sites without asking'); })),
-        row('Agents only use the Synapse browser', 'Agents started here browse in Synapse, not in your Chrome tabs: Claude in Chrome, Playwright and similar tools are turned off for them.', toggle(s.synapseBrowserOnly !== false, async (on) => { await synapse.settings.set({ synapseBrowserOnly: on }); toast(on ? 'Agents browse in Synapse only' : 'Agents may also use your Chrome'); }))),
       group('Forks', row('Send forks right away', 'Send a fork’s question at once, instead of leaving it in the child’s prompt for you to send.', toggle(!!s.autoSendFork, async (on) => { M.autoSendFork = (await synapse.settings.set({ autoSendFork: on })).autoSendFork; toast(on ? 'Forks send their question right away' : 'A fork’s question waits in its prompt for you'); }))));
+
+    // ---- Browser: the browser inside Synapse that agents drive
+    pane('browser', 'The browser next to each chat. Agents open pages there, signed in as you; you can take over at any time.',
+      group('Agents browsing', row('Show the browser when an agent uses it', 'When an agent opens a page, its panel switches to the Browser tab so you can watch.', toggle(s.showBrowser !== false, async (on) => { await synapse.settings.set({ showBrowser: on }); toast(on ? 'The panel shows the browser when an agent opens a page' : 'The panel stays as it is when an agent opens a page'); })),
+        row('Ask before an agent opens a new site', 'Off: agents open any site without asking. Signing in with a saved login always asks.', toggle(s.browserAskSites === true, async (on) => { await synapse.settings.set({ browserAskSites: on }); toast(on ? 'Agents ask before opening a site they have not used' : 'Agents open sites without asking'); })),
+        row('Agents only use the Synapse browser', 'Agents started here browse in Synapse, not in your Chrome tabs: Claude in Chrome, Playwright and similar tools are turned off for them.', toggle(s.synapseBrowserOnly !== false, async (on) => { await synapse.settings.set({ synapseBrowserOnly: on }); toast(on ? 'Agents browse in Synapse only' : 'Agents may also use your Chrome'); }))));
 
     // ---- Workspaces
     const opener = el('select', 'set-input');
@@ -2167,14 +2173,30 @@ async function openSettings(start) {
     const HR = 3_600_000, DY = 24 * HR;
     const agoText = (t) => { const d = Date.now() - t; return d < HR ? 'just now' : d < DY ? `${Math.round(d / HR)} h ago` : `${Math.round(d / DY)} days ago`; };
     const span = (ms) => ms % DY ? `${Math.round(ms / HR)} hours` : ms === DY ? '1 day' : ms % (7 * DY) ? `${ms / DY} days` : ms === 7 * DY ? '1 week' : `${ms / (7 * DY)} weeks`;
-    const choose = (label, value, options, save) => {
-      const sel = el('select', 'set-input'); sel.setAttribute('aria-label', label);
+    // a choice: two to four short options are a segmented pill, more are a list. def: its default, and a changed
+    // value gets a small ↺ that puts it back
+    const choose = (label, value, options, save, def = undefined) => {
       if (!options.some(([v]) => String(v) === String(value))) options = [...options, [value, span(Number(value))]]; // set by hand in a file
-      for (const [v, text] of options) { const o = el('option', '', text); o.value = String(v); sel.append(o); }
-      sel.value = String(value);
-      let was = sel.value;
-      sel.onchange = async () => { try { await save(sel.value); was = sel.value; } catch (e) { sel.value = was; toast(e.message, true); } };
-      return sel;
+      const wrap = el('div', 'set-choice'), reset = el('button', 'set-reset'); reset.type = 'button'; reset.title = 'Reset to default'; reset.setAttribute('aria-label', `Reset ${label} to default`);
+      reset.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>';
+      let was = String(value), set;
+      const mark = () => { reset.hidden = def === undefined || String(def) === was; };
+      const commit = async (v) => { try { await save(v); was = String(v); set(was); mark(); } catch (e) { set(was); toast(e.message, true); } };
+      if (options.length <= 4 && options.every(([, t]) => t.length <= 22)) {
+        const seg = el('div', 'set-seg'); seg.setAttribute('role', 'radiogroup'); seg.setAttribute('aria-label', label);
+        for (const [v, text] of options) { const b = button(text, () => commit(String(v))); b.dataset.value = String(v); b.setAttribute('role', 'radio'); seg.append(b); }
+        set = (v) => seg.querySelectorAll('button').forEach((b) => { b.classList.toggle('on', b.dataset.value === v); b.setAttribute('aria-checked', String(b.dataset.value === v)); });
+        wrap.append(reset, seg);
+      } else {
+        const sel = el('select', 'set-input'); sel.setAttribute('aria-label', label);
+        for (const [v, text] of options) { const o = el('option', '', text); o.value = String(v); sel.append(o); }
+        set = (v) => { sel.value = v; };
+        sel.onchange = () => commit(sel.value);
+        wrap.append(reset, sel);
+      }
+      reset.onclick = () => commit(String(def));
+      set(was); mark();
+      return wrap;
     };
     let tidy = s.tidy || { idle: DY, archive: 3 * DY, close: 7 * DY };
     const saveTidy = async (patch) => { tidy = (await synapse.settings.set({ tidy: { ...tidy, ...patch } })).tidy; workspacePost({ type: 'synapse:tidy', tidy }); };
@@ -2211,13 +2233,13 @@ async function openSettings(start) {
     const never = [0, 'Never'];
     pane('cleanup', 'What Synapse does with agents and worktrees you have stopped using. Anything working or waiting for you is never touched.',
       group('Agents',
-        row('Done turns to Idle after', 'A finished agent shows Done until then.', choose('Done turns to Idle after', tidy.idle, [[HR, '1 hour'], [6 * HR, '6 hours'], [DY, '1 day'], [3 * DY, '3 days'], never], (v) => saveTidy({ idle: Number(v) }))),
-        row('Unused agents go to Archived after', 'Archived agents leave the sidebar list; they come back when they work again.', choose('Archive after', tidy.archive, [[DY, '1 day'], [3 * DY, '3 days'], [7 * DY, '1 week'], [14 * DY, '2 weeks'], never], (v) => saveTidy({ archive: Number(v) }))),
-        row('Unused agents end after', 'A session of ours closes; one in your own terminal has its process ended. Its chat stays on disk and can be resumed from Past chats.', choose('End after', tidy.close, [[3 * DY, '3 days'], [7 * DY, '1 week'], [14 * DY, '2 weeks'], [30 * DY, '30 days'], never], (v) => saveTidy({ close: Number(v) })))),
+        row('Done turns to Idle after', 'A finished agent shows Done until then.', choose('Done turns to Idle after', tidy.idle, [[HR, '1 hour'], [6 * HR, '6 hours'], [DY, '1 day'], [3 * DY, '3 days'], never], (v) => saveTidy({ idle: Number(v) }), DY)),
+        row('Unused agents go to Archived after', 'Archived agents leave the sidebar list; they come back when they work again.', choose('Archive after', tidy.archive, [[DY, '1 day'], [3 * DY, '3 days'], [7 * DY, '1 week'], [14 * DY, '2 weeks'], never], (v) => saveTidy({ archive: Number(v) }), 3 * DY)),
+        row('Unused agents end after', 'A session of ours closes; one in your own terminal has its process ended. Its chat stays on disk and can be resumed from Past chats.', choose('End after', tidy.close, [[3 * DY, '3 days'], [7 * DY, '1 week'], [14 * DY, '2 weeks'], [30 * DY, '30 days'], never], (v) => saveTidy({ close: Number(v) }), 7 * DY))),
       group('Worktrees',
-        row('Clean up worktrees unused for', 'Nothing typed, said or committed there for this long. The repo’s main checkout is never cleaned up.', choose('Clean up worktrees unused for', gcPolicy.after, [never, [DY, '1 day'], [3 * DY, '3 days'], [7 * DY, '1 week'], [14 * DY, '2 weeks'], [30 * DY, '30 days'], [90 * DY, '90 days']], (v) => saveGc({ after: Number(v) }))),
-        row('Cleaning up a worktree', 'Its sessions close and uncommitted work is committed to its branch first, either way. A push never forces, and never goes onto main: that goes to a synapse/parked/ branch instead.', choose('Cleaning up a worktree', gcPolicy.action, [['push', 'Pushes its branch, then removes it'], ['remove', 'Removes it, the branch stays here']], (v) => saveGc({ action: v }))),
-        row('Check', 'Without a remote the branch is only kept here. A push that fails leaves the worktree where it is.', choose('Check', gcPolicy.every, [[0, 'When Synapse starts'], [HR, 'Every hour'], [6 * HR, 'Every 6 hours'], [DY, 'Once a day']], (v) => saveGc({ every: Number(v) }))),
+        row('Clean up worktrees unused for', 'Nothing typed, said or committed there for this long. The repo’s main checkout is never cleaned up.', choose('Clean up worktrees unused for', gcPolicy.after, [never, [DY, '1 day'], [3 * DY, '3 days'], [7 * DY, '1 week'], [14 * DY, '2 weeks'], [30 * DY, '30 days'], [90 * DY, '90 days']], (v) => saveGc({ after: Number(v) }), 0)),
+        row('Cleaning up a worktree', 'Its sessions close and uncommitted work is committed to its branch first, either way. A push never forces, and never goes onto main: that goes to a synapse/parked/ branch instead.', choose('Cleaning up a worktree', gcPolicy.action, [['push', 'Push, then remove'], ['remove', 'Remove only']], (v) => saveGc({ action: v }), 'push')),
+        row('Check', 'Without a remote the branch is only kept here. A push that fails leaves the worktree where it is.', choose('Check', gcPolicy.every, [[0, 'At launch'], [HR, 'Hourly'], [6 * HR, 'Every 6 h'], [DY, 'Daily']], (v) => saveGc({ every: Number(v) }), 6 * HR)),
         gcRow),
       group('Your worktrees', card(gcList)));
 
@@ -2422,15 +2444,22 @@ async function openSettings(start) {
     // ---- the frame: nav (with search) and the pane
     const shell = el('div', 'settings'), nav = el('nav', 'set-nav'), main = el('div', 'set-main');
     const search = el('input', 'set-search'); search.type = 'search'; search.placeholder = 'Search settings'; search.spellcheck = false;
-    const head = el('div', 'set-head'), headTitle = el('h2', 'set-head-title'), closeBtn = button('×', close, 'set-close');
+    const head = el('div', 'set-head'), headTitle = el('h2', 'set-head-title'), closeBtn = button('', close, 'set-close');
+    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+    const crumb = el('span', 'set-crumb', 'Settings'), crumbSep = el('span', 'set-crumb-sep', '›');
     closeBtn.setAttribute('aria-label', 'Close settings'); closeBtn.title = 'Close  ·  esc';
-    head.append(headTitle, closeBtn);
+    head.append(crumb, crumbSep, headTitle, closeBtn);
     const scroller = el('div', 'set-scroll'); scroller.append(...Object.values(panes));
     const empty = el('p', 'set-empty', 'No setting matches.'); empty.hidden = true; scroller.append(empty);
     main.append(head, scroller);
-    nav.append(el('div', 'set-nav-title', 'Settings'), search);
+    const searchBox = el('label', 'set-search-box'); searchBox.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>';
+    searchBox.append(search, el('kbd', 'set-search-key', '/'));
+    nav.append(searchBox);
     const links = new Map();
-    for (const [key, label] of SETTINGS_PANES) {
+    let navGroup = '';
+    for (const [key, label, , groupName] of SETTINGS_PANES) {
+      if (groupName && groupName !== navGroup) nav.append(el('div', 'set-nav-group', groupName));
+      navGroup = groupName || navGroup;
       const b = el('button', 'set-link'); b.type = 'button'; b.dataset.settingsPane = key;
       b.append(setIcon(key), el('span', '', label));
       b.onclick = () => { search.value = ''; show(key); };
@@ -2445,14 +2474,14 @@ async function openSettings(start) {
       for (const [k, b] of links) b.setAttribute('aria-current', String(k === key));
       for (const n of scroller.querySelectorAll('.set-row, .set-group')) n.hidden = false;
       empty.hidden = true;
-      headTitle.textContent = SETTINGS_PANES.find(([k]) => k === key)[1];
+      headTitle.textContent = SETTINGS_PANES.find(([k]) => k === key)[1]; crumb.hidden = crumbSep.hidden = false;
       scroller.scrollTop = 0;
     }
     // search: every pane at once, only the rows that match, each under its section's name
     search.oninput = () => {
       const q = search.value.trim().toLowerCase();
       if (!q) return show(current);
-      headTitle.textContent = `Results for “${search.value.trim()}”`;
+      headTitle.textContent = `Results for “${search.value.trim()}”`; crumb.hidden = crumbSep.hidden = true;
       let any = false;
       for (const [k, p] of Object.entries(panes)) {
         p.classList.add('searching'); p.dataset.label = SETTINGS_PANES.find(([x]) => x === k)[1];
@@ -2471,6 +2500,8 @@ async function openSettings(start) {
       empty.hidden = any;
     };
     search.onkeydown = (e) => { if (e.key === 'Escape' && search.value) { e.stopPropagation(); search.value = ''; show(current); } };
+    // / or ⌘F searches (like T3 Code), unless you are typing in a field
+    shell.addEventListener('keydown', (e) => { if ((e.key === '/' && !e.target.matches('input, textarea, select')) || (e.key === 'f' && e.metaKey)) { e.preventDefault(); search.focus(); search.select(); } });
     shell.append(nav, main);
     body.append(shell);
     show(current);

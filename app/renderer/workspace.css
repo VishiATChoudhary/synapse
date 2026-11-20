@@ -218,3 +218,62 @@ body.gui-mode .modal { background: var(--color-scrim, rgba(0, 0, 0, .35)); backd
 .gc-sub { font-size: 12px; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gc-fate { flex: none; font-size: 12px; color: var(--color-muted); }
 .gc-row.due .gc-fate { color: var(--color-accent); font-weight: 500; }
+
+/* ---------- Settings, redrawn: T3 Code's layout in bencho's look (mockups/settings.html) ----------
+   A sidebar with a search pill and grouped links; a breadcrumb header; one readable column of sections, each a
+   stack of rounded pill rows (name left, control right); pill buttons, ink switches, segmented choices. */
+[data-kind="settings"] { border-radius: 22px; overflow: hidden; }
+.set-nav { padding: 14px 10px; gap: 1px; }
+.set-search-box { display: flex; align-items: center; gap: 8px; height: 36px; margin: 2px 2px 10px; padding: 0 10px 0 12px; border-radius: 999px; background: var(--color-hover); color: var(--color-muted); }
+.set-search-box:focus-within { box-shadow: 0 0 0 2px var(--color-accent-soft); }
+.modal .set-search-box .set-search { flex: 1; min-width: 0; margin: 0; padding: 0; border: 0; background: none; box-shadow: none; }
+.set-search-key { font: 500 11px var(--font-body); color: var(--color-muted); background: var(--color-panel); border-radius: 6px; padding: 1px 6px; }
+.set-nav-group { padding: 14px 12px 4px; font: 500 11.5px var(--font-body); color: var(--color-faint, var(--color-muted)); }
+.set-link { position: relative; height: 34px; padding: 0 12px; border-radius: 10px; }
+.set-link[aria-current='true'] { background: var(--color-selected, var(--color-hover)); }
+.set-link[aria-current='true']::before { content: ''; position: absolute; left: -10px; top: 9px; bottom: 9px; width: 3px; border-radius: 3px; background: var(--color-ink); }
+.set-link[aria-current='true'] .set-glyph { color: var(--color-ink); }
+.set-head { justify-content: flex-start; gap: 8px; height: 52px; padding: 0 12px 0 24px; }
+.set-crumb, .set-crumb-sep { color: var(--color-muted); font-size: var(--text-sm, 13px); }
+.set-crumb[hidden], .set-crumb-sep[hidden] { display: none; }
+.set-head-title { font: 500 var(--text-sm, 13px)/1 var(--font-body); }
+.set-close { margin-left: auto; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: var(--color-hover); }
+.set-scroll { padding: 6px 28px 40px; }
+.set-pane { max-width: 680px; margin: 0 auto; }
+.set-intro { margin: 22px 4px 0; font-size: var(--text-sm, 13px); color: var(--color-muted); }
+.set-group { margin-top: 28px; }
+.set-group-title { margin: 0 4px 10px; font: 600 15px var(--font-head, var(--font-body)); letter-spacing: 0; text-transform: none; color: var(--color-ink); }
+/* every row its own pill */
+.set-group > :not(.set-group-title, .set-pad) { background: var(--color-panel); border: 0; border-radius: 14px; }
+.set-group > :not(.set-group-title) + :not(.set-group-title, .set-pad) { margin-top: 6px; }
+.set-group > .set-row + .set-row, .set-group > .set-row + .set-seg { margin-top: 6px; border-radius: 14px; }
+.set-group > .set-row:has(+ .set-row), .set-group > .set-row:has(+ .set-seg) { border-radius: 14px; }
+.set-row { min-height: 52px; padding: 10px 10px 10px 16px; transition: background var(--dur-micro); }
+.set-group > .set-row:hover { background: color-mix(in srgb, var(--color-panel) 70%, var(--color-hover)); }
+.set-desc { font-size: 12.5px; color: var(--color-muted); }
+.set-card .set-row { background: none; }
+/* controls */
+.set-btn, [data-kind="settings"] .btn { padding: 7px 14px; border: 0; border-radius: 999px; background: var(--color-hover); }
+.set-btn:hover, [data-kind="settings"] .btn:hover { background: var(--color-border); }
+.set-btn.primary, [data-kind="settings"] .btn.sig { background: var(--color-ink); color: var(--color-paper); }
+.set-btn.primary:hover, [data-kind="settings"] .btn.sig:hover { background: var(--color-ink); opacity: .86; }
+.set-btn:disabled { opacity: .45; cursor: default; }
+.set-seg { padding: 3px; border-radius: 999px; background: var(--color-hover); }
+.set-seg .set-btn { padding: 5px 12px; border-radius: 999px; }
+.set-seg .set-btn.on { background: var(--color-ink); color: var(--color-paper); box-shadow: none; }
+.set-group > .set-seg-wrap { border-radius: 14px; }
+.set-seg-wrap .set-btn { border: 0; background: var(--color-hover); }
+.set-seg-wrap .set-btn.on { background: var(--color-ink); color: var(--color-paper); box-shadow: none; }
+.modal input.switch { width: 38px; background: var(--color-border-strong); transition: background .2s; }
+.modal input.switch::after { background: var(--color-paper); box-shadow: none; transition: transform .3s cubic-bezier(.24, 1.34, .38, 1); }
+.modal input.switch:checked { background: var(--color-ink); }
+.modal input.switch:checked::after { transform: translateX(16px); }
+/* a list: the value and a chevron, no box */
+.modal select.set-input { appearance: none; -webkit-appearance: none; padding: 6px 28px 6px 10px; border: 0; border-radius: 10px; background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E") no-repeat right 8px center / 14px; cursor: pointer; text-align: right; }
+.modal select.set-input:hover { background-color: var(--color-hover); }
+.modal select.set-input:focus { box-shadow: 0 0 0 2px var(--color-accent-soft); }
+.modal input.set-input:not(.set-search) { border-radius: 10px; border-color: var(--color-border); }
+.set-choice { display: flex; align-items: center; gap: 6px; }
+.set-reset { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; color: var(--color-muted); }
+.set-reset:hover { background: var(--color-hover); color: var(--color-ink); }
+.set-reset[hidden] { display: none; }

@@ -52,6 +52,11 @@ const js = code => win.webContents.executeJavaScript(code, true);
   await until(() => js(`document.querySelectorAll('.gc-row').length === 2`), 'both worktrees listed');
   assert.deepEqual(await js(`[...document.querySelectorAll('.gc-row')].map(r => [r.querySelector('.gc-name').textContent, r.classList.contains('due')])`), [['old', true], ['fresh', false]]);
   assert.match(await js(`[...document.querySelectorAll('.set-row')].find(r => r.textContent.includes('Run it now')).textContent`), /1 due now/);
+  if (process.env.SETTINGS_SHOT) { // pictures of Settings, for looking at them
+    win.setBounds({ width: 1300, height: 900 }); await sleep(500);
+    for (const p of ['cleanup', 'general', 'agents', 'browser']) { await js(`document.querySelector('[data-settings-pane="${p}"]').click()`); await sleep(400); require('fs').writeFileSync(`${process.env.SETTINGS_SHOT}-${p}.png`, (await win.webContents.capturePage()).toPNG()); }
+    await js(`document.querySelector('[data-settings-pane="cleanup"]').click()`); await sleep(300);
+  }
 
   await js(`[...document.querySelectorAll('.set-btn')].find(b => b.textContent === 'Clean up now').click()`);
   await until(() => js(`document.querySelectorAll('.gc-row').length === 1`), 'old worktree cleaned up');
