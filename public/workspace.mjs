@@ -278,6 +278,8 @@ export function sessionTree(agents) {
 const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   todo: '<rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
+  star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>',
+  shield: '<path d="M12 3.5 5 6v5.5c0 4.3 3 7.6 7 9 4-1.4 7-4.7 7-9V6z"/>',
   search: '<circle cx="10.7" cy="10.7" r="6.7"/><path d="m16 16 4.5 4.5"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   network: '<rect x="9" y="2" width="6" height="6" rx="1.5"/><rect x="2" y="16" width="6" height="6" rx="1.5"/><rect x="16" y="16" width="6" height="6" rx="1.5"/><path d="M12 8v4M5 16v-4h14v4"/>',
@@ -2775,34 +2777,131 @@ function initialize() {
     $('new-todo').hidden = !todo || newDraft.kind === 'shell';
     if (todo) $('new-todo').innerHTML = `${icon('todo')}<span class="new-todo-text">For your todo: ${escapeHtml(todo.text)}</span><button type="button" class="new-todo-clear" aria-label="Start without the todo" title="Start without the todo">${icon('x')}</button>`;
   }
-  // the model to start on (Claude, Codex, OpenCode): the agent's own default unless one is picked, remembered per agent
+  // The model picker (like T3 Code's): one button in the composer shows the agent, its model and effort; it opens a
+  // panel with the agents on a rail, their models in a searchable list (favorites starred), the model's effort
+  // levels, and the permission mode at the foot. Choices are remembered per agent; the agent's own default is used
+  // until one is picked. The rail replaces the separate agent button.
   const modelLists = new Map();
   const pickedModel = (kind) => getStorage(`synapse-new-model:${kind}`) || '';
+  const pickedEffort = (kind) => getStorage(`synapse-new-effort:${kind}`) || '';
+  const pickedMode = (kind) => getStorage(`synapse-new-mode:${kind}`) || '';
+  const favorites = () => { try { return new Set(JSON.parse(getStorage('synapse-model-favs', '[]'))); } catch { return new Set(); } };
+  const PICKER_KINDS = ['claude', 'codex', 'opencode', 'antigravity'];
   function loadModels(kind) {
+    if (!PICKER_KINDS.includes(kind)) return Promise.resolve({ models: [] });
     if (!modelLists.has(kind)) modelLists.set(kind, desktopCall('models', { kind }).catch(() => ({ models: [] })).then((r) => { modelLists.set(kind, r); if (newDraft.kind === kind) renderModel(); return r; }));
     return Promise.resolve(modelLists.get(kind));
   }
-  function renderModel() {
-    const kind = newDraft.kind, list = modelLists.get(kind);
-    if (!list) loadModels(kind);
-    const known = list && !(list instanceof Promise) ? list : null;
-    const picked = pickedModel(kind), shown = known?.models.find((m) => m.id === picked)?.label || picked;
-    $('new-model').hidden = !['claude', 'codex', 'opencode', 'antigravity'].includes(kind) || (known && !known.models.length);
-    $('new-model').innerHTML = `${icon('activity')}<span>${escapeHtml(shown || (known?.current ? `Default (${known.current})` : 'Default model'))}</span>${icon('chevron-down')}`;
-    $('new-model').title = shown || known?.current || 'Model';
+  const knownModels = (kind) => { const l = modelLists.get(kind); return l && !(l instanceof Promise) ? l : null; };
+  // the effort that applies: the one picked, if this model has it; else nothing (the model's own default)
+  function effortFor(kind, model) {
+    const e = pickedEffort(kind), list = knownModels(kind);
+    const m = list?.models.find((x) => x.id === (model ?? pickedModel(kind))) || (!pickedModel(kind) && list?.models[0]);
+    return e && m?.efforts?.some((x) => x.id === e) ? e : '';
   }
-  $('new-model').onclick = async () => {
-    const kind = newDraft.kind, r = await loadModels(kind), picked = pickedModel(kind);
-    const set = (id) => () => { setStorage(`synapse-new-model:${kind}`, id); renderModel(); $('new-input').focus(); };
-    const items = [{ label: r.current ? `Default (${r.current})` : 'Default model', hint: 'What the agent is set to use', icon: picked ? null : 'check', run: set('') }, '-'];
-    let group = null;
-    for (const m of r.models) {
-      const provider = kind === 'opencode' ? m.id.split('/')[0] : null;
-      if (provider && provider !== group) { group = provider; items.push({ heading: provider }); }
-      items.push({ label: provider ? m.id.slice(provider.length + 1) : m.label, hint: m.hint, icon: m.id === picked ? 'check' : null, run: set(m.id) });
+  function renderModel() {
+    const kind = newDraft.kind, profile = desktop.profiles[kind] || {};
+    if (PICKER_KINDS.includes(kind) && !modelLists.has(kind)) loadModels(kind);
+    const known = knownModels(kind), picked = pickedModel(kind);
+    const model = known?.models.find((m) => m.id === picked)?.label || picked || (known?.current ? known.current : 'Default');
+    const effort = effortFor(kind), effortLabel = effort && known?.models.find((m) => m.id === picked)?.efforts?.find((e) => e.id === effort)?.label;
+    $('new-agent').hidden = true;
+    const b = $('new-model'); b.hidden = false; b.classList.add('model-trigger');
+    const who = kind === 'shell' ? `<span class="mp-glyph">${icon('terminal')}</span>` : avatar({ kind, name: profile.label || kind });
+    b.innerHTML = `${who}<span class="mt-model">${escapeHtml(kind === 'shell' ? 'Shell' : PICKER_KINDS.includes(kind) ? model : profile.label || kind)}</span>${effortLabel ? `<span class="mt-effort">· ${escapeHtml(effortLabel)}</span>` : ''}${icon('chevron-down')}`;
+    b.title = `${profile.label || kind}${PICKER_KINDS.includes(kind) ? ` · ${model}` : ''}  ⇧⌘M`;
+  }
+  function openModelPicker() {
+    const anchor = $('new-model');
+    if (openMenu?.anchor === anchor) return closeMenu();
+    closeMenu();
+    const el = document.createElement('div'); el.className = 'model-picker'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Agent and model');
+    let kind = newDraft.kind, query = '', active = -1, col = 'list', modeOpen = false; // active -1: on the chosen model
+    const kinds = Object.keys(desktop.profiles);
+    const choose = (k) => { newDraft.kind = k; if (k !== 'shell') setStorage('synapse-new-kind', k); kind = k; query = ''; active = -1; renderNew(); paint(); };
+    const pickModel = (id) => { setStorage(`synapse-new-model:${kind}`, id); renderModel(); };
+    const close = () => { closeMenu(); $('new-input').focus(); };
+    function rows(list) {
+      const favs = favorites(), q = query.toLowerCase().split(/\s+/).filter(Boolean);
+      const all = [{ id: '', label: list.current ? `Default (${list.current})` : 'Default', hint: 'What the agent is set to use', efforts: list.models[0]?.efforts, defaultEffort: list.models[0]?.defaultEffort }, ...list.models];
+      const hit = (m) => q.every((w) => `${m.label} ${m.id} ${m.hint || ''}`.toLowerCase().includes(w));
+      const groups = [];
+      const fav = all.filter((m) => m.id && favs.has(`${kind}:${m.id}`) && hit(m));
+      if (fav.length) groups.push(['Favorites', fav]);
+      if (kind === 'opencode') {
+        const by = new Map(); for (const m of all.filter(hit)) { const g = m.id ? m.id.split('/')[0] : 'Default'; if (!by.has(g)) by.set(g, []); by.get(g).push(m); }
+        groups.push(...by);
+      } else groups.push([desktop.profiles[kind]?.label || kind, all.filter(hit)]);
+      return groups;
     }
-    dropdown($('new-model'), items, (() => { const b = $('new-model').getBoundingClientRect(); return { x: b.left, y: b.bottom + 6 }; })(), { search: r.models.length > 8 ? 'Search models' : '' });
-  };
+    function paint() {
+      const list = knownModels(kind), profile = desktop.profiles[kind] || {};
+      const rail = kinds.map((k) => `<button type="button" class="mp-agent${k === kind ? ' on' : ''}" data-kind="${escapeHtml(k)}" title="${escapeHtml(desktop.profiles[k]?.label || k)}">${k === 'shell' ? `<span class="mp-glyph">${icon('terminal')}</span>` : avatar({ kind: k, name: desktop.profiles[k]?.label || k })}</button>`).join('');
+      let middle, efforts = '';
+      if (!PICKER_KINDS.includes(kind)) middle = `<div class="mp-empty">${kind === 'shell' ? 'A shell in this folder.' : `${escapeHtml(profile.label || kind)} starts with its own model.`}</div>`;
+      else if (!list) { loadModels(kind).then(() => { if (openMenu?.el === el) paint(); }); middle = '<div class="mp-empty">Loading models…</div>'; }
+      else {
+        const groups = rows(list), flat = groups.flatMap(([, ms]) => ms), picked = pickedModel(kind), favs = favorites();
+        if (active < 0) active = Math.max(0, flat.findIndex((m) => m.id === picked));
+        active = Math.max(0, Math.min(active, flat.length - 1));
+        let i = 0;
+        const items = groups.map(([g, ms]) => `<div class="mp-heading">${escapeHtml(g)}</div>${ms.map((m) => `<button type="button" class="mp-model${m.id === picked ? ' on' : ''}${i === active && col === 'list' ? ' hot' : ''}" data-model="${escapeHtml(m.id)}" data-i="${i++}" title="${escapeHtml(m.hint || '')}">${avatar({ kind, name: profile.label || kind })}<span class="mp-name">${escapeHtml(kind === 'opencode' && m.id ? m.id.split('/').slice(1).join('/') : m.label)}</span>${m.id === picked ? icon('check') : ''}${m.id ? `<span class="mp-star${favs.has(`${kind}:${m.id}`) ? ' on' : ''}" data-star="${escapeHtml(m.id)}" title="Favorite">${icon('star')}</span>` : ''}</button>`).join('')}`).join('');
+        middle = `<label class="mp-search">${icon('search')}<input type="search" placeholder="Search ${escapeHtml(profile.label || kind)} models…" spellcheck="false" value="${escapeHtml(query)}"></label><div class="mp-list">${items || '<div class="mp-empty">No model matches.</div>'}</div>`;
+        const current = list.models.find((m) => m.id === picked) || (!picked && list.models[0]);
+        const levels = current?.efforts || [];
+        if (levels.length) {
+          const chosen = effortFor(kind, picked) || '', def = current.defaultEffort || '';
+          efforts = `<div class="mp-effort"><div class="mp-effort-head"><span>Effort</span><span>${escapeHtml(picked ? current.label : 'Default')}</span></div>${levels.map((e, n) => `<button type="button" class="mp-level${(chosen || def) === e.id ? ' on' : ''}" data-effort="${escapeHtml(e.id)}" title="${escapeHtml(e.hint || '')}"><span class="mp-bars">${levels.map((_, b) => `<i class="${b <= n ? 'f' : ''}" style="height:${4 + Math.round(8 * b / Math.max(1, levels.length - 1))}px"></i>`).join('')}</span>${escapeHtml(e.label)}${e.id === def ? '<span class="mp-tag">Default</span>' : ''}</button>`).join('')}</div>`;
+        }
+      }
+      const modes = knownModels(kind)?.modes || [], mode = modes.find((m) => m.id === pickedMode(kind)) || modes[0];
+      const foot = modes.length ? `<div class="mp-foot"><span class="mp-foot-label">Permissions</span><button type="button" class="mp-mode" aria-expanded="${modeOpen}">${icon('shield')}<span>${escapeHtml(mode.label)}</span>${icon('chevron-down')}</button>${modeOpen ? `<div class="mp-modes">${modes.map((m) => `<button type="button" class="${m.id === mode.id ? 'on' : ''}" data-mode="${escapeHtml(m.id)}"><span>${escapeHtml(m.label)}<small>${escapeHtml(m.hint)}</small></span>${m.id === mode.id ? icon('check') : ''}</button>`).join('')}</div>` : ''}</div>` : '';
+      const typing = document.activeElement?.matches?.('.mp-search input');
+      el.innerHTML = `<div class="mp-rail">${rail}</div><div class="mp-models">${middle}</div>${efforts}${foot}`;
+      el.classList.toggle('no-effort', !efforts);
+      if (typing || col === 'list') { const input = el.querySelector('.mp-search input'); if (input) { input.focus({ preventScroll: true }); input.setSelectionRange(input.value.length, input.value.length); } else el.focus({ preventScroll: true }); }
+      el.querySelector('.mp-model.hot')?.scrollIntoView({ block: 'nearest' });
+    }
+    el.tabIndex = -1;
+    el.addEventListener('input', (e) => { if (e.target.matches('.mp-search input')) { query = e.target.value; active = 0; paint(); } });
+    el.addEventListener('click', (e) => {
+      const t = e.target.closest('button, [data-star]'); if (!t) return;
+      if (t.dataset.star !== undefined) {
+        e.stopPropagation();
+        const f = favorites(), key = `${kind}:${t.dataset.star}`; if (f.has(key)) f.delete(key); else f.add(key);
+        setStorage('synapse-model-favs', JSON.stringify([...f])); return paint();
+      }
+      if (t.dataset.kind) return choose(t.dataset.kind);
+      if (t.dataset.model !== undefined) { pickModel(t.dataset.model); return close(); }
+      if (t.dataset.effort) { setStorage(`synapse-new-effort:${kind}`, t.dataset.effort); renderModel(); return close(); }
+      if (t.classList.contains('mp-mode')) { modeOpen = !modeOpen; return paint(); }
+      if (t.dataset.mode !== undefined) { setStorage(`synapse-new-mode:${kind}`, t.dataset.mode); modeOpen = false; return paint(); }
+    });
+    el.addEventListener('keydown', (e) => {
+      const flat = [...el.querySelectorAll('.mp-model')];
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (modeOpen) { modeOpen = false; return paint(); } return close(); }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault(); const d = e.key === 'ArrowDown' ? 1 : -1;
+        if (col === 'rail') { const i = kinds.indexOf(kind); return choose(kinds[(i + d + kinds.length) % kinds.length]); }
+        if (col === 'effort') { const ls = [...el.querySelectorAll('.mp-level')], i = ls.findIndex((x) => x.classList.contains('on')); const n = ls[Math.max(0, Math.min(ls.length - 1, i + d))]; if (n) { setStorage(`synapse-new-effort:${kind}`, n.dataset.effort); renderModel(); paint(); } return; }
+        active = Math.max(0, Math.min(flat.length - 1, active + d)); return paint();
+      }
+      if (e.key === 'ArrowLeft' && !(e.target.matches('input') && e.target.selectionStart > 0)) { e.preventDefault(); col = col === 'effort' ? 'list' : 'rail'; el.dataset.col = col; return paint(); }
+      if (e.key === 'ArrowRight' && !(e.target.matches('input') && e.target.selectionStart < e.target.value.length)) { e.preventDefault(); col = col === 'rail' ? 'list' : el.querySelector('.mp-effort') ? 'effort' : 'list'; el.dataset.col = col; return paint(); }
+      if (e.key === 'Enter') { e.preventDefault(); const hot = el.querySelector('.mp-model.hot'); if (col === 'list' && hot) { pickModel(hot.dataset.model); } return close(); }
+    });
+    document.body.append(el);
+    openMenu = { el, anchor }; anchor.setAttribute('aria-expanded', 'true');
+    paint();
+    const r = anchor.getBoundingClientRect(), h = el.offsetHeight, w = el.offsetWidth;
+    const below = innerHeight - r.bottom - 12;
+    el.style.left = `${Math.round(Math.max(8, Math.min(innerWidth - w - 8, r.left)))}px`;
+    if (below >= h || below >= r.top) el.style.top = `${Math.round(r.bottom + 6)}px`; else el.style.bottom = `${Math.round(innerHeight - r.top + 6)}px`;
+    el.animate([{ opacity: 0, transform: 'translateY(-4px) scale(.985)' }, { opacity: 1, transform: 'none' }], { duration: 180, easing: 'cubic-bezier(.22, 1, .36, 1)' });
+  }
+  $('new-model').onclick = openModelPicker;
+  // ⇧⌘M opens it on the New session screen
+  addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'm' && e.metaKey && e.shiftKey && view === 'new') { e.preventDefault(); openModelPicker(); } });
   $('new-todo').addEventListener('click', (event) => { if (event.target.closest('.new-todo-clear')) { newDraft.todo = null; renderNew(); $('new-input').focus(); } });
   $('new-project').onclick = () => {
     const seen = new Set();
@@ -2830,7 +2929,7 @@ function initialize() {
       const shell = newDraft.kind === 'shell';
       const todo = !shell && newDraft.todo && todoList().find((t) => t.id === newDraft.todo);
       const first = todo ? `${prompt || todo.text}\n\n(This is Synapse todo ${todo.id}. When it is done, tick it with synapse_todo_update.)` : prompt;
-      const result = await desktopCall('new-session', { cwd: newDraft.cwd, kind: newDraft.kind, prompt: shell ? '' : first, model: shell ? '' : pickedModel(newDraft.kind) });
+      const result = await desktopCall('new-session', { cwd: newDraft.cwd, kind: newDraft.kind, prompt: shell ? '' : first, model: shell ? '' : pickedModel(newDraft.kind), effort: shell ? '' : effortFor(newDraft.kind), mode: shell ? '' : pickedMode(newDraft.kind) });
       desktop = await desktopCall('state'); applyState(rawState);
       $('new-input').value = ''; newDraft.todo = null; attachments.delete(NEW); renderAttachments(); paintMentionBar();
       if (tagged.length) connectWhenMatched(result.id, tagged);

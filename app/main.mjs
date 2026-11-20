@@ -642,22 +642,25 @@ const CLAUDE_MODELS = [
   ['haiku', 'Haiku 5.5', 'Fastest, for quick small tasks'],
   ['fable', 'Fable 5.2', ''],
 ];
+const modesOf = (kind) => (MODES[kind] || []).map(([id, label, hint]) => ({ id, label, hint }));
 async function modelsFor(kind) {
   const home = os.homedir();
   if (kind === 'claude') {
     // Claude Code's aliases, which always point at the newest of each; the default is settings.json's model
-    const models = CLAUDE_MODELS.map(([id, label, hint]) => ({ id, label, hint }));
+    const efforts = CLAUDE_EFFORTS.map(([id, label]) => ({ id, label }));
+    const models = CLAUDE_MODELS.map(([id, label, hint]) => ({ id, label, hint, efforts: id === 'haiku' ? [] : efforts, defaultEffort: 'medium' }));
     const set = readJSON(path.join(home, '.claude', 'settings.json'), {})?.model;
     const current = typeof set === 'string' && set ? models.find((m) => m.id === set)?.label || set : null;
-    return { current, models };
+    return { current, models, modes: modesOf('claude') };
   }
   if (kind === 'codex') {
     const cache = readJSON(path.join(home, '.codex', 'models_cache.json'), {});
     const models = (Array.isArray(cache.models) ? cache.models : []).filter((m) => m?.slug && m.visibility !== 'hide' && MODEL_ID.test(m.slug))
-      .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99)).map((m) => ({ id: m.slug, label: m.display_name || m.slug, hint: m.description || '' }));
+      .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99)).map((m) => ({ id: m.slug, label: m.display_name || m.slug, hint: m.description || '', defaultEffort: m.default_reasoning_level || '',
+        efforts: (Array.isArray(m.supported_reasoning_levels) ? m.supported_reasoning_levels : []).filter((e) => /^[a-z]{2,12}$/.test(e?.effort || '')).map((e) => ({ id: e.effort, label: e.effort === 'xhigh' ? 'Extra high' : e.effort[0].toUpperCase() + e.effort.slice(1), hint: e.description || '' })) }));
     let current = null;
     try { current = /^\s*model\s*=\s*"([^"]+)"/m.exec(fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8'))?.[1] || null; } catch {}
-    return { current, models };
+    return { current, models, modes: modesOf('codex') };
   }
   if (kind === 'opencode') {
     let current = null;
@@ -667,17 +670,27 @@ async function modelsFor(kind) {
   if (kind === 'antigravity') return { current: null, models: await listAgyModels() };
   return { current: null, models: [] };
 }
-// A start command and env for a chosen model. OpenCode's TUI has no model flag: a private server (--standalone)
-// reads its config from OPENCODE_CONFIG_CONTENT, the shared background service would ignore it.
-function withModel(kind, command, model) {
-  if (!model || !MODEL_ID.test(model) || !command) return { command, env: {} };
-  const q = WIN ? `"${model}"` : `'${model}'`;
-  if (kind === 'claude') return { command: `${command} --model ${q}`, env: {} };
-  if (kind === 'codex') return { command: `${command} -m ${q}`, env: {} };
-  if (kind === 'antigravity') return { command: `${command} --model ${q}`, env: {} };
+// A start command and env for a chosen model, effort and permission mode (the model picker). OpenCode's TUI has no
+// model flag: a private server (--standalone) reads its config from OPENCODE_CONFIG_CONTENT, the shared background
+// service would ignore it. Effort and mode only pass when they are one of the agent's own choices (MODES, efforts).
+const MODES = {
+  claude: [['', 'Ask before edits', 'Claude asks before it edits or runs anything'], ['acceptEdits', 'Accept edits', 'Edits go in without asking; commands still ask'], ['plan', 'Plan first', 'Plans without changing anything until you agree'], ['auto', 'Auto', 'Claude decides what is safe to run'], ['bypassPermissions', 'Skip permissions', 'Never asks. Only for folders you trust']],
+  codex: [['', 'Default', 'What your Codex config says'], ['read-only', 'Read only', 'Reads, never writes'], ['workspace-write', 'Workspace write', 'Writes inside this folder'], ['danger-full-access', 'Full access', 'Writes anywhere, runs anything']],
+};
+const CLAUDE_EFFORTS = [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']];
+function withModel(kind, command, model, tune = {}) {
+  if (!command) return { command, env: {} };
+  const q = (v) => (WIN ? `"${v}"` : `'${v}'`);
+  const effort = /^[a-z]{2,12}$/.test(tune?.effort || '') ? tune.effort : '';
+  const mode = MODES[kind]?.some(([id]) => id && id === tune?.mode) ? tune.mode : '';
+  const m = model && MODEL_ID.test(model) ? model : '';
+  if (kind === 'claude') return { command: `${command}${m ? ` --model ${q(m)}` : ''}${effort && CLAUDE_EFFORTS.some(([id]) => id === effort) ? ` --effort ${effort}` : ''}${mode ? ` --permission-mode ${mode}` : ''}`, env: {} };
+  if (kind === 'codex') return { command: `${command}${m ? ` -m ${q(m)}` : ''}${effort ? ` -c model_reasoning_effort=${q(effort)}` : ''}${mode ? ` -s ${mode}` : ''}`, env: {} };
+  if (!m) return { command, env: {} };
+  if (kind === 'antigravity') return { command: `${command} --model ${q(m)}`, env: {} };
   if (kind === 'opencode') {
     let extra = {}; try { extra = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT || '{}'); } catch {}
-    return { command: `${command} --standalone`, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...extra, model }) } };
+    return { command: `${command} --standalone`, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...extra, model: m }) } };
   }
   return { command, env: {} };
 }
@@ -1118,7 +1131,7 @@ handle('flags', () => ({ demo: DEMO, packaged: app.isPackaged, view: process.env
 handle('pty:spawn', async (a) => {
   // a liaison (⌘N, ask a friend): talks with friends' agents for the agent it names, see liaisonFor in ops.mjs
   const liaison = a.liaisonFor && typeof a.liaisonFor.id === 'string' ? { SYNAPSE_LIAISON_FOR: a.liaisonFor.id.slice(0, 200), SYNAPSE_LIAISON_NAME: String(a.liaisonFor.name || '').slice(0, 80) } : {};
-  const m = typeof a.model === 'string' && a.model ? withModel(a.kind, a.command, a.model) : { command: a.command, env: {} };
+  const m = (typeof a.model === 'string' && a.model) || a.tune ? withModel(a.kind, a.command, typeof a.model === 'string' ? a.model : '', a.tune || {}) : { command: a.command, env: {} };
   const r = await spawnPty({ ...a, command: m.command, extraEnv: { ...m.env, ...liaison } });
   if (a.phoneReq) { // a terminal the phone asked for: its first prompt goes in once the agent is ready
     phone.spawned(a.phoneReq, r.id);
@@ -1167,8 +1180,8 @@ handle('pty:restore', ({ cwd, kind, resume, cols, rows }) => {
 handle('sessions:load', () => readJSON(SESSIONS, null));
 handle('sessions:save', (data) => writeJSON(SESSIONS, data));
 const UI_STATE = path.join(DATA, 'workspace-ui.json');
-const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-inspector-tab', 'synapse-panel-width', 'synapse-new-kind']);
-const uiKey = (key) => UI_KEYS.has(key) || /^synapse-new-model:[\w-]{1,40}$/.test(key); // the New session screen's model, per agent
+const UI_KEYS = new Set(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-inspector-tab', 'synapse-panel-width', 'synapse-new-kind', 'synapse-model-favs']);
+const uiKey = (key) => UI_KEYS.has(key) || /^synapse-new-(model|effort|mode):[\w-]{1,40}$/.test(key); // the New session screen's model, effort and permissions, per agent
 handle('workspace:load', () => readJSON(UI_STATE, {}));
 handle('workspace:save', ({ key, value }) => {
   if (!uiKey(key) || typeof value !== 'string' || value.length > 768 * 1024) throw new Error('Invalid workspace preference.');

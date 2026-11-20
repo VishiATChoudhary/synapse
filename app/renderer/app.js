@@ -389,7 +389,7 @@ function sforkFilter(get) {
   };
 }
 
-async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resume = null, cwd = worktreePath, title = kind, prompt = null, liaisonFor = null, drawer = false, model = null } = {}) {
+async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resume = null, cwd = worktreePath, title = kind, prompt = null, liaisonFor = null, drawer = false, model = null, tune = null } = {}) {
   closeCanvas();
   const prof = M.profiles[kind] || { command: kind };
   const s = { id: nextId++, worktree: worktreePath, sessions: [], path: [] };
@@ -400,7 +400,7 @@ async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resu
   try {
     const made = await makeSession(s, {
       kind, title,
-      spawn: (cols, rows) => (resume ? synapse.pty.restore({ cwd, kind, resume, cols, rows }) : synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows, phoneReq, ...(prompt ? { prompt } : {}), ...(model && !split ? { model } : {}), ...(liaisonFor ? { liaisonFor } : {}) })),
+      spawn: (cols, rows) => (resume ? synapse.pty.restore({ cwd, kind, resume, cols, rows }) : synapse.pty.spawn({ cwd: worktreePath, kind, command: split ? '' : prof.command, cols, rows, phoneReq, ...(prompt ? { prompt } : {}), ...(model && !split ? { model } : {}), ...(tune && !split ? { tune } : {}), ...(liaisonFor ? { liaisonFor } : {}) })),
     });
     if (resume) made.resume = resume;
     if (drawer) { made.drawer = true; made.title = 'terminal'; }
@@ -4136,7 +4136,9 @@ async function desktopAction(action, args) {
       const prompt = typeof args.prompt === 'string' && args.prompt.trim() && args.kind !== 'shell' ? args.prompt.slice(0, 12000) : null;
       const before = new Set(M.slots.map((s) => s.id));
       const model = typeof args.model === 'string' && args.model ? args.model.slice(0, 160) : null; // a model from the New session screen's list
-      await newSlot(cwd, args.kind, null, null, { prompt, drawer: !!args.drawer, model });
+      // effort and permission mode from the model picker; the app checks them against the agent's own choices
+      const tune = { effort: typeof args.effort === 'string' ? args.effort.slice(0, 20) : '', mode: typeof args.mode === 'string' ? args.mode.slice(0, 30) : '' };
+      await newSlot(cwd, args.kind, null, null, { prompt, drawer: !!args.drawer, model, tune: tune.effort || tune.mode ? tune : null });
       const made = M.slots.find((s) => !before.has(s.id));
       if (!made?.sessions[0]) throw new Error('The session could not start. Check the agent command in Settings.');
       return { id: `desktop-${made.sessions[0].key}` };
