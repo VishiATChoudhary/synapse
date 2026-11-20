@@ -77,6 +77,8 @@ contextBridge.exposeInMainWorld('synapse', {
     onCloneProgress: (fn) => on('clone:progress', fn),
   },
   worktree: { list: (repo) => call('worktree:list', { repo }), open: (a) => call('worktree:open', a), fetch: (repo) => call('worktree:fetch', { repo }), prs: (repo, choices) => call('worktree:prs', { repo, choices }), add: (a) => call('worktree:add', a), remove: (a) => call('worktree:remove', a), rename: (path, name) => call('worktree:rename', { path, name }), order: (paths) => call('worktree:order', { paths }) },
+  // the worktree cleanup (settings: Cleanup): what is due, run it now, and what a run did
+  gc: { preview: () => call('gc:preview'), run: () => call('gc:run'), onDone: (fn) => on('gc:done', fn) },
   settings: { usage: () => call('talk:usage'), get: () => call('settings:get'), set: (patch) => call('settings:set', patch) },
   git: { dirty: (cwd) => call('git:dirty', { cwd }) },
   git: { changes: (dir) => call('git:changes', { dir }), commit: (dir, message) => call('git:commit', { dir, message }), push: (dir) => call('git:push', { dir }), pr: (dir) => call('git:pr', { dir }) },

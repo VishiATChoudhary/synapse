@@ -492,6 +492,8 @@ function initialize() {
       return;
     }
     if (message?.type === 'synapse:browser-cover') { browserCovered = !!message.covered; placeBrowser(); return; }
+    // Settings, Cleanup changed how agents are tidied (the app saved it with the other preferences)
+    if (message?.type === 'synapse:tidy' && message.tidy) { tidy = { ...TIDY_DEFAULT, ...message.tidy }; try { localStorage.setItem('synapse-tidy', JSON.stringify(tidy)); } catch {} renderSidebar(); return; }
     if (message?.type === 'synapse:desktop-state') {
       const previous = desktop?.active;
       const followSelection = !selectedId || selectedId === previous;
@@ -1265,7 +1267,7 @@ function initialize() {
       { label: 'Group by status', icon: mark('status'), run: set('status') },
       { label: 'Most recent first', icon: mark('recent'), run: set('recent') },
       '-',
-      { label: 'Tidy up…', icon: 'clock', run: tidyDialog },
+      { label: 'Tidy up…', icon: 'clock', run: () => (embedded ? desktopCall('settings', { pane: 'cleanup' }).catch((e) => toast(e.message)) : tidyDialog()) },
     ]);
   }
   function personMenu(button) {

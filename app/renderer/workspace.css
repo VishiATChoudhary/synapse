@@ -209,3 +209,12 @@ body.gui-mode .modal { background: var(--color-scrim, rgba(0, 0, 0, .35)); backd
 /* Claude plugins' search sits on its own above the list (Settings > Connectors) */
 .set-group > .set-input[type='search'] { display: block; width: 100%; margin: 0 0 8px; padding: 8px 12px; font: var(--text-sm, 13px) var(--font-body); color: var(--color-ink); background: var(--color-panel); border: 1px solid var(--color-border); border-radius: var(--radius-md, 10px); outline: 0; }
 .set-group > .set-input[type='search']:focus { border-color: var(--color-focus); box-shadow: 0 0 0 3px var(--color-accent-soft); }
+/* Settings, Cleanup: the worktrees and what the cleanup will do with each */
+.gc-list { overflow: hidden; }
+.gc-row { display: flex; align-items: center; gap: 12px; padding: 9px 16px; }
+.gc-row + .gc-row { border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent); }
+.gc-text { flex: 1; min-width: 0; }
+.gc-name { font: 500 var(--text-sm, 13px) var(--font-body); color: var(--color-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gc-sub { font-size: 12px; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gc-fate { flex: none; font-size: 12px; color: var(--color-muted); }
+.gc-row.due .gc-fate { color: var(--color-accent); font-weight: 500; }

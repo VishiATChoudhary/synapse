@@ -2038,7 +2038,7 @@ function canvasMenu({ hit, agent, group, x, y, hiddenCount }, r = $('#canvas-fra
 // Settings: a window of its own, sections on the left (with a search across all of them), the chosen one on the right.
 // Every change saves to ~/.synapse/app.json as it is made.
 const SETTINGS_PANES = [
-  ['general', 'General', '◐'], ['notifications', 'Notifications', '◔'], ['agents', 'Agents', '✳'], ['workspaces', 'Workspaces', '▤'], ['connectors', 'Connectors', '⌁'], ['logins', 'Logins', '⚿'],
+  ['general', 'General', '◐'], ['notifications', 'Notifications', '◔'], ['agents', 'Agents', '✳'], ['workspaces', 'Workspaces', '▤'], ['cleanup', 'Cleanup', '♻'], ['connectors', 'Connectors', '⌁'], ['logins', 'Logins', '⚿'],
   ['appearance', 'Appearance', '◑'], ['shortcuts', 'Shortcuts', '⌘'], ['phone', 'Phone', '◫'], ['people', 'People & agent talk', '◎'],
 ];
 // line icons for the settings sections (the GUI's own style: 24 grid, 1.6 stroke)
@@ -2047,6 +2047,7 @@ const SET_ICONS = {
   notifications: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
   agents: '<path d="M12 3.5l1.7 5L19 10l-5.3 1.6L12 17l-1.7-5.4L5 10l5.3-1.5z"/><path d="M18.5 15.5l.6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6z"/>',
   workspaces: '<path d="M3 7V5a2 2 0 0 1 2-2h4l3 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',
+  cleanup: '<path d="M4 7h16M9.5 7V4.5h5V7M6 7l1 12.5a1.5 1.5 0 0 0 1.5 1.4h7a1.5 1.5 0 0 0 1.5-1.4L18 7"/><path d="M10 11v6M14 11v6"/>',
   connectors: '<path d="M9 2.5v4.5M15 2.5v4.5M6 7h12v3.5a6 6 0 0 1-12 0z"/><path d="M12 16.5v5"/>',
   logins: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9m-4 4 3 3m-6 0 2 2"/>',
   appearance: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none"/>',
@@ -2159,6 +2160,65 @@ async function openSettings(start) {
         row('Link workspaces', 'Symlink workspaces added from elsewhere into ~/.synapse/workspaces, so the library can bring them back.', toggle(!!s.autoSymlink, async (on) => { await synapse.settings.set({ autoSymlink: on }); toast(on ? 'New workspaces get linked into ~/.synapse/workspaces' : 'Workspaces are no longer linked. Existing links stay.'); })),
         row('Safe worktree deletion', 'Deleting a worktree first commits its uncommitted changes (untracked files too) to its branch, so nothing is lost. Ignored files go with the folder.', toggle(s.safeWorktreeDelete !== false, async (on) => { M.safeDelete = (await synapse.settings.set({ safeWorktreeDelete: on })).safeWorktreeDelete; toast(on ? 'Deleting a worktree saves its changes to the branch first' : 'Worktrees with uncommitted changes ask before they are deleted'); }))),
       group('Past chats', card(row('Chats from before Synapse', 'Import your Claude Code and Codex chats and pick them up here. ⇧⌘H', button('Browse', () => { close(); openPastChats(); })), importRows({ remove: true }))));
+
+    // ---- Cleanup: what happens to agents and worktrees you stop using. Agents are tidied by the GUI (its sidebar),
+    // worktrees by the app (worktree-gc.mjs): closed, their work committed and pushed, the folder removed.
+    const HR = 3_600_000, DY = 24 * HR;
+    const agoText = (t) => { const d = Date.now() - t; return d < HR ? 'just now' : d < DY ? `${Math.round(d / HR)} h ago` : `${Math.round(d / DY)} days ago`; };
+    const span = (ms) => ms % DY ? `${Math.round(ms / HR)} hours` : ms === DY ? '1 day' : ms % (7 * DY) ? `${ms / DY} days` : ms === 7 * DY ? '1 week' : `${ms / (7 * DY)} weeks`;
+    const choose = (label, value, options, save) => {
+      const sel = el('select', 'set-input'); sel.setAttribute('aria-label', label);
+      if (!options.some(([v]) => String(v) === String(value))) options = [...options, [value, span(Number(value))]]; // set by hand in a file
+      for (const [v, text] of options) { const o = el('option', '', text); o.value = String(v); sel.append(o); }
+      sel.value = String(value);
+      let was = sel.value;
+      sel.onchange = async () => { try { await save(sel.value); was = sel.value; } catch (e) { sel.value = was; toast(e.message, true); } };
+      return sel;
+    };
+    let tidy = s.tidy || { idle: DY, archive: 3 * DY, close: 7 * DY };
+    const saveTidy = async (patch) => { tidy = (await synapse.settings.set({ tidy: { ...tidy, ...patch } })).tidy; workspacePost({ type: 'synapse:tidy', tidy }); };
+    let gcPolicy = s.worktreeGc || { after: 0, action: 'push', every: 6 * HR };
+    const gcList = el('div', 'gc-list'), gcStatus = el('span', 'set-desc'), gcNow = button('Clean up now', null);
+    const gcSummary = (last) => {
+      const ok = last.results.filter((r) => !r.error).length, bad = last.results.length - ok;
+      return !last.results.length ? 'nothing was due' : [ok && `${ok} cleaned up`, bad && `${bad} could not be (${last.results.find((r) => r.error).error})`].filter(Boolean).join(', ');
+    };
+    const drawGc = async () => {
+      let p; try { p = await synapse.gc.preview(); } catch (e) { gcStatus.textContent = e.message; return; }
+      const due = p.items.filter((i) => i.due && !i.reason);
+      gcNow.disabled = !p.policy.after || p.running;
+      gcStatus.textContent = `${!p.policy.after ? 'Off.' : due.length ? `${due.length} due now.` : 'Nothing is due.'} ${p.last ? `Last run ${agoText(p.last.at)}: ${gcSummary(p.last)}.` : 'Not run yet.'}`;
+      gcList.replaceChildren(...p.items.map((i) => {
+        const r = el('div', 'gc-row' + (i.due && !i.reason ? ' due' : ''));
+        const fate = i.reason ? `Kept: ${i.reason}`
+          : !p.policy.after ? '' : i.due ? (p.policy.action === 'push' ? 'Due: push, then remove' : 'Due: remove')
+          : `In ${Math.max(1, Math.ceil((i.lastUsed + p.policy.after - Date.now()) / DY))} days`;
+        const text = el('div', 'gc-text'); text.append(el('div', 'gc-name', i.label), el('div', 'gc-sub', `${i.branch || 'detached'} · used ${agoText(i.lastUsed)}`));
+        r.append(text, el('span', 'gc-fate', fate)); r.title = i.dir;
+        return r;
+      }));
+      if (!p.items.length) gcList.replaceChildren(el('p', 'set-desc set-pad', 'No worktrees in Synapse yet. Only worktrees you added are cleaned up, never a repo’s main checkout.'));
+    };
+    const saveGc = async (patch) => { gcPolicy = (await synapse.settings.set({ worktreeGc: { ...gcPolicy, ...patch } })).worktreeGc; drawGc(); };
+    gcNow.onclick = async () => {
+      gcNow.disabled = true; gcNow.textContent = 'Cleaning up…';
+      try { const last = await synapse.gc.run(); toast(`Worktree cleanup: ${gcSummary(last)}`); } catch (e) { toast(e.message, true); }
+      gcNow.textContent = 'Clean up now'; drawGc();
+    };
+    drawGc();
+    const gcRow = row('Run it now', '', gcNow); gcRow.querySelector('.set-text').append(gcStatus);
+    const never = [0, 'Never'];
+    pane('cleanup', 'What Synapse does with agents and worktrees you have stopped using. Anything working or waiting for you is never touched.',
+      group('Agents',
+        row('Done turns to Idle after', 'A finished agent shows Done until then.', choose('Done turns to Idle after', tidy.idle, [[HR, '1 hour'], [6 * HR, '6 hours'], [DY, '1 day'], [3 * DY, '3 days'], never], (v) => saveTidy({ idle: Number(v) }))),
+        row('Unused agents go to Archived after', 'Archived agents leave the sidebar list; they come back when they work again.', choose('Archive after', tidy.archive, [[DY, '1 day'], [3 * DY, '3 days'], [7 * DY, '1 week'], [14 * DY, '2 weeks'], never], (v) => saveTidy({ archive: Number(v) }))),
+        row('Unused agents end after', 'A session of ours closes; one in your own terminal has its process ended. Its chat stays on disk and can be resumed from Past chats.', choose('End after', tidy.close, [[3 * DY, '3 days'], [7 * DY, '1 week'], [14 * DY, '2 weeks'], [30 * DY, '30 days'], never], (v) => saveTidy({ close: Number(v) })))),
+      group('Worktrees',
+        row('Clean up worktrees unused for', 'Nothing typed, said or committed there for this long. The repo’s main checkout is never cleaned up.', choose('Clean up worktrees unused for', gcPolicy.after, [never, [DY, '1 day'], [3 * DY, '3 days'], [7 * DY, '1 week'], [14 * DY, '2 weeks'], [30 * DY, '30 days'], [90 * DY, '90 days']], (v) => saveGc({ after: Number(v) }))),
+        row('Cleaning up a worktree', 'Its sessions close and uncommitted work is committed to its branch first, either way. A push never forces, and never goes onto main: that goes to a synapse/parked/ branch instead.', choose('Cleaning up a worktree', gcPolicy.action, [['push', 'Pushes its branch, then removes it'], ['remove', 'Removes it, the branch stays here']], (v) => saveGc({ action: v }))),
+        row('Check', 'Without a remote the branch is only kept here. A push that fails leaves the worktree where it is.', choose('Check', gcPolicy.every, [[0, 'When Synapse starts'], [HR, 'Every hour'], [6 * HR, 'Every 6 hours'], [DY, 'Once a day']], (v) => saveGc({ every: Number(v) }))),
+        gcRow),
+      group('Your worktrees', card(gcList)));
 
     // ---- Logins: website logins the Synapse browser signs in with (app/logins.mjs). You approve each sign-in; the
     // password goes from here into the page, never to the agent.
@@ -3776,6 +3836,13 @@ synapse.phone.onChanged(({ asking, shares }) => {
   if (phoneBox?.isConnected) drawPhones(phoneBox);
 });
 synapse.phone.onShow(() => openSettings('phone'));
+// the worktree cleanup ran (settings: Cleanup): sessions in removed worktrees close, the sidebar loses them
+synapse.gc.onDone((last) => {
+  const gone = last.results.filter((r) => !r.error);
+  closeSlots(slotsIn(gone.map((r) => r.dir)));
+  refresh().catch(() => {});
+  if (gone.length) toast(`Cleaned up ${gone.length} unused worktree${gone.length === 1 ? '' : 's'}: ${gone.map((r) => r.pushed ? `${r.label} pushed to ${r.pushed.remote}/${r.pushed.branch}` : `${r.label} removed, branch ${r.branch || ''} kept`).join('; ')}`, false, () => openSettings('cleanup'));
+});
 // the phone asked for a new agent: open it like ⌃1 would, in the workspace it picked
 synapse.phone.onSpawn(({ req, cwd, kind }) => {
   const wt = worktreeOf(cwd);
@@ -4194,7 +4261,7 @@ async function desktopAction(action, args) {
     case 'browser-user': return synapse.agentBrowser.user(String(args.agent || ''), String(args.action || ''), args.args || {});
     case 'browser-answer': return synapse.agentBrowser.answer(String(args.id || ''), String(args.choice || ''));
     case 'browser-state': return synapse.agentBrowser.state();
-    case 'settings': return openSettings();
+    case 'settings': return openSettings(typeof args?.pane === 'string' ? args.pane : undefined);
     // friends, for the GUI's Add connection and Connections view: who you trust, what waits on you, and the four
     // answers (share, ask, accept, deny). Agents are named by their Synapse id.
     case 'friends': return friendsSnapshot();

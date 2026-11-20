@@ -37,7 +37,7 @@
     "app/vault.mjs",
     "app/logins.mjs",
     "app/browser-preload.cjs",
-    "app/worktrees.mjs",
+    "app/worktrees.mjs", "app/worktree-gc.mjs",
     "app/updater.mjs",
     "app/phone.mjs",
     "app/phone-share.mjs",

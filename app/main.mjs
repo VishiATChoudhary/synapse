@@ -11,6 +11,7 @@ import { execFile, execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
 import { git, listChoices, listWorktrees, createWorktree, openWorktree, deleteWorktree, safeDeleteWorktree, fetchBranches, pullRequests, choicePullRequest, changesAsync, commitAll, pushBranch, pullRequest } from './worktrees.mjs';
 import * as saved from '../saved.mjs';
+import { cleanPolicy, planCleanup, parkWorktree, DAY as GC_DAY } from './worktree-gc.mjs';
 import { DATA, FILES, WIN, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, readAgentMessages, takeInbox, gitLocate } from '../lib.mjs';
 import { createEdge, allowTalkRequest, dismissTalkRequest, setMode, removeEdge } from '../ops.mjs';
 import { openRequests, talkPerHour, talkModel, clampPerHour } from '../talk.mjs';
@@ -291,6 +292,76 @@ function removeWorktree(repo, dir, force = false) {
   for (const t of ptys.values()) if (t.cwd === dir || t.cwd.startsWith(dir + path.sep)) { try { t.p.kill(); } catch {} }
   return saved;
 }
+
+// ---------------------------------------------------------------- worktree cleanup
+// Unused worktrees are parked on their own (worktree-gc.mjs; settings: Cleanup): closed, saved, pushed, removed.
+// When it is due: a couple of minutes after launch, then every `every` (0: only at launch). Typing in a terminal
+// counts as use; it is kept here, with the last run, in ~/.synapse/worktree-gc.json.
+const GC_FILE = path.join(DATA, 'worktree-gc.json');
+const gcTouched = new Map(); // folder -> when you last typed in a terminal there
+const gcState = () => { const s = readJSON(GC_FILE, {}); return { used: s.used || {}, last: s.last || null }; };
+function gcFlush() {
+  if (!gcTouched.size) return;
+  const s = gcState();
+  for (const [dir, at] of gcTouched) s.used[dir] = Math.max(s.used[dir] || 0, at);
+  for (const [dir, at] of Object.entries(s.used)) if (Date.now() - at > 400 * GC_DAY || !fs.existsSync(dir)) delete s.used[dir];
+  gcTouched.clear(); writeJSON(GC_FILE, s);
+}
+const within = (dir, p) => !!p && (p === dir || p.startsWith(dir + path.sep));
+// a worktree is left alone while an agent there works or waits on you, or one runs there in a terminal of your own
+function gcBlocked(dir) {
+  const ours = new Set([...ptys.values()].map((t) => t.pid));
+  for (const a of discovery.agents) {
+    if (!within(dir, a.cwd) && a.worktreePath !== dir) continue;
+    if (['busy', 'waiting', 'needs_input'].includes(a.status)) return 'an agent is working there';
+    if (!a.exited && !a.remote && hostOf(a) && !ours.has(hostOf(a))) return 'an agent runs there in your own terminal';
+  }
+  return null;
+}
+function gcPlan() {
+  const c = config(), policy = cleanPolicy(c.worktreeGc);
+  gcFlush();
+  const items = planCleanup({ workspaces: c.workspaces, policy, used: gcState().used, agents: discovery.agents, blocked: gcBlocked });
+  return { policy, items: items.map((i) => ({ ...i, label: c.worktreeNames?.[i.dir] || path.basename(i.dir) })) };
+}
+let gcRunning = null, gcTimer = null;
+function runGc() {
+  return gcRunning ||= (async () => {
+    const { policy, items } = gcPlan();
+    const results = [];
+    for (const w of items.filter((i) => i.due && !i.reason)) {
+      try {
+        // close its sessions first, so nothing writes while it is saved
+        for (const t of ptys.values()) if (within(w.dir, t.cwd)) { try { t.p.kill(); } catch {} }
+        const r = await parkWorktree(w.dir, policy.action);
+        removeWorktree(w.repo, w.dir);
+        results.push({ dir: w.dir, label: w.label, branch: r.branch, pushed: r.pushed, saved: r.saved?.files || 0 });
+      } catch (e) { results.push({ dir: w.dir, label: w.label, branch: w.branch, error: e.message }); }
+    }
+    const s = gcState(); s.last = { at: Date.now(), results }; writeJSON(GC_FILE, s);
+    if (results.length) {
+      win?.webContents.send('gc:done', s.last);
+      const ok = results.filter((r) => !r.error);
+      if (ok.length && win && !win.isFocused() && Notification.isSupported() && !process.env.SYNAPSE_SHOT) {
+        new Notification({ title: `Synapse cleaned up ${ok.length} unused worktree${ok.length === 1 ? '' : 's'}`, body: ok.map((r) => r.pushed ? `${r.label}: pushed to ${r.pushed.remote}/${r.pushed.branch}` : `${r.label}: removed, branch ${r.branch || 'kept'} stays`).join('\n'), silent: true }).show();
+      }
+    }
+    return s.last;
+  })().finally(() => { gcRunning = null; scheduleGc(); });
+}
+function scheduleGc(launch = false) {
+  clearTimeout(gcTimer); gcTimer = null;
+  const policy = cleanPolicy(config().worktreeGc);
+  if (!policy.after) return;
+  const last = gcState().last?.at || 0;
+  let wait;
+  if (launch) wait = Math.max(2 * 60_000, policy.every ? last + policy.every - Date.now() : 0); // never in the way of startup
+  else if (policy.every) wait = Math.max(60_000, last + policy.every - Date.now());
+  else return; // at launch only
+  gcTimer = setTimeout(() => runGc().catch(() => {}), Math.min(wait, 2 ** 31 - 1));
+  gcTimer.unref?.();
+}
+app.whenReady().then(() => scheduleGc(true));
 
 // ---------------------------------------------------------------- ptys
 
@@ -870,6 +941,7 @@ app.on('window-all-closed', () => app.quit());
 // only once node-pty has seen them all exit: its exit-watcher threads otherwise block or crash Node's shutdown.
 let quitting = false;
 app.on('before-quit', (e) => {
+  try { gcFlush(); } catch {}
   agentBrowser.stop();
   discovery.close();
   phone.stopShares(); // no tunnel outlives the app
@@ -1062,7 +1134,7 @@ handle('phone:remove', ({ id }) => phone.remove(id));
 handle('phone:shares', () => phone.liveShares());
 handle('phone:unshare', ({ id }) => phone.stopShare(id));
 handle('models:list', ({ kind }) => modelsFor(String(kind || '')));
-handle('pty:write', ({ id, data }) => { ptys.get(id)?.p.write(data); });
+handle('pty:write', ({ id, data }) => { const t = ptys.get(id); t?.p.write(data); if (t) gcTouched.set(t.cwd, Date.now()); });
 handle('pty:submit', ({ id, text }) => {
   if (!ptys.has(id)) throw new Error('This session has ended.');
   if (typeof text !== 'string' || !text.trim() || text.length > 12000) throw new Error('Write a prompt between 1 and 12,000 characters.');
@@ -1252,8 +1324,14 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, safeWorktreeDelete: c.safeWorktreeDelete !== false, openWith: c.openWith || 'shell', showBrowser: c.showBrowser !== false, synapseBrowserOnly: c.synapseBrowserOnly !== false, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [] });
+const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, safeWorktreeDelete: c.safeWorktreeDelete !== false, openWith: c.openWith || 'shell', showBrowser: c.showBrowser !== false, synapseBrowserOnly: c.synapseBrowserOnly !== false, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [], worktreeGc: cleanPolicy(c.worktreeGc), tidy: readTidy() });
+// how agents are tidied (Done to Idle, Archived, ended): the GUI keeps it with its other preferences
+const TIDY_DEFAULT = { idle: GC_DAY, archive: 3 * GC_DAY, close: 7 * GC_DAY };
+const cleanTidy = (t = {}) => Object.fromEntries(Object.entries(TIDY_DEFAULT).map(([k, d]) => { const n = Number(t?.[k]); return [k, Number.isFinite(n) && n >= 0 && n <= 365 * GC_DAY ? n : d]; }));
+function readTidy() { try { return cleanTidy(JSON.parse(readJSON(UI_STATE, {})['synapse-tidy'] || '{}')); } catch { return { ...TIDY_DEFAULT }; } }
 handle('settings:get', () => settingsOut(config()));
+handle('gc:preview', () => ({ ...gcPlan(), last: gcState().last, running: !!gcRunning }));
+handle('gc:run', () => runGc());
 // an agent finished a turn while Synapse was in the background (the renderer decides when): say so, with the
 // start of its last reply; a click brings that session to the front
 const lastReply = (pty) => {
@@ -1342,9 +1420,12 @@ handle('settings:set', (patch) => {
   if ('talkPerHour' in patch) c.talkPerHour = clampPerHour(patch.talkPerHour);
   if ('look' in patch) c.look = cleanLook(patch.look);
   if ('shortcuts' in patch) c.shortcuts = cleanShortcuts(patch.shortcuts);
+  if ('worktreeGc' in patch) c.worktreeGc = cleanPolicy({ ...cleanPolicy(c.worktreeGc), ...patch.worktreeGc });
+  if ('tidy' in patch) writeJSON(UI_STATE, { ...readJSON(UI_STATE, {}), 'synapse-tidy': JSON.stringify(cleanTidy(patch.tidy)) });
   if ('talkModel' in patch) c.talkModel = ['opus', 'sonnet', 'haiku'].includes(patch.talkModel) ? patch.talkModel : 'agent';
   writeJSON(FILES.app, c);
   if ('autoSymlink' in patch && c.autoSymlink) scanLibrary(true);
+  if ('worktreeGc' in patch) scheduleGc();
   return settingsOut(c);
 });
 handle('worktree:add', ({ repo, name, base }) => addWorktree(repo, name, base));
