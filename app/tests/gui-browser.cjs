@@ -34,7 +34,7 @@ process.stdin.on('data', (d) => fs.appendFileSync(path.join(${JSON.stringify(ctl
 tick(); setInterval(tick, 250);
 `);
 fs.chmodSync(path.join(bin, 'claude'), 0o755);
-fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], skipLogin: true, profiles: { claude: { command: `exec ${path.join(bin, 'claude')}`, label: 'Claude' } } }));
+fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], browserAskSites: true, skipLogin: true, profiles: { claude: { command: `exec ${path.join(bin, 'claude')}`, label: 'Claude' } } }));
 fs.writeFileSync(path.join(state, 'workspace-ui.json'), JSON.stringify({ 'synapse-group': 'status' }));
 const vaultHome = path.join(fixture, 'vault'); fs.mkdirSync(vaultHome);
 fs.writeFileSync(path.join(vaultHome, 'index.json'), JSON.stringify({ SHOP_EXAMPLE_PASSWORD: { type: 'login', site: 'shop.example', user: 'ada@shop.example' }, SHOP_EXAMPLE_USERNAME: { type: 'login', site: 'shop.example', user: 'ada@shop.example' }, OTHER_ORG_PASSWORD: { type: 'login', site: 'other.org', user: 'x' } }));

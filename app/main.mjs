@@ -1101,7 +1101,7 @@ const signIns = {
 handle('logins:list', () => signIns.logins());
 handle('logins:add', ({ site, username, password }) => logins.add({ site, username, password }));
 handle('logins:remove', ({ base }) => logins.remove(String(base || '')));
-const agentBrowser = createAgentBrowser({ dataDir: DATA, root: ROOT, vault: signIns, packaged: app.isPackaged, getWin: () => win,
+const agentBrowser = createAgentBrowser({ dataDir: DATA, root: ROOT, vault: signIns, packaged: app.isPackaged, getWin: () => win, askSites: () => config().browserAskSites === true,
   onAgentOpened: (id) => { if (config().showBrowser !== false) win?.webContents.send('agent-browser:show', { agent: id }); }, agentName: (id) => listAgents().find((a) => a.id === id)?.name || 'Agent' });
 const agentId = (v) => { const id = String(v || ''); if (!id || id.length > 200) throw new Error('Pick an agent.'); return id; };
 handle('agent-browser:state', () => agentBrowser.snapshot());
@@ -1324,7 +1324,7 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, safeWorktreeDelete: c.safeWorktreeDelete !== false, openWith: c.openWith || 'shell', showBrowser: c.showBrowser !== false, synapseBrowserOnly: c.synapseBrowserOnly !== false, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [], worktreeGc: cleanPolicy(c.worktreeGc), tidy: readTidy() });
+const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, safeWorktreeDelete: c.safeWorktreeDelete !== false, openWith: c.openWith || 'shell', showBrowser: c.showBrowser !== false, synapseBrowserOnly: c.synapseBrowserOnly !== false, browserAskSites: c.browserAskSites === true, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [], worktreeGc: cleanPolicy(c.worktreeGc), tidy: readTidy() });
 // how agents are tidied (Done to Idle, Archived, ended): the GUI keeps it with its other preferences
 const TIDY_DEFAULT = { idle: GC_DAY, archive: 3 * GC_DAY, close: 7 * GC_DAY };
 const cleanTidy = (t = {}) => Object.fromEntries(Object.entries(TIDY_DEFAULT).map(([k, d]) => { const n = Number(t?.[k]); return [k, Number.isFinite(n) && n >= 0 && n <= 365 * GC_DAY ? n : d]; }));
@@ -1409,6 +1409,7 @@ handle('settings:set', (patch) => {
   if ('autoSymlink' in patch) c.autoSymlink = !!patch.autoSymlink;
   if ('autoSendFork' in patch) c.autoSendFork = !!patch.autoSendFork;
   if ('showBrowser' in patch) c.showBrowser = !!patch.showBrowser;
+  if ('browserAskSites' in patch) c.browserAskSites = !!patch.browserAskSites;
   if ('synapseBrowserOnly' in patch) c.synapseBrowserOnly = !!patch.synapseBrowserOnly;
   if ('safeWorktreeDelete' in patch) c.safeWorktreeDelete = !!patch.safeWorktreeDelete;
   // what a new worktree or workspace opens with: a shell, or one of the agents (a profile)

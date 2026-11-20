@@ -129,4 +129,14 @@ const rows = () => ui(`[...document.querySelectorAll('#search-results > .search-
   await ui(`document.getElementById('search-dialog').dispatchEvent(new Event('cancel', { cancelable: true }))`);
   await until(async () => !(await rect()).open, 'Escape closes');
   console.log('PASS ⌘K opens it, Escape folds it away');
+
+  // left open, it holds still: the app's refreshes (about once a second) do not reorder, rebuild or resize it
+  await ui(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }))`);
+  await until(async () => (await rect()).open, '⌘K opens again');
+  await sleep(800);
+  await ui(`(() => { window.__paletteChanges = 0; const o = new MutationObserver((m) => { window.__paletteChanges += m.length; }); o.observe(document.getElementById('search-results'), { childList: true, subtree: true, characterData: true }); o.observe(document.getElementById('search-dialog'), { attributes: true, attributeFilter: ['style', 'class'] }); window.__paletteObserver = o; })()`);
+  await sleep(5000);
+  const changes = await ui(`(window.__paletteObserver.disconnect(), window.__paletteChanges)`);
+  assert.equal(changes, 0, `the open palette changed ${changes} times while nothing happened`);
+  console.log('PASS an open palette holds still through refreshes');
 })().catch((e) => { failed = true; console.error(e); }).finally(() => { fs.rmSync(fixture, { recursive: true, force: true }); app.exit(failed ? 1 : 0); });

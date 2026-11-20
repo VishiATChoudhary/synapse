@@ -3127,9 +3127,17 @@ function initialize() {
     if (hit.scope) return `<button ${attrs}><span class="action-icon">${icon(hit.scope.icon)}</span><span class="result-info"><strong>${escapeHtml(hit.scope.label)}</strong></span>${icon('arrow-right')}</button>`;
     return `<button ${attrs}><span class="action-icon">${icon(hit.action.icon)}</span><span class="result-info"><strong>${escapeHtml(hit.action.label)}</strong></span>${hit.action.hint ? `<kbd>${escapeHtml(hit.action.hint)}</kbd>` : ''}${icon('arrow-right')}</button>`;
   };
-  function renderSearch() {
+  // background: a state refresh while the palette is open (about once a second). Rows keep their places and the
+  // highlighted row stays highlighted; only what a row says changes. Reordering here made the list flash.
+  function renderSearch(background = false) {
     const { query, groups } = searchEntries();
+    const selectedKey = searchHits[searchIndex]?.key;
+    if (background) {
+      const was = new Map(searchHits.map((h, i) => [h.key, i]));
+      for (const group of groups) group[1] = group[1].map((h, i) => [h, was.has(h.key) ? was.get(h.key) : 1e6 + i]).sort((x, y) => x[1] - y[1]).map(([h]) => h);
+    }
     searchHits = groups.flatMap(([, hits]) => hits);
+    if (background && selectedKey) { const i = searchHits.findIndex((h) => h.key === selectedKey); if (i >= 0) searchIndex = i; }
     searchIndex = Math.max(0, Math.min(searchIndex, searchHits.length - 1));
     const entries = [];
     let index = 0;
@@ -3138,7 +3146,11 @@ function initialize() {
       for (const hit of hits) entries.push({ key: hit.key, html: hitHtml(hit, index++), row: true });
     }
     if (!entries.length) entries.push({ key: `empty:${query}`, html: `<p class="search-empty">Nothing matches “${escapeHtml(query)}”.</p>` });
-    const list = $('search-results'), motion = !stillMotion() && paletteState === 'open';
+    const list = $('search-results'), motion = !background && !stillMotion() && paletteState === 'open';
+    if (background) { // nothing changed: leave the DOM alone
+      const rows = [...list.children].filter((e) => !e.classList.contains('leave'));
+      if (rows.length === entries.length && rows.every((e, i) => e.dataset.key === entries[i].key && e.dataset.html === entries[i].html)) return;
+    }
     const old = new Map([...list.children].filter((e) => !e.classList.contains('leave')).map((e) => [e.dataset.key, e]));
     const before = new Map([...old].map(([key, e]) => [key, e.offsetTop]));
     const keep = new Set(entries.map((x) => x.key));
@@ -3201,7 +3213,9 @@ function initialize() {
     if (paletteState !== 'open') return;
     const from = pillRect(), width = Math.min(580, innerWidth - 24);
     const left = Math.max(12, Math.min(from.left, innerWidth - width - 12)), top = Math.max(8, Math.min(from.top, innerHeight * 0.4));
-    placePalette({ left, top, width, height: $('palette-inner').scrollHeight + 2 }, 16);
+    const height = $('palette-inner').scrollHeight + 2, d = $('search-dialog');
+    if (d.classList.contains('shown') && Math.abs(parseFloat(d.style.height) - height) < 1 && parseFloat(d.style.left) === left && parseFloat(d.style.top) === top) return;
+    placePalette({ left, top, width, height }, 16);
   }
   function openSearch() {
     if ($('action-dialog').open) return;
@@ -3278,7 +3292,7 @@ function initialize() {
     updateConnection(true); renderSidebar(); renderMain(first);
     paintTodoCount(); if (!paneKey) askEndedTodos();
     if (first && embedded && !paneKey) { const people = () => loadFriends().then(() => { renderSidebar(); inspectorSignature = ''; if (inspectorOpen) renderInspector(); }, () => {}); people(); setInterval(people, 60_000); }
-    if ($('search-dialog').open) renderSearch();
+    if ($('search-dialog').open && paletteState === 'open') renderSearch(true);
   }
 
   function connectEvents() {

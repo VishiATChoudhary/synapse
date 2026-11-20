@@ -14,7 +14,7 @@ const PARTITION = 'persist:synapse-browser';
 const TOOLBAR = 44; // the popped window's own bar above the page
 const ASK_FOR = 120_000; // how long an agent waits for you to allow a site
 
-export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = null, packaged = true, onAgentOpened = () => {} }) {
+export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = null, packaged = true, onAgentOpened = () => {}, askSites = () => true }) {
   const FILE = path.join(dataDir, 'agent-browser.json');
   const SITES = path.join(dataDir, 'agent-browser-sites.json');
   const LOGINS = path.join(dataDir, 'agent-browser-logins.json');
@@ -255,7 +255,8 @@ export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = n
   }
 
   // ------------------------------------------------------------ what agents do
-  const allowedFor = (id, origin) => !origin || local(origin) || entry(id).allowAll || entry(id).allowed.has(origin) || readSites().has(origin);
+  // askSites off (Settings > Agents > Browser): agents open any site without asking; sign-ins still ask
+  const allowedFor = (id, origin) => !origin || local(origin) || !askSites() || entry(id).allowAll || entry(id).allowed.has(origin) || readSites().has(origin);
   const micFor = (id, origin) => entry(id).mic.has(origin) || readMic().has(origin);
   function ask(id, origin, login = null, kind = login ? 'login' : 'site') {
     if (kind === 'site' && allowedFor(id, origin)) return Promise.resolve(true);
