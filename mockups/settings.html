@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Synapse: Settings and model picker mockups</title>
+<style>
+  :root {
+    --bg: #0b0b0c; --sheet: #121213; --side: #0e0e0f; --row: #1b1b1d; --row-hi: #232326; --fill: #2c2c30;
+    --ink: #f4f3f1; --ink-2: #c9c8c3; --ink-3: #8e8d88; --ink-4: #5f5e5a; --line: rgba(255,255,255,.07);
+    --accent: #6d7cff; --ok: #3fb950; --warn: #e3b341; --danger: #f2555a;
+    --r-sheet: 22px; --r-row: 14px; --r-pill: 999px;
+    --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    --font-head: "Plus Jakarta Sans", "Inter", -apple-system, sans-serif;
+    --pop: cubic-bezier(.24, 1.34, .38, 1); --out: cubic-bezier(.22, 1, .36, 1);
+  }
+  [data-theme=light] {
+    --bg: #ecebe7; --sheet: #ffffff; --side: #f7f7f6; --row: #f1f1f0; --row-hi: #ecebe7; --fill: #e3e2dd;
+    --ink: #17181a; --ink-2: #3c3b37; --ink-3: #6f6e68; --ink-4: #adaca6; --line: rgba(23,24,26,.08);
+  }
+  [data-theme=light] { color: var(--ink); }
+  [data-theme=light] .chip.due { color: #3a47c9; } [data-theme=light] .chip.keep { color: #15803d; } [data-theme=light] .m .new { color: #3a47c9; }
+  [data-theme=light] .sheet { box-shadow: 0 0 0 1px var(--line), 0 24px 60px rgba(23,24,26,.12); }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 var(--font-ui); -webkit-font-smoothing: antialiased; }
+  .page { max-width: 1240px; margin: 0 auto; padding: 36px 28px 80px; }
+  .page > h1 { font: 600 26px var(--font-head); letter-spacing: -.01em; margin: 0 0 4px; }
+  .page > p.lede { color: var(--ink-3); margin: 0 0 28px; max-width: 760px; }
+  .label { font: 600 12px var(--font-ui); text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); margin: 44px 0 12px; display: flex; gap: 10px; align-items: center; }
+  .label b { color: var(--accent); }
+  .note { color: var(--ink-3); font-size: 13px; margin: 10px 2px 0; max-width: 900px; }
+  svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* ---------- settings sheet (T3 layout, bencho look) ---------- */
+  .sheet { display: grid; grid-template-columns: 232px 1fr; height: 720px; background: var(--sheet); border-radius: var(--r-sheet); overflow: hidden; box-shadow: 0 0 0 1px var(--line), 0 30px 80px rgba(0,0,0,.45); }
+  .side { background: var(--side); border-right: 1px solid var(--line); padding: 14px 10px; display: flex; flex-direction: column; gap: 2px; }
+  .search { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; margin: 2px 2px 12px; border-radius: var(--r-pill); background: var(--row); color: var(--ink-3); }
+  .search span { flex: 1; }
+  kbd { font: 500 11px var(--font-ui); color: var(--ink-3); background: var(--fill); border-radius: 6px; padding: 2px 6px; }
+  .nav-h { font: 500 11.5px var(--font-ui); color: var(--ink-4); padding: 12px 12px 4px; }
+  .nav { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 12px; border-radius: 10px; color: var(--ink-2); position: relative; }
+  .nav:hover { background: var(--row); }
+  .nav.on { background: var(--row-hi); color: var(--ink); }
+  .nav.on::before { content: ""; position: absolute; left: -10px; top: 9px; bottom: 9px; width: 3px; border-radius: 3px; background: var(--ink); }
+  .nav .badge { margin-left: auto; font-size: 11px; color: var(--ink-3); }
+  .side .foot { margin-top: auto; display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; background: var(--row); }
+  .avatar { width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #6d7cff, #e86fd6); }
+  .foot small { display: block; color: var(--ink-3); font-size: 11.5px; }
+
+  .main { display: flex; flex-direction: column; min-width: 0; }
+  .head { height: 52px; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 24px; border-bottom: 1px solid var(--line); }
+  .crumb { color: var(--ink-3); } .crumb b { color: var(--ink); font-weight: 500; }
+  .head .sp { flex: 1; }
+  .ghost { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: var(--r-pill); color: var(--ink-2); background: transparent; border: 0; font: inherit; }
+  .ghost:hover { background: var(--row); }
+  .round { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: var(--row); color: var(--ink-2); }
+  .scroll { overflow: auto; padding: 26px 0 40px; }
+  .col { max-width: 680px; margin: 0 auto; padding: 0 28px; display: flex; flex-direction: column; gap: 30px; }
+  .sec h2 { font: 600 15px var(--font-head); margin: 0 4px 10px; }
+  .sec .rows { display: flex; flex-direction: column; gap: 6px; }
+
+  /* the bencho row: a rounded pill, name left, value right */
+  .r { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 24px; min-height: 52px; padding: 10px 10px 10px 16px; background: var(--row); border-radius: var(--r-row); position: relative; }
+  .r:hover { background: var(--row-hi); }
+  .r .t { font-weight: 500; display: flex; align-items: center; gap: 6px; }
+  .r .d { color: var(--ink-3); font-size: 12.5px; margin-top: 2px; }
+  .reset { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 6px; color: var(--ink-3); }
+  .reset:hover { background: var(--fill); color: var(--ink); }
+  .reset svg.i { width: 12px; height: 12px; }
+  .val { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px 0 12px; border-radius: 10px; color: var(--ink); }
+  .val:hover { background: var(--fill); }
+  .val svg.i { width: 14px; height: 14px; color: var(--ink-3); }
+  /* switch */
+  .sw { width: 38px; height: 22px; border-radius: 999px; background: var(--fill); position: relative; margin-right: 6px; transition: background .2s; }
+  .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--ink-3); transition: transform .3s var(--pop), background .2s; }
+  .sw.on { background: var(--ink); } .sw.on::after { transform: translateX(16px); background: var(--sheet); }
+  /* bencho slider row: the fill is the value */
+  .slide { padding: 0; overflow: hidden; }
+  .slide .bar { position: absolute; inset: 0 auto 0 0; background: var(--fill); border-radius: var(--r-row) 0 0 var(--r-row); }
+  .slide .bar::after { content: ""; position: absolute; right: 8px; top: 16px; bottom: 16px; width: 2px; border-radius: 2px; background: var(--ink-3); }
+  .slide > div { position: relative; padding: 10px 16px; }
+  .slide .num { font-variant-numeric: tabular-nums; padding-right: 16px; position: relative; }
+  /* segmented pill */
+  .seg { display: inline-flex; padding: 3px; gap: 2px; background: var(--side); border-radius: var(--r-pill); }
+  .seg span { padding: 5px 12px; border-radius: var(--r-pill); color: var(--ink-3); font-size: 13px; }
+  .seg span.on { background: var(--ink); color: var(--sheet); font-weight: 500; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 16px; border-radius: var(--r-pill); background: var(--ink); color: var(--sheet); font-weight: 500; }
+  .btn.soft { background: var(--fill); color: var(--ink); }
+  .list { background: var(--row); border-radius: var(--r-row); overflow: hidden; }
+  .li { display: grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items: center; padding: 10px 14px; }
+  .li + .li { border-top: 1px solid var(--line); }
+  .li .sub { color: var(--ink-3); font-size: 12px; }
+  .chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--fill); color: var(--ink-2); }
+  .chip.due { background: color-mix(in srgb, var(--accent) 22%, transparent); color: #b8c0ff; }
+  .chip.keep { background: color-mix(in srgb, var(--ok) 18%, transparent); color: #8fe3a0; }
+  .glyph { width: 28px; height: 28px; border-radius: 9px; background: var(--fill); display: grid; place-items: center; color: var(--ink-2); }
+  /* open select popup, bencho menu */
+  .menu { position: absolute; right: 8px; top: 46px; z-index: 3; width: 236px; padding: 6px; border-radius: 16px; background: color-mix(in srgb, var(--row-hi) 92%, transparent); backdrop-filter: blur(18px); box-shadow: 0 0 0 1px var(--line), 0 18px 40px rgba(0,0,0,.45); }
+  .menu div { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border-radius: 10px; color: var(--ink-2); }
+  .menu div.on { background: var(--fill); color: var(--ink); }
+  .menu div.on::after { content: "✓"; margin-left: auto; color: var(--ink-3); font-size: 12px; }
+
+  /* ---------- model picker (T3 structure, bencho look) ---------- */
+  .stage { background: var(--sheet); border-radius: var(--r-sheet); padding: 26px; box-shadow: 0 0 0 1px var(--line); display: grid; grid-template-columns: 1fr; gap: 18px; }
+  .picker { display: grid; grid-template-columns: 52px 320px 196px; height: 380px; border-radius: 18px; overflow: hidden; background: var(--row); box-shadow: 0 0 0 1px var(--line), 0 24px 60px rgba(0,0,0,.5); width: max-content; }
+  .rail { background: var(--side); display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 0; position: relative; }
+  .rail .p { width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; color: var(--ink-3); position: relative; }
+  .rail .p.on { background: var(--row-hi); color: var(--ink); }
+  .rail .p.on::before { content: ""; position: absolute; left: -8px; top: 9px; bottom: 9px; width: 3px; border-radius: 3px; background: var(--ink); }
+  .logo { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; font: 700 10px var(--font-ui); color: #fff; }
+  .lc { background: #d97757; } .lo { background: #10a37f; } .lg { background: linear-gradient(135deg,#4285f4,#9b72cb); } .la { background: #2b2b2e; color: #e8e8e8; } .lk { background: #3a3a3e; }
+  .models { display: flex; flex-direction: column; border-left: 1px solid var(--line); min-width: 0; }
+  .msearch { display: flex; gap: 8px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); color: var(--ink-3); }
+  .mlist { padding: 6px; overflow: hidden; display: flex; flex-direction: column; gap: 2px; }
+  .mh { font: 500 11.5px var(--font-ui); color: var(--ink-4); padding: 8px 10px 4px; }
+  .m { display: grid; grid-template-columns: 20px 1fr auto; gap: 10px; align-items: center; height: 38px; padding: 0 10px; border-radius: 10px; color: var(--ink-2); }
+  .m small { color: var(--ink-4); margin-left: 6px; }
+  .m.on { background: var(--row-hi); color: var(--ink); }
+  .m .new { font: 700 9.5px var(--font-ui); letter-spacing: .06em; color: #b8c0ff; background: color-mix(in srgb, var(--accent) 22%, transparent); padding: 2px 6px; border-radius: 6px; }
+  .m .star { color: var(--warn); }
+  .effort { border-left: 1px solid var(--line); background: color-mix(in srgb, var(--side) 60%, var(--row)); display: flex; flex-direction: column; }
+  .effort .eh { display: flex; justify-content: space-between; padding: 13px 14px; border-bottom: 1px solid var(--line); color: var(--ink-3); font-size: 12.5px; }
+  .e { display: flex; align-items: center; gap: 10px; height: 34px; margin: 2px 6px; padding: 0 10px; border-radius: 10px; color: var(--ink-2); }
+  .e.on { background: var(--row-hi); color: var(--ink); }
+  .e .bars { display: inline-flex; gap: 2px; align-items: flex-end; height: 12px; }
+  .e .bars i { width: 3px; border-radius: 1px; background: var(--ink-4); }
+  .e .bars i.f { background: currentColor; }
+  .e .tag { margin-left: auto; font-size: 11px; color: var(--ink-4); }
+  .pfoot { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-top: 1px solid var(--line); background: var(--side); }
+  .composer { width: 620px; border-radius: 20px; background: var(--row); padding: 14px 14px 10px; box-shadow: 0 0 0 1px var(--line); }
+  .composer .ph { color: var(--ink-4); padding: 4px 4px 18px; }
+  .ctl { display: flex; align-items: center; gap: 6px; }
+  .trigger { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px 0 7px; border-radius: 10px; color: var(--ink); background: var(--row-hi); }
+  .trigger .eff { color: var(--ink-3); }
+  .trigger svg.i { width: 13px; height: 13px; color: var(--ink-3); }
+  .send { margin-left: auto; width: 32px; height: 32px; border-radius: 50%; background: var(--ink); color: var(--sheet); display: grid; place-items: center; }
+  .two { display: grid; grid-template-columns: auto 1fr; gap: 28px; align-items: start; }
+  .callouts { color: var(--ink-3); font-size: 13px; line-height: 1.6; margin: 0; padding-left: 18px; }
+  .callouts b { color: var(--ink); font-weight: 500; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></symbol>
+  <symbol id="chev" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+  <symbol id="x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+  <symbol id="general" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></symbol>
+  <symbol id="palette" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z"/></symbol>
+  <symbol id="bell" viewBox="0 0 24 24"><path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></symbol>
+  <symbol id="key" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="3"/><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8"/></symbol>
+  <symbol id="bot" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01"/></symbol>
+  <symbol id="globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.6 3.5 5.6 3.5 8.5s-1 5.9-3.5 8.5c-2.5-2.6-3.5-5.6-3.5-8.5s1-5.9 3.5-8.5"/></symbol>
+  <symbol id="plug" viewBox="0 0 24 24"><path d="M9 2.5v4.5M15 2.5v4.5M6 7h12v3.5a6 6 0 0 1-12 0z"/><path d="M12 16.5v5"/></symbol>
+  <symbol id="lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></symbol>
+  <symbol id="folder" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h4l3 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></symbol>
+  <symbol id="branch" viewBox="0 0 24 24"><circle cx="6" cy="5.5" r="2"/><circle cx="6" cy="18.5" r="2"/><circle cx="18" cy="7.5" r="2"/><path d="M6 7.5v9M18 9.5c0 4-6 3-11 7"/></symbol>
+  <symbol id="trash" viewBox="0 0 24 24"><path d="M4 7h16M9.5 7V4.5h5V7M6 7l1 12.5a1.5 1.5 0 0 0 1.5 1.4h7a1.5 1.5 0 0 0 1.5-1.4L18 7"/></symbol>
+  <symbol id="phone" viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18h2"/></symbol>
+  <symbol id="people" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5M16 4.6a3.2 3.2 0 0 1 0 6.3M18 14.3c1.7.7 2.8 2.4 3 4.7"/></symbol>
+  <symbol id="info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></symbol>
+  <symbol id="star" viewBox="0 0 24 24"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/></symbol>
+  <symbol id="bolt" viewBox="0 0 24 24"><path d="M13 3 5 13.5h6L10 21l8-10.5h-6z"/></symbol>
+  <symbol id="arrow-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="shield" viewBox="0 0 24 24"><path d="M12 3.5 5 6v5.5c0 4.3 3 7.6 7 9 4-1.4 7-4.7 7-9V6z"/></symbol>
+  <symbol id="paperclip" viewBox="0 0 24 24"><path d="m20 11.5-7.8 7.8a5 5 0 0 1-7-7l8.3-8.3a3.3 3.3 0 0 1 4.7 4.7l-8.3 8.3a1.7 1.7 0 0 1-2.4-2.4l7.6-7.6"/></symbol>
+</svg>
+<div class="page">
+  <h1>Settings and model picker</h1>
+  <p class="lede">Mockups only, nothing is built yet. Structure from T3 Code (sidebar with search and groups, breadcrumb header, sections of rows, per-row reset, model picker with provider rail, list and effort column). Look from bencho.dev (rounded pill rows, the value on the right with a chevron, fill sliders, white pill buttons, segmented pills, thin line icons, springy easing).</p>
+
+  <div class="label"><b>A</b> Settings: General, dark</div>
+  <div class="sheet">
+    <aside class="side">
+      <div class="search"><svg class="i"><use href="#search"/></svg><span>Search settings</span><kbd>/</kbd></div>
+      <div class="nav on"><svg class="i"><use href="#general"/></svg>General</div>
+      <div class="nav"><svg class="i"><use href="#palette"/></svg>Appearance</div>
+      <div class="nav"><svg class="i"><use href="#bell"/></svg>Notifications</div>
+      <div class="nav"><svg class="i"><use href="#key"/></svg>Shortcuts</div>
+      <div class="nav-h">Agents</div>
+      <div class="nav"><svg class="i"><use href="#bot"/></svg>Agents and models</div>
+      <div class="nav"><svg class="i"><use href="#globe"/></svg>Browser</div>
+      <div class="nav"><svg class="i"><use href="#plug"/></svg>Connectors<span class="badge">4</span></div>
+      <div class="nav"><svg class="i"><use href="#lock"/></svg>Logins</div>
+      <div class="nav-h">Code</div>
+      <div class="nav"><svg class="i"><use href="#folder"/></svg>Workspaces</div>
+      <div class="nav"><svg class="i"><use href="#trash"/></svg>Cleanup</div>
+      <div class="nav-h">People</div>
+      <div class="nav"><svg class="i"><use href="#people"/></svg>Friends and talk</div>
+      <div class="nav"><svg class="i"><use href="#phone"/></svg>Phone</div>
+      <div class="nav"><svg class="i"><use href="#info"/></svg>About</div>
+      <div class="foot"><div class="avatar"></div><div>Vishi<small>Synapse 0.6.52 · up to date</small></div></div>
+    </aside>
+    <section class="main">
+      <div class="head"><div class="crumb">Settings › <b>General</b></div><div class="sp"></div><button class="ghost"><svg class="i"><use href="#undo"/></svg>Restore defaults</button><div class="round" title="Close (Esc)"><svg class="i"><use href="#x"/></svg></div></div>
+      <div class="scroll"><div class="col">
+        <div class="sec"><h2>Window</h2><div class="rows">
+          <div class="r"><div><div class="t">Open Synapse at login</div><div class="d">So friends’ questions get answered while you work.</div></div><div class="sw on"></div></div>
+          <div class="r"><div><div class="t">New sessions start with</div><div class="d">What ⌘N opens.</div></div><div class="val">Claude <svg class="i"><use href="#chev"/></svg></div></div>
+        </div></div>
+        <div class="sec"><h2>Sidebar</h2><div class="rows">
+          <div class="r"><div><div class="t">Group sessions by <span class="reset" title="Reset to default"><svg class="i"><use href="#undo"/></svg></span></div><div class="d">Changed from the default (Project).</div></div><div class="val">Status <svg class="i"><use href="#chev"/></svg></div>
+            <div class="menu"><div>Project</div><div class="on">Status</div><div>Last used</div></div></div>
+          <div class="r"><div><div class="t">Show the working section</div><div class="d">Agents that are busy or waiting on you, at the top.</div></div><div class="sw on"></div></div>
+          <div class="r slide"><div class="bar" style="width:46%"></div><div><div class="t">Panel width</div></div><div class="num">380 px</div></div>
+        </div></div>
+        <div class="sec"><h2>Confirmations</h2><div class="rows">
+          <div class="r"><div><div class="t">Before closing a working agent</div></div><div class="sw on"></div></div>
+          <div class="r"><div><div class="t">Before deleting a worktree</div></div><div class="sw"></div></div>
+        </div></div>
+        <div class="sec"><h2>Updates</h2><div class="rows">
+          <div class="r"><div><div class="t">Version 0.6.52</div><div class="d">Up to date · checked 4 min ago</div></div><span class="btn soft">Check now</span></div>
+        </div></div>
+      </div></div>
+    </section>
+  </div>
+  <p class="note">Sidebar: grouped like T3, with search on top (<kbd>/</kbd> or <kbd>⌘F</kbd>); search results replace the list and jump to the row. Every row is a bencho pill; selects show their value plus a chevron and open a frosted menu; a changed setting gets a small ↺ to reset it. Changes save as you make them; "Restore defaults" resets the page.</p>
+
+  <div class="label"><b>B</b> Settings: Cleanup, light</div>
+  <div data-theme="light" style="background:var(--bg);padding:24px;border-radius:26px">
+  <div class="sheet">
+    <aside class="side">
+      <div class="search"><svg class="i"><use href="#search"/></svg><span>Search settings</span><kbd>/</kbd></div>
+      <div class="nav"><svg class="i"><use href="#general"/></svg>General</div>
+      <div class="nav"><svg class="i"><use href="#palette"/></svg>Appearance</div>
+      <div class="nav"><svg class="i"><use href="#bell"/></svg>Notifications</div>
+      <div class="nav"><svg class="i"><use href="#key"/></svg>Shortcuts</div>
+      <div class="nav-h">Agents</div>
+      <div class="nav"><svg class="i"><use href="#bot"/></svg>Agents and models</div>
+      <div class="nav"><svg class="i"><use href="#globe"/></svg>Browser</div>
+      <div class="nav"><svg class="i"><use href="#plug"/></svg>Connectors<span class="badge">4</span></div>
+      <div class="nav"><svg class="i"><use href="#lock"/></svg>Logins</div>
+      <div class="nav-h">Code</div>
+      <div class="nav"><svg class="i"><use href="#folder"/></svg>Workspaces</div>
+      <div class="nav on"><svg class="i"><use href="#trash"/></svg>Cleanup</div>
+      <div class="nav-h">People</div>
+      <div class="nav"><svg class="i"><use href="#people"/></svg>Friends and talk</div>
+      <div class="nav"><svg class="i"><use href="#phone"/></svg>Phone</div>
+      <div class="foot"><div class="avatar"></div><div>Vishi<small>Synapse 0.6.52</small></div></div>
+    </aside>
+    <section class="main">
+      <div class="head"><div class="crumb">Settings › <b>Cleanup</b></div><div class="sp"></div><div class="round"><svg class="i"><use href="#x"/></svg></div></div>
+      <div class="scroll"><div class="col">
+        <div class="sec"><h2>Agents</h2><div class="rows">
+          <div class="r"><div><div class="t">Done turns to Idle after</div></div><div class="val">1 day <svg class="i"><use href="#chev"/></svg></div></div>
+          <div class="r"><div><div class="t">Archive unused agents after</div></div><div class="val">3 days <svg class="i"><use href="#chev"/></svg></div></div>
+          <div class="r"><div><div class="t">End unused agents after <span class="reset"><svg class="i"><use href="#undo"/></svg></span></div><div class="d">Their chats stay on disk and can be resumed from Past chats.</div></div><div class="val">30 days <svg class="i"><use href="#chev"/></svg></div></div>
+        </div></div>
+        <div class="sec"><h2>Worktrees</h2><div class="rows">
+          <div class="r"><div><div class="t">Clean up worktrees unused for</div><div class="d">Nothing typed, said or committed there.</div></div><div class="val">2 weeks <svg class="i"><use href="#chev"/></svg></div></div>
+          <div class="r"><div><div class="t">Cleaning up</div></div><div class="seg"><span class="on">Push, then remove</span><span>Remove</span></div></div>
+          <div class="r"><div><div class="t">Check</div></div><div class="seg"><span>At launch</span><span>Hourly</span><span class="on">6 h</span><span>Daily</span></div></div>
+          <div class="r"><div><div class="t">1 due now</div><div class="d">Last run 2 h ago: 2 cleaned up.</div></div><span class="btn">Clean up now</span></div>
+        </div></div>
+        <div class="sec"><h2>Your worktrees</h2><div class="list">
+          <div class="li"><div class="glyph"><svg class="i"><use href="#branch"/></svg></div><div>old-onboarding<div class="sub">onboarding-v2 · used 23 days ago</div></div><span class="chip due">Due: push, then remove</span></div>
+          <div class="li"><div class="glyph"><svg class="i"><use href="#branch"/></svg></div><div>pr-pill<div class="sub">pr-pill · used 3 days ago</div></div><span class="chip">In 11 days</span></div>
+          <div class="li"><div class="glyph"><svg class="i"><use href="#branch"/></svg></div><div>synapse-wt-default<div class="sub">fix-archive · used just now</div></div><span class="chip keep">Kept: an agent is working there</span></div>
+        </div></div>
+      </div></div>
+    </section>
+  </div>
+  </div>
+  <p class="note">Same frame in light mode. Choices with two to four options become segmented pills (bencho), longer ones keep the select. The list uses the same row shapes, with a chip for each worktree's fate.</p>
+
+  <div class="label"><b>C</b> Model picker in the composer</div>
+  <div class="stage">
+    <div class="two">
+      <div>
+        <div class="picker">
+          <div class="rail">
+            <div class="p"><svg class="i"><use href="#star"/></svg></div>
+            <div class="p on"><span class="logo lc">✳</span></div>
+            <div class="p"><span class="logo lo">◎</span></div>
+            <div class="p"><span class="logo lg">G</span></div>
+            <div class="p"><span class="logo la">Ag</span></div>
+            <div class="p"><span class="logo lk">oc</span></div>
+          </div>
+          <div class="models">
+            <div class="msearch"><svg class="i"><use href="#search"/></svg>Search Claude models…</div>
+            <div class="mlist">
+              <div class="mh">Claude</div>
+              <div class="m on"><span class="logo lc">✳</span><span>Opus 5.5<small>Default</small></span><span>✓</span></div>
+              <div class="m"><span class="logo lc">✳</span><span>Fable 5.2</span><span class="new">NEW</span></div>
+              <div class="m"><span class="logo lc">✳</span><span>Sonnet 5.5</span><svg class="i star"><use href="#star"/></svg></div>
+              <div class="m"><span class="logo lc">✳</span><span>Haiku 5.5<small>fast</small></span><span></span></div>
+              <div class="mh">Older</div>
+              <div class="m"><span class="logo lc">✳</span><span>Opus 4.6</span><span></span></div>
+            </div>
+          </div>
+          <div class="effort">
+            <div class="eh"><span>Effort</span><span>Opus 5.5</span></div>
+            <div class="e"><span class="bars"><i class="f" style="height:4px"></i><i style="height:7px"></i><i style="height:10px"></i><i style="height:12px"></i></span>Low</div>
+            <div class="e"><span class="bars"><i class="f" style="height:4px"></i><i class="f" style="height:7px"></i><i style="height:10px"></i><i style="height:12px"></i></span>Medium<span class="tag">Default</span></div>
+            <div class="e on"><span class="bars"><i class="f" style="height:4px"></i><i class="f" style="height:7px"></i><i class="f" style="height:10px"></i><i style="height:12px"></i></span>High ✓</div>
+            <div class="e"><span class="bars"><i class="f" style="height:4px"></i><i class="f" style="height:7px"></i><i class="f" style="height:10px"></i><i class="f" style="height:12px"></i></span>Max</div>
+          </div>
+          <div class="pfoot"><div class="seg"><span class="on">Standard</span><span><svg class="i" style="width:12px;height:12px;vertical-align:-2px"><use href="#bolt"/></svg> Fast</span></div><span class="sp" style="flex:1"></span><span class="ghost"><svg class="i"><use href="#shield"/></svg>Ask before edits <svg class="i" style="width:13px"><use href="#chev"/></svg></span></div>
+        </div>
+        <div style="height:12px"></div>
+        <div class="composer">
+          <div class="ph">Ask Claude anything, @ to add files</div>
+          <div class="ctl"><span class="round" style="width:30px;height:30px"><svg class="i"><use href="#paperclip"/></svg></span><span class="trigger"><span class="logo lc">✳</span>Opus 5.5 <span class="eff">· High</span><svg class="i"><use href="#chev"/></svg></span><span class="send"><svg class="i"><use href="#arrow-up"/></svg></span></div>
+        </div>
+      </div>
+      <ul class="callouts">
+        <li><b>Trigger</b> in the composer: the provider's logo, the model and its effort, plus a chevron. <kbd>⇧⌘M</kbd> opens it.</li>
+        <li><b>Rail</b> on the left: Favorites, then one square per agent (Claude, Codex, Gemini, Antigravity, OpenCode). A bar marks the current one; <kbd>⇧⌘↑↓</kbd> switches.</li>
+        <li><b>List</b> with search: the agent's models from its own CLI (what Synapse already reads), current ones first, older ones under "Older". A star pins favorites, NEW marks new ones.</li>
+        <li><b>Effort</b> column for models that have it (Claude, Codex), with bars like T3 and the default tagged.</li>
+        <li><b>Footer</b>: Standard or Fast as a segmented pill, and the permission mode.</li>
+        <li>Keyboard like T3: ← → between columns, ↑ ↓ in a list, Enter picks, Esc closes.</li>
+        <li>Starting a new session uses the same picker, so the model is chosen the same way everywhere.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+</body>
+</html>
