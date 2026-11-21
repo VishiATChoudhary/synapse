@@ -11,6 +11,7 @@ import { execFile, execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
 import { git, listChoices, listWorktrees, createWorktree, openWorktree, deleteWorktree, safeDeleteWorktree, fetchBranches, pullRequests, choicePullRequest, changesAsync, commitAll, pushBranch, pullRequest } from './worktrees.mjs';
 import * as saved from '../saved.mjs';
+import { createApiKeys, withKeys } from './api-keys.mjs';
 import { cleanPolicy, planCleanup, parkWorktree, DAY as GC_DAY } from './worktree-gc.mjs';
 import { DATA, FILES, WIN, readJSON, writeJSON, listAgents, projectOf, colorOf, linked, renameProject, renameAgent, recordFork, readAgentMessages, takeInbox, gitLocate } from '../lib.mjs';
 import { createEdge, allowTalkRequest, dismissTalkRequest, setMode, removeEdge } from '../ops.mjs';
@@ -410,10 +411,12 @@ async function spawnPty({ cwd, kind, command, cols = 120, rows = 36, extraEnv = 
   await integrationSetup;
   if (shellPath === undefined) await shellPathReady; // first launch ever: the PATH a terminal would have
   command = quietCodex(kind, command);
+  const keyed = withKeys(kind, command, apiKeys.envFor(kind)); // Settings > API keys
+  command = keyed.command;
   const id = String(nextPty++);
   const env = {
     ...cleanEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'synapse', LANG: process.env.LANG || 'en_US.UTF-8',
-    SYNAPSE_APP: '1', SYNAPSE_SESSION: id, ...browserEnvFor(cwd), ...extraEnv,
+    SYNAPSE_APP: '1', SYNAPSE_SESSION: id, ...browserEnvFor(cwd), ...keyed.env, ...extraEnv,
   };
   // exec so the pty's pid is the agent's own pid, which is how Synapse identifies it. Windows has no exec:
   // the agent is a child of cmd.exe there, matched back to this terminal through ptys.json (lib.mjs hostPid)
@@ -1112,6 +1115,13 @@ const signIns = {
   secret: (base, opts) => logins.has(base) ? logins.secret(base) : vault.secret(base, opts),
 };
 handle('logins:list', () => signIns.logins());
+// API keys for the agents (api-keys.mjs): encrypted like the logins, handed to new sessions as env vars
+const apiKeys = createApiKeys({ file: path.join(DATA, 'api-keys.json'), safeStorage: testCrypto || safeStorage, fetch: !app.isPackaged && process.env.SYNAPSE_KEYS_OFFLINE === '1' ? null : globalThis.fetch });
+handle('keys:list', () => apiKeys.list());
+handle('keys:set', ({ id, key }) => apiKeys.set(String(id || ''), String(key || '')));
+handle('keys:remove', ({ id }) => apiKeys.remove(String(id || '')));
+handle('keys:use', ({ id, agent, on }) => apiKeys.use(String(id || ''), String(agent || ''), !!on));
+handle('keys:check', ({ id }) => apiKeys.recheck(String(id || '')));
 handle('logins:add', ({ site, username, password }) => logins.add({ site, username, password }));
 handle('logins:remove', ({ base }) => logins.remove(String(base || '')));
 const agentBrowser = createAgentBrowser({ dataDir: DATA, root: ROOT, vault: signIns, packaged: app.isPackaged, getWin: () => win, askSites: () => config().browserAskSites === true,

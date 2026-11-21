@@ -2039,7 +2039,7 @@ function canvasMenu({ hit, agent, group, x, y, hiddenCount }, r = $('#canvas-fra
 // Every change saves to ~/.synapse/app.json as it is made.
 const SETTINGS_PANES = [ // key, label, glyph, the sidebar group it sits under (like T3 Code's settings)
   ['general', 'General', '◐', ''], ['appearance', 'Appearance', '◑', ''], ['notifications', 'Notifications', '◔', ''], ['shortcuts', 'Shortcuts', '⌘', ''],
-  ['agents', 'Agents', '✳', 'Agents'], ['browser', 'Browser', '◎', 'Agents'], ['connectors', 'Connectors', '⌁', 'Agents'], ['logins', 'Logins', '⚿', 'Agents'],
+  ['agents', 'Agents', '✳', 'Agents'], ['keys', 'API keys', '⚷', 'Agents'], ['browser', 'Browser', '◎', 'Agents'], ['connectors', 'Connectors', '⌁', 'Agents'], ['logins', 'Logins', '⚿', 'Agents'],
   ['workspaces', 'Workspaces', '▤', 'Code'], ['cleanup', 'Cleanup', '♻', 'Code'],
   ['people', 'People & agent talk', '◎', 'People'], ['phone', 'Phone', '◫', 'People'],
 ];
@@ -2052,6 +2052,7 @@ const SET_ICONS = {
   cleanup: '<path d="M4 7h16M9.5 7V4.5h5V7M6 7l1 12.5a1.5 1.5 0 0 0 1.5 1.4h7a1.5 1.5 0 0 0 1.5-1.4L18 7"/><path d="M10 11v6M14 11v6"/>',
   connectors: '<path d="M9 2.5v4.5M15 2.5v4.5M6 7h12v3.5a6 6 0 0 1-12 0z"/><path d="M12 16.5v5"/>',
   browser: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.6 3.5 5.6 3.5 8.5s-1 5.9-3.5 8.5c-2.5-2.6-3.5-5.6-3.5-8.5s1-5.9 3.5-8.5"/>',
+  keys: '<rect x="3.5" y="10" width="17" height="10.5" rx="2.5"/><path d="M7.5 10V7a4.5 4.5 0 0 1 9 0v3"/><circle cx="12" cy="15.2" r="1.3"/>',
   logins: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9m-4 4 3 3m-6 0 2 2"/>',
   appearance: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none"/>',
   shortcuts: '<path d="M9 6.5A2.5 2.5 0 1 0 6.5 9h11A2.5 2.5 0 1 0 15 6.5v11a2.5 2.5 0 1 0 2.5-2.5h-11A2.5 2.5 0 1 0 9 17.5z"/>',
@@ -2279,6 +2280,56 @@ async function openSettings(start) {
     pane('logins', 'Agents sign in with these in the Synapse browser. You approve each sign-in, and the password goes into the page, never to the agent.',
       group('Add a login', card(loginForm, loginNote)),
       group('Saved logins', loginList));
+
+    // ---- API keys: a provider's key for the agents that use it (app/api-keys.mjs). Encrypted on this Mac; new
+    // sessions get it as an env var. Each agent can be turned off for a key, to keep a subscription login there.
+    const keyList = el('div', 'key-list');
+    const agentLabel = (k) => M.profiles?.[k]?.label || ({ claude: 'Claude Code', codex: 'Codex', 'cursor-agent': 'Cursor Agent', opencode: 'OpenCode', gemini: 'Gemini CLI', amp: 'Amp' })[k] || k;
+    const drawKeys = async (focus) => {
+      let list = [];
+      try { list = await synapse.keys.list(); } catch (e) { keyList.replaceChildren(el('p', 'set-desc set-pad', e.message)); return; }
+      keyList.replaceChildren(...list.map((p) => {
+        const r = el('div', 'key-row' + (p.saved ? ' saved' : '')); r.dataset.key = p.id;
+        const head = el('div', 'key-head'), text = el('div', 'key-text');
+        const name = el('div', 'key-name', p.label);
+        if (p.saved) name.append(el('span', 'key-tag' + (p.checked === false ? ' bad' : ''), p.checked === true ? 'Working' : p.checked === false ? 'Refused' : 'Saved'));
+        text.append(name, el('div', 'key-sub', p.saved ? `•••• ${p.last4} · ${p.env[0]}` : `Used by ${p.agents.map(agentLabel).join(', ')}`));
+        head.append(el('span', 'login-badge', p.label[0]), text);
+        const form = el('form', 'key-form'); form.autocomplete = 'off';
+        const input = el('input', 'set-input'); input.type = 'password'; input.placeholder = p.saved ? 'Paste a new key to replace it' : p.hint || 'Paste the key'; input.spellcheck = false; input.autocomplete = 'off';
+        input.setAttribute('aria-label', `${p.label} API key`);
+        const save = el('button', 'set-btn primary', 'Save'); save.type = 'submit';
+        form.append(input, save);
+        form.onsubmit = async (e) => {
+          e.preventDefault(); save.disabled = true; save.textContent = p.checkable ? 'Checking…' : 'Saving…';
+          try { await synapse.keys.set(p.id, input.value); toast(`Saved the ${p.label} key. New sessions use it.`); drawKeys(p.id); }
+          catch (err) { toast(err.message, true); save.disabled = false; save.textContent = 'Save'; }
+        };
+        const actions = el('div', 'key-actions');
+        if (p.saved) {
+          if (p.checkable) actions.append(button('Check', async () => { try { const n = await synapse.keys.check(p.id); toast(n.checked === true ? `${p.label} took the key` : n.checked === false ? `${p.label} refused the key` : `Could not reach ${p.label}`, n.checked === false); drawKeys(); } catch (e) { toast(e.message, true); } }));
+          actions.append(button('Replace', () => { r.classList.add('replacing'); input.focus(); }));
+          actions.append(button('Remove', async () => { try { await synapse.keys.remove(p.id); toast(`Removed the ${p.label} key. New sessions sign in as before.`); drawKeys(); } catch (e) { toast(e.message, true); } }));
+        } else { const get = el('a', 'key-get', 'Get a key ↗'); get.href = p.url; get.target = '_blank'; get.rel = 'noopener'; actions.append(get, button('Add key', () => { r.classList.add('replacing'); input.focus(); })); }
+        head.append(actions);
+        r.append(head, form);
+        if (p.saved) { // which agents get it
+          const uses = el('div', 'key-uses');
+          uses.append(el('span', 'key-uses-label', 'Use for'));
+          for (const a of p.agents) {
+            const on = !p.off.includes(a), chip = el('button', 'key-chip' + (on ? ' on' : ''), agentLabel(a)); chip.type = 'button'; chip.setAttribute('aria-pressed', String(on));
+            chip.onclick = async () => { try { await synapse.keys.use(p.id, a, !on); toast(!on ? `${agentLabel(a)} uses the ${p.label} key in new sessions` : `${agentLabel(a)} signs in as before in new sessions`); drawKeys(); } catch (e) { toast(e.message, true); } };
+            uses.append(chip);
+          }
+          r.append(uses);
+        }
+        return r;
+      }));
+      if (focus) keyList.querySelector(`[data-key="${focus}"] .key-chip`)?.focus();
+    };
+    drawKeys();
+    pane('keys', 'Use your own API keys instead of an agent’s sign-in. Keys are encrypted on this Mac and handed to new sessions of the agents you pick; running sessions keep what they started with.',
+      group('Providers', card(keyList, el('p', 'login-note', 'Claude Code asks once whether to use the key. Codex bills the key instead of your ChatGPT plan. Turn an agent off here to keep its subscription.'))));
 
     // ---- Connectors: MCP servers set up once for every agent (connectors.mjs). One connector is one account, so two
     // Linear workspaces are two connectors; agents get them under the connector's name.

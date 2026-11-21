@@ -277,3 +277,26 @@ body.gui-mode .modal { background: var(--color-scrim, rgba(0, 0, 0, .35)); backd
 .set-reset { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; color: var(--color-muted); }
 .set-reset:hover { background: var(--color-hover); color: var(--color-ink); }
 .set-reset[hidden] { display: none; }
+
+/* Settings > API keys */
+.key-row { padding: 12px 16px; display: grid; gap: 10px; }
+.key-row + .key-row { border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent); }
+.key-head { display: flex; align-items: center; gap: 12px; }
+.key-text { flex: 1; min-width: 0; }
+.key-name { display: flex; align-items: center; gap: 8px; font: 500 13px var(--font-body); color: var(--color-ink); }
+.key-sub { font: 12px var(--font-body); color: var(--color-muted, #888); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.key-tag { font: 500 10.5px var(--font-body); padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, #22a06b 16%, transparent); color: #22a06b; }
+.key-tag.bad { background: color-mix(in srgb, #e5484d 16%, transparent); color: #e5484d; }
+.key-actions { display: flex; align-items: center; gap: 6px; }
+.key-get { font: 12px var(--font-body); color: var(--color-muted, #888); text-decoration: none; }
+.key-get:hover { color: var(--color-ink); }
+.key-form { display: flex; gap: 8px; padding-left: 40px; }
+.key-form .set-input { flex: 1; min-width: 0; font-family: var(--font-mono, ui-monospace, monospace); }
+.key-row.saved .key-form { display: none; }
+.key-row.saved.replacing .key-form { display: flex; }
+.key-uses { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-left: 40px; }
+.key-uses-label { font: 12px var(--font-body); color: var(--color-muted, #888); margin-right: 2px; }
+.key-chip { font: 500 12px var(--font-body); padding: 3px 10px; border-radius: 999px; border: 1px solid var(--color-border); background: transparent; color: var(--color-muted, #888); cursor: pointer; }
+.key-chip.on { background: var(--color-ink); border-color: var(--color-ink); color: var(--color-paper); }
+.key-row:not(.saved):not(.replacing) .key-form { display: none; }
+.key-row.replacing .key-get { display: none; }

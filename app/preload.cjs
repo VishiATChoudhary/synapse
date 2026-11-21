@@ -124,6 +124,7 @@ contextBridge.exposeInMainWorld('synapse', {
     onChange: (fn) => on('requests', fn),
     onOpen: (fn) => on('requests:open', fn),
   },
+  keys: { list: () => call('keys:list'), set: (id, key) => call('keys:set', { id, key }), remove: (id) => call('keys:remove', { id }), use: (id, agent, on) => call('keys:use', { id, agent, on }), check: (id) => call('keys:check', { id }) },
   logins: { list: () => call('logins:list'), add: (login) => call('logins:add', login), remove: (base) => call('logins:remove', { base }) },
   update: { get: () => call('update:get'), check: () => call('update:check'), install: () => call('update:install'), download: () => call('update:download'), onChange: (fn) => on('update', fn) },
   links: () => call('links'),
