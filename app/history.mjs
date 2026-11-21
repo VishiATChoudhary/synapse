@@ -98,12 +98,12 @@ function describe(kind, file) {
       if (e.type === 'summary' && e.summary) summary ||= e.summary;
       if (e.type === 'custom-title' && e.customTitle) summary = e.customTitle;
       const m = !title && claudeMessage(e);
-      if (m?.role === 'user' && !PREAMBLE.test(m.text)) title = m.text;
+      if (m?.role === 'user' && !m.teammate && !PREAMBLE.test(m.text)) title = m.text;
     } else {
       if (e.type === 'session_meta') { id = e.payload?.id || id; cwd = e.payload?.cwd || cwd; started = e.payload?.timestamp || e.timestamp; }
       if (!title && e.type === 'event_msg' && e.payload?.type === 'user_message' && e.payload.message) title = e.payload.message;
       const m = !title && codexMessage(e);
-      if (m?.role === 'user' && !PREAMBLE.test(m.text)) title = m.text;
+      if (m?.role === 'user' && !m.teammate && !PREAMBLE.test(m.text)) title = m.text;
     }
     if (cwd && title && (kind !== 'claude' || summary)) break;
   }

@@ -101,12 +101,33 @@ export const unwrapPaste = (t) => String(t ?? '').replace(/^[ \t]*<\\?\/?pasted_
 // those show in the Messages tab, not as something you said in the conversation
 export const relayed = (t) => /^\s*Synapse: messages from other agents\b/.test(unwrapPaste(t));
 
+// Claude Code's own agent teams and local sessions message each other: the message lands in the conversation as a
+// user turn, "Another Claude session sent a message:" and a <teammate-message teammate_id=… summary=…> block. Show
+// it as a note from that session, not as something you typed. Status pings (idle, shutdown) are JSON: their result,
+// or a short line.
+const TEAMMATE = /<teammate-message\b([^>]*)>([\s\S]*?)<\/teammate-message>/g;
+export function teammateMessage(t) {
+  if (!/^\s*(Another Claude session sent a message:\s*)?<teammate-message\b/.test(t)) return null;
+  const notes = [...String(t).matchAll(TEAMMATE)].map(([, attrs, body]) => {
+    const attr = (k) => new RegExp(`\\b${k}="([^"]*)"`).exec(attrs)?.[1] || '';
+    let text = body.trim();
+    try {
+      const j = JSON.parse(text);
+      if (j && typeof j === 'object' && typeof j.type === 'string') text = String(j.result || j.message || j.content || j.reason || '').trim() || j.type.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+    } catch {}
+    return { from: attr('teammate_id') || 'Another session', summary: attr('summary'), text };
+  });
+  return notes.length ? notes : null;
+}
+
 export function claudeMessage(e) {
   if (e.isMeta || e.isSidechain || e.isCompactSummary) return null;
   const content = e.message?.content;
   if (e.type === 'user') {
     const parts = typeof content === 'string' ? [content]
       : Array.isArray(content) ? content.filter((b) => b.type === 'text').map((b) => b.text) : [];
+    const notes = parts.length === 1 && teammateMessage(parts[0]);
+    if (notes) return { role: 'user', teammate: true, fromName: [...new Set(notes.map((n) => n.from))].join(', '), summary: notes.map((n) => n.summary).filter(Boolean).join(' · '), text: notes.map((n) => n.text).join('\n\n'), ts: e.timestamp };
     const text = parts.map((t) => claudeSlash(t) ?? t).filter((t) => !NOISE.test(t.trim())).map(unwrapPaste).join('\n').trim();
     return text && !relayed(text) ? { role: 'user', text, ts: e.timestamp } : null;
   }
@@ -357,7 +378,7 @@ export function formatMessages(messages, budget = 8000) {
   let used = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    const line = `${m.role === 'user' ? 'USER' : 'AGENT'}: ${clip(m.text, 1800)}`;
+    const line = `${m.teammate ? `MESSAGE FROM ${m.fromName}` : m.role === 'user' ? 'USER' : 'AGENT'}: ${clip(m.text, 1800)}`;
     if (used + line.length > budget && out.length) break;
     out.push(line);
     used += line.length;

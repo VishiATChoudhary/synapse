@@ -2136,7 +2136,7 @@ function initialize() {
     const out = (outgoing.get(agent.id) || []).filter((o) => Date.now() - o.at < 60_000);
     const claimed = new Set();
     const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
-    const sentAfter = (o) => records.filter((r) => r.type === 'transcript' && r.role === 'user' && !claimed.has(r.key) && r.time >= o.at - 3000);
+    const sentAfter = (o) => records.filter((r) => r.type === 'transcript' && r.role === 'user' && !r.teammate && !claimed.has(r.key) && r.time >= o.at - 3000);
     // its own text first; then (an agent may rewrite a prompt, e.g. pasted images) the first prompt after it was sent
     for (const pass of [(o, r) => norm(r.text) === norm(o.text) || norm(r.text).startsWith(norm(o.text).slice(0, 200)), () => true]) for (const o of [...out]) {
       const hit = sentAfter(o).find((r) => pass(o, r));
@@ -2165,15 +2165,15 @@ function initialize() {
           element.className = `tool-message${element.dataset.enter ? ' fresh-in' : ''}`;
           element.innerHTML = `<summary>${toolRow(t)}${icon('chevron-right')}</summary><pre>${escapeHtml(message.text.replace(/^\[|\]$/g, ''))}</pre>`;
         } else {
-          const peer = message.type === 'shared' && !message.human;
-          element.className = `message ${user ? 'user' : peer ? 'peer' : 'assistant'}${element.dataset.enter ? ' fresh-in' : ''}`;
-          const sender = peer ? byId.get(message.from) || { kind: '' } : agent;
+          const peer = (message.type === 'shared' && !message.human) || !!message.teammate; // teammate: another Claude session (lib.mjs teammateMessage)
+          element.className = `message ${user && !message.teammate ? 'user' : peer ? 'peer' : 'assistant'}${element.dataset.enter ? ' fresh-in' : ''}`;
+          const sender = message.teammate ? { kind: 'claude', name: message.fromName } : peer ? byId.get(message.from) || { kind: '' } : agent;
           const delivery = message.human ? `<span class="queued-label">${icon(message.delivered ? 'check' : 'clock')}${message.delivered ? 'Picked up by agent' : 'Queued for next prompt'}</span>` : '';
           // replies read as plain prose under your prompt; only agent-to-agent notes say who wrote them
           // images you attached show as thumbnails, not as their paths
-          const pics = user ? sentImages(message.text) : { text: message.text, images: [], files: [] };
+          const pics = user && !message.teammate ? sentImages(message.text) : { text: message.text, images: [], files: [] };
           const thumbs = pics.images.length ? `<div class="message-images">${pics.images.map((p) => `<button type="button" data-file="${escapeHtml(p)}" title="${escapeHtml(p)}"><img alt="${escapeHtml(p.split(/[\\/]/).pop())}" loading="lazy" src="/api/file/raw?${new URLSearchParams({ path: p })}"></button>`).join('')}</div>` : '';
-          element.innerHTML = `${peer ? `<header class="message-head">${avatar(sender)}<span>${escapeHtml(message.fromName)}</span>${icon('arrow-right')}<span>${escapeHtml(message.toName)}</span>${time ? `<time>${time}</time>` : ''}</header>` : ''}${thumbs}${fileChips(pics.files)}${pics.text.trim() ? `<div class="message-body md">${messageBody(pics.text, user, message.type === 'transcript')}</div>` : ''}<footer class="message-foot">${delivery}${!peer && time ? `<time>${time}</time>` : ''}<button class="icon-button" data-copy-message aria-label="Copy message" title="Copy message">${icon('copy')}</button></footer>`;
+          element.innerHTML = `${peer ? `<header class="message-head">${avatar(sender)}<span>${escapeHtml(message.fromName)}</span>${icon('arrow-right')}<span>${escapeHtml(message.teammate ? agent.name : message.toName)}</span>${time ? `<time>${time}</time>` : ''}</header>${message.summary ? `<p class="message-summary">${escapeHtml(message.summary)}</p>` : ''}` : ''}${thumbs}${fileChips(pics.files)}${pics.text.trim() ? `<div class="message-body md">${messageBody(pics.text, user, message.type === 'transcript')}</div>` : ''}<footer class="message-foot">${delivery}${!peer && time ? `<time>${time}</time>` : ''}<button class="icon-button" data-copy-message aria-label="Copy message" title="Copy message">${icon('copy')}</button></footer>`;
         }
       }
       items.push({ message, element });
