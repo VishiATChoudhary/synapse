@@ -592,7 +592,7 @@ function initialize() {
 
   function readRoute() {
     const route = location.hash.slice(1);
-    if (['overview', 'connections', 'activity', 'canvas', 'todos'].includes(route)) view = route;
+    if (['overview', 'connections', 'activity', 'canvas', 'todos', 'rooms'].includes(route)) view = route;
     else if (route === 'new' && embedded) view = 'new';
     else if (route.startsWith('agent=')) { view = 'session'; selectedId = new URLSearchParams(route).get('agent'); }
   }
@@ -1490,6 +1490,7 @@ function initialize() {
     $('connections-view').hidden = view !== 'connections';
     $('activity-view').hidden = view !== 'activity';
     $('todos-view').hidden = view !== 'todos';
+    $('rooms-view').hidden = view !== 'rooms';
     $('canvas-view').hidden = view !== 'canvas';
     $('session-actions').hidden = !isSession;
     if (isSession) {
@@ -1522,10 +1523,11 @@ function initialize() {
       if (!split && tab !== 'terminal') { updateComposer(); renderTimeline(reset); loadRecent(); }
       document.title = `${titleOf(agent)} · Synapse`;
     } else {
-      const title = view === 'new' ? 'New session' : view === 'todos' ? 'Todos' : view === 'activity' ? 'Activity' : view === 'canvas' ? 'Canvas' : view === 'connections' ? 'Connections' : 'Your workspace';
+      const title = view === 'new' ? 'New session' : view === 'todos' ? 'Todos' : view === 'rooms' ? 'Rooms' : view === 'activity' ? 'Activity' : view === 'canvas' ? 'Canvas' : view === 'connections' ? 'Connections' : 'Your workspace';
       $('breadcrumbs').textContent = title;
       if (view === 'new') renderNew();
       if (view === 'todos') { renderTodos(); refreshLinear(); }
+      if (view === 'rooms') loadRooms(true);
       document.title = `${title} · Synapse`;
       if (view === 'canvas') { if (!$('gui-canvas').src) $('gui-canvas').src = '/canvas'; }
       else if (view === 'activity') activityView.refresh();
@@ -2449,6 +2451,114 @@ function initialize() {
     if (field) field.focus();
   }
 
+  // ---- Rooms (rooms.mjs on the server, ~/.synapse/rooms.json): group chats of people and their agents. People add
+  // their own Claude and Codex agents; an @mention gets an answer from a read-only copy of that agent.
+  let roomsData = { me: null, rooms: [], agents: [], friends: [] }, roomOpen = null, roomShown = null, roomsSig = '', roomSig = '', roomsTimer = null;
+  async function loadRooms(reset = false) {
+    clearTimeout(roomsTimer);
+    if (view !== 'rooms') return;
+    try {
+      roomsData = await api('/api/rooms');
+      if (!roomOpen || !roomsData.rooms.some((r) => r.id === roomOpen)) roomOpen = roomsData.rooms[0]?.id || null;
+      roomShown = roomOpen ? await api(`/api/rooms/${encodeURIComponent(roomOpen)}`) : null;
+    } catch (e) { if (reset) toast(e.message); }
+    renderRooms(reset);
+    roomsTimer = setTimeout(() => loadRooms(), document.hidden ? 8000 : 1500);
+  }
+  const roomAgentLabel = (a, room) => (room.agents.filter((x) => x.name === a.name).length > 1 ? `${a.name}@${a.owner}` : a.name);
+  function renderRooms(reset) {
+    const sig = JSON.stringify([roomsData.rooms.map((r) => [r.id, r.name, r.count, r.lastAt]), roomOpen]);
+    if (sig !== roomsSig || reset) {
+      roomsSig = sig;
+      $('room-list').innerHTML = roomsData.rooms.length ? roomsData.rooms.map((r) => `<button type="button" class="room-item${r.id === roomOpen ? ' active' : ''}" data-room="${escapeHtml(r.id)}"><strong>${escapeHtml(r.name)}</strong><span>${escapeHtml(r.last ? `${r.last.from}: ${r.last.text}` : `${r.members.length} ${r.members.length === 1 ? 'person' : 'people'}, ${r.agents.length} ${r.agents.length === 1 ? 'agent' : 'agents'}`)}</span></button>`).join('')
+        : '<p class="todo-empty">No rooms yet. Make one, add your agents and invite friends.</p>';
+    }
+    const r = roomShown;
+    const rs = JSON.stringify(r && [r.id, r.name, r.members, r.agents, r.messages.length, r.messages.at(-1)?.id, r.answering]);
+    if (rs === roomSig && !reset) return;
+    roomSig = rs;
+    if (!r) { $('room-pane').innerHTML = emptyState('No room open', 'Make a room, then @mention an agent to ask it something.', '', '', 'users'); return; }
+    const box = $('room-pane').querySelector('.room-messages');
+    const atEnd = !box || box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    const keep = $('room-input')?.value ?? '';
+    const focused = document.activeElement?.id === 'room-input';
+    const mine = (a) => a.machine === roomsData.me?.machine;
+    const answering = new Set(r.answering || []);
+    const who = (m) => m.from.type === 'agent' ? `<span class="agent-avatar" data-logo="${escapeHtml(m.from.kind || '')}" aria-hidden="true">${escapeHtml((m.from.name || '?').slice(0, 2).toUpperCase())}</span>` : m.from.type === 'system' ? '' : `${icon('user')}`;
+    const rows = r.messages.map((m) => m.from.type === 'system'
+      ? `<div class="room-msg system">${escapeHtml(m.text)}</div>`
+      : `<div class="room-msg ${m.from.type}${m.from.machine === roomsData.me?.machine && m.from.type === 'human' ? ' own' : ''}"><div class="room-who">${who(m)}<strong>${escapeHtml(m.from.name)}</strong>${m.from.type === 'agent' ? `<span class="room-tag">agent of ${escapeHtml(m.from.owner || '')}</span>` : ''}<time>${escapeHtml(new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</time></div><div class="room-text">${escapeHtml(m.text)}</div></div>`).join('');
+    const typing = r.agents.filter((a) => mine(a) && answering.has(a.id)).map((a) => a.name);
+    $('room-pane').innerHTML = `<header class="room-head"><div><h2>${escapeHtml(r.name)}</h2><p>${r.members.map((m) => escapeHtml(m.name)).join(', ')}</p></div>
+      <div class="room-actions"><button type="button" class="button secondary" data-room-add-agent>${icon('plus')}Add my agent</button>${r.hosted ? `<button type="button" class="button secondary" data-room-add-person>${icon('user')}Add person</button>` : ''}<button type="button" class="icon-button" data-room-leave title="${r.hosted ? 'Close this room for everyone' : 'Leave this room'}" aria-label="${r.hosted ? 'Close room' : 'Leave room'}">${icon('x')}</button></div></header>
+      <div class="room-agents">${r.agents.map((a) => `<button type="button" class="room-agent" data-room-mention="${escapeHtml(roomAgentLabel(a, r))}" title="Mention ${escapeHtml(a.name)} (agent of ${escapeHtml(a.owner)})"><span class="agent-avatar" data-logo="${escapeHtml(a.kind)}" aria-hidden="true">${escapeHtml(a.name.slice(0, 2).toUpperCase())}</span>@${escapeHtml(roomAgentLabel(a, r))}${mine(a) ? `<span class="room-x" role="button" data-room-drop="${escapeHtml(a.id)}" title="Take ${escapeHtml(a.name)} out" aria-label="Remove">${icon('x')}</span>` : ''}</button>`).join('') || '<span class="room-hint">No agents yet. Add one of yours; friends add theirs.</span>'}</div>
+      <div class="room-messages" aria-live="polite">${rows || '<p class="room-hint">Say hi. Type @ and an agent name to ask it.</p>'}${typing.length ? `<div class="room-msg system">${escapeHtml(typing.join(', '))} ${typing.length === 1 ? 'is' : 'are'} answering…</div>` : ''}</div>
+      <form class="room-compose" id="room-compose" autocomplete="off"><textarea id="room-input" rows="1" maxlength="4000" placeholder="Message ${escapeHtml(r.name)}. @mention an agent to ask it"></textarea><button class="button" type="submit">Send</button></form>
+      <p class="room-hint">Agents in rooms only read and answer. They have no tools, can not change anything, and secrets are scrubbed from what they say.</p>`;
+    $('room-input').value = keep;
+    if (focused || reset) $('room-input').focus();
+    const nb = $('room-pane').querySelector('.room-messages');
+    if (atEnd || reset) nb.scrollTop = nb.scrollHeight;
+  }
+  async function sendRoom() {
+    const input = $('room-input'), text = input.value.trim();
+    if (!text || !roomOpen) return;
+    input.value = '';
+    try { await api(`/api/rooms/${encodeURIComponent(roomOpen)}/messages`, { method: 'POST', body: JSON.stringify({ text }) }); }
+    catch (e) { input.value = text; toast(e.message); }
+    loadRooms();
+  }
+  function newRoom() {
+    const agents = roomsData.agents || [];
+    openModal('New room', `<label class="field-label" for="room-name">Name</label><input class="field" id="room-name" maxlength="60" placeholder="launch prep">
+      ${agents.length ? `<fieldset class="room-pick"><legend>Your agents in it (Claude and Codex)</legend>${agents.map((a) => `<label><input type="checkbox" value="${escapeHtml(a.id)}"> ${escapeHtml(a.name)} <span class="room-tag">${escapeHtml(a.kind)}</span></label>`).join('')}</fieldset>` : ''}`, 'Create', async () => {
+      const name = $('room-name').value.trim();
+      if (!name) throw new Error('Give the room a name.');
+      const picked = [...$('dialog-content').querySelectorAll('.room-pick input:checked')].map((x) => x.value);
+      const r = await api('/api/rooms', { method: 'POST', body: JSON.stringify({ name, agents: picked }) });
+      roomOpen = r.id; loadRooms(true);
+    });
+  }
+  function addRoomAgent() {
+    const inRoom = new Set((roomShown?.agents || []).filter((a) => a.machine === roomsData.me?.machine).map((a) => a.id));
+    const agents = (roomsData.agents || []).filter((a) => !inRoom.has(a.id));
+    if (!agents.length) return toast('No Claude or Codex agent of yours to add. Start one first.');
+    openModal('Add your agent', `<fieldset class="room-pick"><legend>It answers read only when someone @mentions it</legend>${agents.map((a) => `<label><input type="checkbox" value="${escapeHtml(a.id)}"> ${escapeHtml(a.name)} <span class="room-tag">${escapeHtml(a.kind)}</span></label>`).join('')}</fieldset>`, 'Add', async () => {
+      const picked = [...$('dialog-content').querySelectorAll('.room-pick input:checked')].map((x) => x.value);
+      for (const id of picked) await api(`/api/rooms/${encodeURIComponent(roomOpen)}/agents`, { method: 'POST', body: JSON.stringify({ agent: id }) });
+      loadRooms(true);
+    });
+  }
+  function addRoomPerson() {
+    const inRoom = new Set((roomShown?.members || []).map((m) => m.machine));
+    const friendsLeft = (roomsData.friends || []).filter((f) => !inRoom.has(f.machine));
+    if (!friendsLeft.length) return toast('No friend left to add. Add trusted people in Settings first.');
+    openModal('Add a person', `<fieldset class="room-pick"><legend>Friends join straight away and can add their own agents</legend>${friendsLeft.map((f) => `<label><input type="checkbox" value="${escapeHtml(f.machine)}"> ${escapeHtml(f.name)}${f.online ? '' : ' <span class="room-tag">offline</span>'}</label>`).join('')}</fieldset>`, 'Add', async () => {
+      const picked = [...$('dialog-content').querySelectorAll('.room-pick input:checked')].map((x) => x.value);
+      for (const machine of picked) await api(`/api/rooms/${encodeURIComponent(roomOpen)}/members`, { method: 'POST', body: JSON.stringify({ machine }) });
+      loadRooms(true);
+    });
+  }
+  $('room-new').addEventListener('click', () => newRoom());
+  $('rooms-view').addEventListener('click', async (event) => {
+    const el = event.target.closest('[data-room], [data-room-add-agent], [data-room-add-person], [data-room-leave], [data-room-mention], [data-room-drop]');
+    if (!el) return;
+    if (el.dataset.room) { roomOpen = el.dataset.room; return loadRooms(true); }
+    if (el.dataset.roomDrop) { event.stopPropagation(); try { await api(`/api/rooms/${encodeURIComponent(roomOpen)}/agents/${encodeURIComponent(el.dataset.roomDrop)}`, { method: 'DELETE' }); } catch (e) { toast(e.message); } return loadRooms(true); }
+    if (el.dataset.roomMention) { const i = $('room-input'); i.value = `${i.value.replace(/\s*$/, i.value.trim() ? ' ' : '')}@${el.dataset.roomMention} `; i.focus(); return; }
+    if ('roomAddAgent' in el.dataset) return addRoomAgent();
+    if ('roomAddPerson' in el.dataset) return addRoomPerson();
+    if ('roomLeave' in el.dataset) {
+      if (!window.confirm(roomShown?.hosted ? 'Close this room for everyone in it?' : 'Leave this room?')) return;
+      try { await api(`/api/rooms/${encodeURIComponent(roomOpen)}`, { method: 'DELETE' }); } catch (e) { toast(e.message); }
+      roomOpen = null; loadRooms(true);
+    }
+  });
+  $('rooms-view').addEventListener('submit', (event) => { if (event.target.id === 'room-compose') { event.preventDefault(); sendRoom(); } });
+  $('rooms-view').addEventListener('keydown', (event) => {
+    if (event.target.id === 'room-input' && event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendRoom(); }
+  });
+
   // ---- Todos (todos.mjs on the server, in ~/.synapse/todos.json): the user's and their agents' list. A todo can be
   // linked to the agent doing it (by the id the server knows it by); when that agent ends, you are asked whether its
   // open todos are done. With Linear connected, issues assigned to you come in, and ticking one moves it there too.
@@ -3174,6 +3284,8 @@ function initialize() {
     }
     add('Go to Overview', 'grid', () => navigate('overview'));
     add('Go to Connections', 'network', () => navigate('connections'));
+    add('Go to Rooms', 'users', () => navigate('rooms'));
+    add('New room', 'users', () => { navigate('rooms'); newRoom(); });
     if (embedded) add('Go to Activity', 'activity', () => navigate('activity'));
     if (!embedded) add('Go to Canvas', 'canvas', () => (location.href = '/canvas'));
     if (embedded) { add('Settings', 'settings', () => desktopCall('settings').catch((e) => toast(e.message)), '⌘,'); add('Account & sharing', 'user', () => runDesktop('account')); }

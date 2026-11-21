@@ -14,6 +14,7 @@ import { slashItems } from './commands.mjs';
 import * as plan from './plan.mjs';
 import * as remote from './remote.mjs';
 import * as talk from './talk.mjs';
+import * as rooms from './rooms.mjs';
 import * as todos from './todos.mjs';
 
 const PORT = Number(process.env.PORT || 4747);
@@ -116,7 +117,7 @@ const remoteTimer = setInterval(() => {
 // Friends' agents ask ours questions: start what is queued, close what can no longer go on.
 // First, whatever the previous server was answering when it stopped is lost: end it and clean up.
 try { talk.recover(); } catch {}
-const talkTimer = setInterval(() => { talk.tick().catch(() => {}); }, Number(process.env.SYNAPSE_SYNC_MS || 3000));
+const talkTimer = setInterval(() => { talk.tick().catch(() => {}); rooms.tick().catch(() => {}); }, Number(process.env.SYNAPSE_SYNC_MS || 3000));
 
 // Context flow events written by the hook become edge pulses in the UI.
 let eventsSize = fs.existsSync(FILES.events) ? fs.statSync(FILES.events).size : 0;
@@ -340,6 +341,26 @@ async function handleRequest(req, res) {
     lastSig = '';
     broadcast('state', state());
     return json(res, 200, out.edge);
+  }
+  // ---- rooms: group chats of people and their agents (agents answer read only when @mentioned)
+  if (p.startsWith('/api/rooms')) {
+    const parts = p.split('/').slice(3).map(decodeURIComponent); // [id?, sub?, arg?]
+    try {
+      if (!parts[0] && req.method === 'GET') {
+        const f = remote.friends();
+        return json(res, 200, { me: rooms.me(), rooms: rooms.list(), agents: rooms.joinable(), friends: f.friends.map((x) => ({ machine: x.machineId, name: x.name, online: x.online })) });
+      }
+      const b = req.method === 'GET' || req.method === 'DELETE' ? {} : await body(req);
+      if (!parts[0] && req.method === 'POST') return json(res, 200, rooms.create({ name: b.name, agents: Array.isArray(b.agents) ? b.agents : [] }));
+      const id = parts[0];
+      if (!parts[1] && req.method === 'GET') return json(res, 200, rooms.get(id));
+      if (!parts[1] && req.method === 'DELETE') return json(res, 200, rooms.leave(id));
+      if (parts[1] === 'messages' && req.method === 'POST') { const out = rooms.post(id, b.text); rooms.tick().catch(() => {}); return json(res, 200, out); }
+      if (parts[1] === 'agents' && req.method === 'POST') return json(res, 200, rooms.addAgent(id, b.agent));
+      if (parts[1] === 'agents' && req.method === 'DELETE') return json(res, 200, rooms.removeAgent(id, parts[2]));
+      if (parts[1] === 'members' && req.method === 'POST') return json(res, 200, rooms.addMember(id, b.machine));
+      return json(res, 404, { error: 'Not found.' });
+    } catch (e) { return json(res, 400, { error: e.message }); }
   }
   if (p === '/api/talks' && req.method === 'GET') return json(res, 200, talks());
   if (p === '/api/talks/usage' && req.method === 'GET') return json(res, 200, talk.usage());

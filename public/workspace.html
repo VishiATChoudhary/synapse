@@ -43,6 +43,7 @@
         <button class="icon-button" data-view="overview" aria-label="Overview" title="Overview"><span data-icon="grid"></span></button>
         <button class="icon-button" data-view="connections" aria-label="Connections" title="Connections"><span data-icon="network"></span><span class="nav-count" id="connection-count">0</span></button>
         <button class="icon-button" id="todos-nav" data-view="todos" aria-label="Todos" title="Todos"><span data-icon="todo"></span><span class="nav-count" id="todo-count" hidden>0</span></button>
+        <button class="icon-button" id="rooms-nav" data-view="rooms" aria-label="Rooms" title="Rooms: group chats with people and agents"><span data-icon="users"></span></button>
         <button class="icon-button desktop-only" id="desktop-activity" data-view="activity" aria-label="Activity" title="Activity"><span data-icon="activity"></span></button>
         <a href="/canvas" class="icon-button canvas-link web-only" aria-label="Canvas" title="Canvas"><span data-icon="canvas"></span></a>
         <button class="icon-button desktop-only" id="desktop-account" aria-label="Account and sharing" title="Account &amp; sharing"><span data-icon="user"></span></button>
@@ -126,6 +127,10 @@
           <div class="page-heading"><div><h1 id="todos-title">Todos</h1><p class="page-description">Yours and your agents'. Assign one to an agent: when that agent ends, you are asked whether it is done.</p></div><div class="linear-box" id="linear-box"></div></div>
           <form class="todo-add" id="todo-add" autocomplete="off"><input id="todo-input" maxlength="500" placeholder="Add a todo" aria-label="New todo"><button type="button" class="todo-agent-pick" id="todo-agent-pick" aria-haspopup="menu">Assign</button><button class="button" type="submit">Add</button></form>
           <div class="todo-list" id="todo-list" aria-live="polite"></div>
+        </section>
+        <section class="rooms-view page-view" id="rooms-view" aria-labelledby="rooms-title" hidden>
+          <div class="page-heading"><div><h1 id="rooms-title">Rooms</h1><p class="page-description">Group chats with friends and your agents. @mention an agent to ask it: a read-only copy answers, its session is never touched.</p></div><button class="button secondary" id="room-new"><span data-icon="plus"></span>New room</button></div>
+          <div class="rooms-layout"><nav class="room-list" id="room-list" aria-label="Rooms"></nav><div class="room-pane" id="room-pane"></div></div>
         </section>
         <section class="activity activity-view" id="activity-view" aria-label="Activity" tabindex="-1" hidden></section>
         <section class="canvas-view" id="canvas-view" aria-label="Agent canvas" hidden><iframe id="gui-canvas" title="Synapse agent canvas"></iframe></section>
