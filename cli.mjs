@@ -55,6 +55,7 @@ import * as remote from './remote.mjs';
 import * as account from './account.mjs';
 import * as saved from './saved.mjs';
 import * as todos from './todos.mjs';
+import * as rooms from './rooms.mjs';
 
 const [cmd, ...rest] = process.argv.slice(2);
 const flags = new Set(rest.filter((a) => a.startsWith('--')));
@@ -237,9 +238,29 @@ try {
       console.log(await saved.render(args[0]));
       process.exit(0);
     }
+    case 'rooms': out = rooms.list().map(({ id, name, hosted, members, agents, count }) => ({ id, name, hosted, people: members.map((m) => m.name), agents: agents.map((a) => `${a.name}@${a.owner}`), messages: count })); break;
+    case 'room': {
+      // group chats: people and their agents; agents answer (read only) when @mentioned
+      const [sub, q, ...rest] = args;
+      const find = (x) => {
+        const all = rooms.list();
+        const hit = all.filter((r) => r.id === x || r.id.startsWith(x || '-') || r.name.toLowerCase() === String(x).toLowerCase());
+        if (hit.length !== 1) throw new Error(hit.length ? `"${x}" matches several rooms` : `no room "${x}"`);
+        return hit[0].id;
+      };
+      if (sub === 'new') out = rooms.create({ name: [q, ...rest].join(' ') });
+      else if (sub === 'say') out = rooms.post(find(q), rest.join(' '));
+      else if (sub === 'show') { const r = rooms.get(find(q)); for (const m of r.messages) console.log(`${new Date(m.at).toLocaleTimeString()} ${m.from.name}${m.from.type === 'agent' ? ` (agent of ${m.from.owner})` : ''}: ${m.text}`); process.exit(0); }
+      else if (sub === 'agent') { const a = findAgent(localAgents(), rest[0]); if (!a) throw new Error(`No agent on this machine matches "${rest[0]}".`); out = rooms.addAgent(find(q), a.id); }
+      else if (sub === 'drop') { const a = findAgent(localAgents(), rest[0]); out = rooms.removeAgent(find(q), a ? a.id : rest[0]); }
+      else if (sub === 'add') { const f = remote.friends().friends.find((x) => x.name.toLowerCase() === String(rest[0]).toLowerCase() || x.machineId === rest[0]); if (!f) throw new Error(`No friend "${rest[0]}".`); out = rooms.addMember(find(q), f.machineId); }
+      else if (sub === 'leave') out = rooms.leave(find(q));
+      else throw new Error('usage: synapse room new <name> | say <room> <text> | show <room> | agent <room> <agent> | drop <room> <agent> | add <room> <friend> | leave <room>');
+      break;
+    }
     case 'agents': out = listAgents().map(({ name, id, kind, cwd, status }) => ({ name, id, kind, cwd, status })); break;
     default:
-      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | ask <agent> <question> [--conversation id] | end <conversation> | talk <agent> on|off | saved [id | restore <id> | archive <file> [--keep]] | browser [profile|off] | agents | rename [agent] <name> | rename-project <project> <name> | invite | join <code> | friends | unfriend <friend> | sync | login | signup | logout | whoami | trust <who> | untrust <who> | people | request <person> [--target t] [--note n] | share-workspace <person> [folder] | workspaces | unshare-workspace <friend> [workspace] | requests | accept <id> [--agents a,b] [--no-talk] | deny <id> | cancel <id>');
+      console.log('usage: synapse ui | peers [--all] | link <agent> [--in|--out] | unlink <agent> | read <agent> | send <agent> <msg> | inbox | ask <agent> <question> [--conversation id] | end <conversation> | talk <agent> on|off | saved [id | restore <id> | archive <file> [--keep]] | browser [profile|off] | agents | rename [agent] <name> | rename-project <project> <name> | invite | join <code> | friends | unfriend <friend> | sync | login | signup | logout | whoami | trust <who> | untrust <who> | people | request <person> [--target t] [--note n] | share-workspace <person> [folder] | workspaces | unshare-workspace <friend> [workspace] | requests | accept <id> [--agents a,b] [--no-talk] | deny <id> | cancel <id> | rooms | room new|say|show|agent|drop|add|leave');
       process.exit(cmd ? 1 : 0);
   }
   if (cmd === 'ui') { /* server keeps running */ }

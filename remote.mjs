@@ -19,6 +19,7 @@ import {
   FILES, REMOTE_DIR, KINDS, readJSON, writeJSON, withLock, localAgents, readAgentMessages, logEvent, projectOf, remoteId, remoteLog,
 } from './lib.mjs';
 import * as talk from './talk.mjs';
+import * as rooms from './rooms.mjs';
 
 export const DEFAULT_RELAY = 'https://relay-production-b5a8.up.railway.app';
 const SENT = path.join(REMOTE_DIR, 'sent.json');     // how far each shared transcript has been sent, per friend
@@ -448,6 +449,8 @@ async function pull(c, timeout) {
       }
     } else if (typeof it.type === 'string' && it.type.startsWith('talk-')) {
       routeTalk(m, it);
+    } else if (typeof it.type === 'string' && it.type.startsWith('room-')) {
+      rooms.receive(m, it);
     } else if (it.type === 'drop' && typeof it.agent === 'string') {
       // they removed the link on their side: stop sharing that agent with that agent of theirs
       const target = remoteId(m, String(it.target || ''));

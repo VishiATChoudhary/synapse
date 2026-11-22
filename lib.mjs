@@ -35,6 +35,7 @@ export const FILES = {
   offers: path.join(DATA, 'offers.json'),           // my agents I offered to friends, by request id, to link once they accept
   requests: path.join(DATA, 'requests.json'),       // synapse requests last fetched from the cloud
   talks: path.join(DATA, 'talks.json'),             // agent talk: conversations with friends' agents
+  rooms: path.join(DATA, 'rooms.json'),             // rooms: group chats of people and their agents
   ptys: path.join(DATA, 'ptys.json'),
   canvasHidden: path.join(DATA, 'canvas-hidden.json'), // agents hidden from the canvas by the user, [id]               // Windows: the desktop app's terminals, { pid: cwd }
 };
@@ -791,6 +792,9 @@ export function externalForks() {
   const s = readJSON(FILES.talks, {});
   const sessions = new Set((s.conversations || []).map((c) => c.forkSession).filter((v) => typeof v === 'string' && v));
   const pids = new Set((s.running || []).map((r) => r.pid).filter(Number.isInteger));
+  // rooms answer the same way: a read-only copy per mention, gone when it has answered
+  const r = readJSON(FILES.rooms, {});
+  for (const x of r.running || []) { if (typeof x.session === 'string' && x.session) sessions.add(x.session); if (Number.isInteger(x.pid)) pids.add(x.pid); }
   return { sessions, pids };
 }
 
