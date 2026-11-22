@@ -23,6 +23,8 @@ import * as talk from './talk.mjs';
 export const DEFAULT_RELAY = 'https://relay-production-b5a8.up.railway.app';
 const SENT = path.join(REMOTE_DIR, 'sent.json');     // how far each shared transcript has been sent, per friend
 const OUTBOX = path.join(REMOTE_DIR, 'outbox.json'); // items waiting for the next sync ("stop sharing with me")
+const DROPPED = path.join(REMOTE_DIR, 'dropped.json'); // links to friends' agents I removed, until their machine stops listing them
+const DROP_KEEP_MS = 7 * 24 * 3600_000;
 const LOCK = path.join(REMOTE_DIR, 'sync.lock');
 const HEARTBEAT = 20_000;                            // our agent list is resent at least this often
 const PUSH_CHARS = 40_000, PUSH_MSGS = 80, MSG_CHARS = 4000;
@@ -248,10 +250,30 @@ function outbox(fn) {
 }
 const entry = (to, item) => ({ id: crypto.randomUUID(), to, item });
 
-// The friend's side of a link was removed on our canvas: ask its owner to stop sharing.
+// The friend's side of a link was removed on our canvas: ask its owner to stop sharing. Until their machine has heard
+// (a state it sent before may already wait in our mailbox, and a sync pulls before it pushes), that share is ignored
+// here, so the link does not come back.
 export function queueDrop(edge) {
   const prefix = remoteId(edge.remote, '');
-  outbox((out) => [...out, entry(edge.remote, { type: 'drop', agent: edge.from.slice(prefix.length), target: edge.to })]);
+  const agent = edge.from.slice(prefix.length);
+  const dropped = readJSON(DROPPED, {});
+  dropped[dropKey(edge.remote, agent, edge.to)] = Date.now();
+  writeJSON(DROPPED, dropped);
+  outbox((out) => [...out, entry(edge.remote, { type: 'drop', agent, target: edge.to })]);
+}
+const dropKey = (m, from, to) => `${m}|${from}|${to}`;
+// The shares a friend's state lists, less the ones I removed that they have not stopped yet. Once a state no longer
+// lists one, it is forgotten, so sharing it again later works as usual.
+function withoutDropped(m, shares) {
+  const dropped = readJSON(DROPPED, {});
+  const now = Date.now();
+  let changed = false;
+  for (const [k, at] of Object.entries(dropped)) {
+    const [dm, from, to] = k.split('|');
+    if (now - at > DROP_KEEP_MS || (dm === m && !shares.some((s) => s.from === from && s.to === to))) { delete dropped[k]; changed = true; }
+  }
+  if (changed) writeJSON(DROPPED, dropped);
+  return shares.filter((s) => !dropped[dropKey(m, s.from, s.to)]);
 }
 
 // Queue any item for a friend's machine; the next push sends it.
@@ -412,7 +434,7 @@ async function pull(c, timeout) {
     if (it.type === 'state') {
       const name = clean(it.name, 40) || c.peers[m].name;
       if (name !== c.peers[m].name) { c.peers[m].name = name; cfgChanged = true; }
-      const shares = cleanShares(it.shares);
+      const shares = withoutDropped(m, cleanShares(it.shares));
       // talkRequests: their Synapse takes a talk-request (0.4.0 drops it without a word)
       states[m] = { name, agents: cleanAgents(it.agents), shares, seen: Date.now(), ...(it.talkRequests === true ? { talkRequests: true } : {}), ...(it.workspaces === true ? { workspaces: true } : {}) };
       mirror(m, shares, name);
