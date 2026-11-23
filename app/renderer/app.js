@@ -596,7 +596,15 @@ function logo(kind) {
   const m = el('span', 'logo mono'); m.style.setProperty('--logo', `url(logos/${kind}.svg)`); return m;
 }
 // what a new worktree, a new workspace and the first launch open with (Settings > Workspaces): a shell, or an agent
-const openWith = () => (M.profiles?.[M.openWith] ? M.openWith : 'shell');
+const openWith = () => (M.openWith === 'new' || M.profiles?.[M.openWith] ? M.openWith : 'new');
+// a worktree or workspace you just opened: what Settings > Workspaces says to start there. 'new' is the New session
+// screen on that folder (you pick the agent and write the first prompt); without the GUI, the agent picker
+function openIn(dir) {
+  const kind = openWith();
+  if (kind !== 'new') return newSlot(dir, kind);
+  if (workspaceLive) return workspacePost({ type: 'synapse:show-new', cwd: dir });
+  return pickProfile(dir);
+}
 const profileOrder = () => Object.keys(M.profiles).sort((a, b) => (a === 'shell') - (b === 'shell'));
 
 // every running agent across workspaces, the one that last started, worked or asked for input first.
@@ -1528,8 +1536,9 @@ function promptWorktree(project) {
         const dir = choice ? await synapse.worktree.open({ repo: project.path, choice }) : await synapse.worktree.add({ repo: project.path, name: inp.value.trim() });
         if (choice?.pr) prStatuses.set(dir, choice.pr);
         if (alive()) close(); await refresh(); M.open.add(project.key);
-        const first = M.slots.find(s => s.worktree === dir);
-        if (first) selectSession(first); else await newSlot(dir, openWith());
+        // already open there: its agent, rather than a shell (a shell's only view is its terminal)
+        const here = M.slots.filter(s => s.worktree === dir), agent = here.find(s => top(s)?.kind !== 'shell');
+        if (agent || (here[0] && openWith() !== 'new')) selectSession(agent || here[0]); else await openIn(dir);
       } catch (e) { fail(e); }
       finally { busy = false; go.disabled = fetch.disabled = inp.disabled = false; }
     };
@@ -1641,7 +1650,7 @@ async function promptProject(mode) {
     const done = async (dir) => {
       onCloneLine = null; close(); await refresh();
       const wt = worktreeOf(dir); if (wt) M.open.add(wt.project.key);
-      toast(`workspace ${dir.split('/').pop()} added`); newSlot(dir, openWith());
+      toast(`workspace ${dir.split('/').pop()} added`); openIn(dir);
     };
     // a library entry: add it, or go to it if it is already in the sidebar
     const pick = async (w) => {
@@ -2159,12 +2168,12 @@ async function openSettings(start) {
 
     // ---- Workspaces
     const opener = el('select', 'set-input');
-    for (const k of profileOrder()) { const o = el('option', '', k === 'shell' ? 'A shell' : M.profiles[k].label || k); o.value = k; opener.appendChild(o); }
-    opener.value = M.profiles?.[s.openWith] ? s.openWith : 'shell'; opener.setAttribute('aria-label', 'New worktrees open with');
+    for (const [k, label] of [['new', 'The New session screen'], ...profileOrder().map((k) => [k, k === 'shell' ? 'A shell (terminal)' : M.profiles[k].label || k])]) { const o = el('option', '', label); o.value = k; opener.appendChild(o); }
+    opener.value = s.openWith === 'new' || M.profiles?.[s.openWith] ? s.openWith : 'new'; opener.setAttribute('aria-label', 'Opening a worktree starts');
     opener.onchange = async () => { try { M.openWith = opener.value = (await synapse.settings.set({ openWith: opener.value })).openWith; } catch (e) { toast(e.message, true); } };
     pane('workspaces', null,
       group('Folders',
-        row('New worktrees open with', 'What starts when you open a new worktree or add a workspace: a shell, or an agent.', opener),
+        row('Opening a worktree starts', 'What you get when you open a worktree (new or existing) or add a workspace: the New session screen to pick an agent and write the first prompt, a shell, or an agent right away.', opener),
         row('Link workspaces', 'Symlink workspaces added from elsewhere into ~/.synapse/workspaces, so the library can bring them back.', toggle(!!s.autoSymlink, async (on) => { await synapse.settings.set({ autoSymlink: on }); toast(on ? 'New workspaces get linked into ~/.synapse/workspaces' : 'Workspaces are no longer linked. Existing links stay.'); })),
         row('Safe worktree deletion', 'Deleting a worktree first commits its uncommitted changes (untracked files too) to its branch, so nothing is lost. Ignored files go with the folder.', toggle(s.safeWorktreeDelete !== false, async (on) => { M.safeDelete = (await synapse.settings.set({ safeWorktreeDelete: on })).safeWorktreeDelete; toast(on ? 'Deleting a worktree saves its changes to the branch first' : 'Worktrees with uncommitted changes ask before they are deleted'); }))),
       group('Past chats', card(row('Chats from before Synapse', 'Import your Claude Code and Codex chats and pick them up here. ⇧⌘H', button('Browse', () => { close(); openPastChats(); })), importRows({ remove: true }))));
@@ -4458,7 +4467,7 @@ if (WIN) {
   const here = M.projects.flatMap((p) => p.worktrees).find((w) => flags.cwd.startsWith(w.path)) || M.projects[0]?.worktrees[0];
   const keep = !flags.demo && !flags.shot;
   const restored = keep ? await restoreSessions(await synapse.sessions.load().catch(() => null)) : 0;
-  if (!restored && here) { M.open.add(worktreeOf(here.path)?.project.key); await newSlot(here.path, openWith()); }
+  if (!restored && here) { M.open.add(worktreeOf(here.path)?.project.key); await newSlot(here.path, openWith() === 'new' ? 'shell' : openWith()); } // first launch: something to look at
   persist = keep;
   render();
   if (wantGui) await openWorkspace();

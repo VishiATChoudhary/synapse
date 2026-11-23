@@ -27,7 +27,7 @@ const pulls = [['local-feature', 'open', null], ['closed-feature', 'closed', nul
 fs.writeFileSync(path.join(fixture, 'bin', 'gh'), `#!/bin/sh\nprintf '%s' '${JSON.stringify([pulls])}'\n`, { mode: 0o755 });
 Object.assign(process.env, { SYNAPSE_HOME: state, SUPERSET_HOME: path.join(fixture, 'superset'), SHELL: '/bin/sh', PATH: `${path.join(fixture, 'bin')}:${process.env.PATH}` });
 for (const key of Object.keys(process.env)) if (key.startsWith('SYNAPSE_SHOT') || key === 'SYNAPSE_DEBUG') delete process.env[key];
-fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ autoSymlink: true, safeWorktreeDelete: false, workspaces: [repo], profiles: { shell: { command: 'cat', label: 'Shell' } } }));
+fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ autoSymlink: true, safeWorktreeDelete: false, openWith: 'shell', workspaces: [repo], profiles: { shell: { command: 'cat', label: 'Shell' } } }));
 process.chdir(repo); app.setPath('userData', path.join(fixture, 'electron'));
 let win;
 const errors = [];

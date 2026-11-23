@@ -495,6 +495,11 @@ function initialize() {
     }
     if (message?.type === 'synapse:browser-cover') { browserCovered = !!message.covered; placeBrowser(); return; }
     // Settings, Cleanup changed how agents are tidied (the app saved it with the other preferences)
+    // a worktree was just opened and Settings says to start on the New session screen there (app.js openIn)
+    if (message?.type === 'synapse:show-new' && typeof message.cwd === 'string') {
+      (async () => { if (!worktreeList().some((w) => w.path === message.cwd)) desktop = await desktopCall('state').catch(() => desktop); showNew(message.cwd); })();
+      return;
+    }
     if (message?.type === 'synapse:tidy' && message.tidy) { tidy = { ...TIDY_DEFAULT, ...message.tidy }; try { localStorage.setItem('synapse-tidy', JSON.stringify(tidy)); } catch {} renderSidebar(); return; }
     if (message?.type === 'synapse:desktop-state') {
       const previous = desktop?.active;
