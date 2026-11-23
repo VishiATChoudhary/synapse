@@ -62,8 +62,6 @@ const typed = () => { try { return fs.readFileSync(path.join(ctl, 'typed-0'), 'u
 const send = (text) => ui(`(() => { const i = document.querySelector('#message-input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('#composer').requestSubmit(); })()`);
 const queue = () => ui(`[...document.querySelectorAll('#prompt-queue .queued-text')].map((e) => e.textContent)`);
 const key = (k) => ui(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', metaKey: true, bubbles: true }))`);
-const rows = () => ui(`[...document.querySelectorAll('#todo-list .todo-row')].map((r) => ({ id: r.dataset.todo, text: r.querySelector('.todo-text').textContent, done: r.classList.contains('done'), agent: (r.closest('.todo-group')?.querySelector('button.todo-group-head .todo-group-name') || r.querySelector('.todo-who > span:last-child'))?.textContent || null, linear: r.querySelector('.todo-linear')?.textContent || null }))`);
-const todosFile = () => { try { return JSON.parse(fs.readFileSync(path.join(state, 'todos.json'), 'utf8')); } catch { return []; } };
 
 
 const site = http.createServer((req, res) => {

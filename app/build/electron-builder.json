@@ -16,7 +16,6 @@
     "remote.mjs",
     "talk.mjs",
     "rooms.mjs",
-    "todos.mjs",
     "connectors.mjs",
     "connector-bridge.mjs",
     "saved.mjs",

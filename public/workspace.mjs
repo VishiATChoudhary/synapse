@@ -277,7 +277,6 @@ export function sessionTree(agents) {
 
 const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
-  todo: '<rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
   star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>',
   shield: '<path d="M12 3.5 5 6v5.5c0 4.3 3 7.6 7 9 4-1.4 7-4.7 7-9V6z"/>',
   search: '<circle cx="10.7" cy="10.7" r="6.7"/><path d="m16 16 4.5 4.5"/>',
@@ -567,7 +566,7 @@ function initialize() {
   let sidebarOpen = !narrow.matches && getStorage('synapse-sidebar', 'open') === 'open';
   let inspectorOpen = wide.matches && getStorage('synapse-inspector', 'open') === 'open';
   // the panel's tabs: Details (the session) or Browser (the agent browser, agent-browser.mjs in the app)
-  const PANEL_TABS = ['details', 'browser']; // todos left the panel (and the bar): too much for too little
+  const PANEL_TABS = ['details', 'browser'];
   let inspectorTab = PANEL_TABS.includes(getStorage('synapse-inspector-tab', 'details')) ? getStorage('synapse-inspector-tab', 'details') : 'details';
   let browserSettle = 0; // while the panel eases to its new width, the page waits to be placed
   let panelFull = false, panelDragging = false;
@@ -590,14 +589,13 @@ function initialize() {
   let source, stateFrame = 0, stateTimer = 0, pendingState, toastTimer, draftTimer, flowTimer;
   let approvalTimer = null, approvalFor = null, approvalMiss = 0, approvalReading = false, approvalPolling = null; // the options card: its poll, and which agent it is for
   let composerPaint = null; // set once the composer's highlighting exists; drafts loaded before then repaint on input
-  let linear = { connected: false }, todoPick = null, todosSignature = '', showDone = false, askLater = 0; // todos
   const seenLive = new Set(), goneSince = new Map(); // agents seen running, and when one stopped being listed
   let modalSubmit = null, modalVersion = 0, searchHits = [], searchIndex = 0, renderedMessages = new Map();
   let overviewSignature = '', connectionsSignature = '', inspectorSignature = '';
 
   function readRoute() {
     const route = location.hash.slice(1);
-    if (['overview', 'connections', 'activity', 'canvas', 'todos', 'rooms'].includes(route)) view = route;
+    if (['overview', 'connections', 'activity', 'canvas', 'rooms'].includes(route)) view = route;
     else if (route === 'new' && embedded) view = 'new';
     else if (route.startsWith('agent=')) { view = 'session'; selectedId = new URLSearchParams(route).get('agent'); }
   }
@@ -1494,7 +1492,6 @@ function initialize() {
     $('overview-view').hidden = view !== 'overview';
     $('connections-view').hidden = view !== 'connections';
     $('activity-view').hidden = view !== 'activity';
-    $('todos-view').hidden = view !== 'todos';
     $('rooms-view').hidden = view !== 'rooms';
     $('canvas-view').hidden = view !== 'canvas';
     $('session-actions').hidden = !isSession;
@@ -1528,10 +1525,9 @@ function initialize() {
       if (!split && tab !== 'terminal') { updateComposer(); renderTimeline(reset); loadRecent(); }
       document.title = `${titleOf(agent)} · Synapse`;
     } else {
-      const title = view === 'new' ? 'New session' : view === 'todos' ? 'Todos' : view === 'rooms' ? 'Rooms' : view === 'activity' ? 'Activity' : view === 'canvas' ? 'Canvas' : view === 'connections' ? 'Connections' : 'Your workspace';
+      const title = view === 'new' ? 'New session' : view === 'rooms' ? 'Rooms' : view === 'activity' ? 'Activity' : view === 'canvas' ? 'Canvas' : view === 'connections' ? 'Connections' : 'Your workspace';
       $('breadcrumbs').textContent = title;
       if (view === 'new') renderNew();
-      if (view === 'todos') { renderTodos(); refreshLinear(); }
       if (view === 'rooms') loadRooms(true);
       document.title = `${title} · Synapse`;
       if (view === 'canvas') { if (!$('gui-canvas').src) $('gui-canvas').src = '/canvas'; }
@@ -1849,8 +1845,8 @@ function initialize() {
       shownTab = null;
     }
     const full = $('panel-full'); if (full && full.dataset.on !== String(panelFull)) { full.dataset.on = String(panelFull); full.innerHTML = icon(panelFull ? 'minimize' : 'maximize'); full.title = full.ariaLabel = panelFull ? 'Back to the side' : 'Full size'; }
-    const b = browserOf(agent), live = b?.driving && !b.paused, asking = asksOf(agent).length, open = agentTodos(agent).filter((t) => !t.done).length;
-    const marks = { details: '', todos: open ? `<span class="tab-count">${open}</span>` : '', browser: asking ? '<span class="tab-badge" title="Waiting for you">1</span>' : live ? '<span class="tab-live" title="The agent is using it"></span>' : '' };
+    const b = browserOf(agent), live = b?.driving && !b.paused, asking = asksOf(agent).length;
+    const marks = { details: '', browser: asking ? '<span class="tab-badge" title="Waiting for you">1</span>' : live ? '<span class="tab-live" title="The agent is using it"></span>' : '' };
     for (const btn of pane.querySelectorAll('[data-inspector-tab]')) {
       const t = btn.dataset.inspectorTab, mark = btn.querySelector('.tab-mark');
       btn.setAttribute('aria-selected', String(t === inspectorTab));
@@ -1977,21 +1973,6 @@ function initialize() {
   });
 
 
-  // Todos: what is left to do with this agent. They are the same todos as on the Todos page, linked to this agent.
-  function renderTodosTab(agent) {
-    const mine = agentTodos(agent), open = mine.filter((t) => !t.done), done = mine.filter((t) => t.done);
-    const signature = JSON.stringify(['todos', agent.id, todosOf(agent), mine.map((t) => [t.agent?.name, t.linear?.identifier]), inspectorTab]);
-    const body = inspectorBody(agent);
-    if (signature === inspectorSignature && body.querySelector('.todo-tab')) return;
-    const keep = document.activeElement?.closest?.('.todo-tab form') ? document.activeElement.value : null;
-    inspectorSignature = signature;
-    body.innerHTML = agent.remote ? `<p class="inspector-note">Todos are for agents on this machine.</p>` : `<section class="todo-tab">
-      <form class="todo-add mini todo-tab-add" data-todo-add-for="${escapeHtml(agent.id)}" autocomplete="off"><input maxlength="500" placeholder="Add a todo…" aria-label="New todo for this agent"></form>
-      ${open.length ? open.map(todoRow).join('') : '<p class="inspector-note todo-empty">Nothing to do yet. What should this agent get done?</p>'}
-      ${done.length ? `<details class="todo-done-list"><summary>${done.length} done</summary>${done.map(todoRow).join('')}</details>` : ''}
-      <p class="inspector-note todo-where">These also show on the Todos page.</p></section>`;
-    if (keep !== null) { const i = body.querySelector('.todo-tab-add input'); i.value = keep; i.focus(); }
-  }
   function renderInspector() {
     const agent = byId.get(selectedId); if (!agent) return;
     if (inspectorFile?.agent === selectedId) {
@@ -2002,7 +1983,6 @@ function initialize() {
     inspectorFile = null; fileShown = ''; $('inspector').classList.remove('file-mode'); delete $('inspector').dataset.filePath;
     $('inspector').classList.toggle('browser-mode', inspectorTab === 'browser');
     if (inspectorTab === 'browser') { renderBrowser(agent); return; }
-    if (inspectorTab === 'todos') { renderTodosTab(agent); return; }
     browserSignature = '';
     const peers = relations(agent.id), chat = recentCache.get(agent.id)?.data.chat || [];
     loadChanges(agent);
@@ -2477,7 +2457,7 @@ function initialize() {
     if (sig !== roomsSig || reset) {
       roomsSig = sig;
       $('room-list').innerHTML = roomsData.rooms.length ? roomsData.rooms.map((r) => `<button type="button" class="room-item${r.id === roomOpen ? ' active' : ''}" data-room="${escapeHtml(r.id)}"><strong>${escapeHtml(r.name)}</strong><span>${escapeHtml(r.last ? `${r.last.from}: ${r.last.text}` : `${r.members.length} ${r.members.length === 1 ? 'person' : 'people'}, ${r.agents.length} ${r.agents.length === 1 ? 'agent' : 'agents'}`)}</span></button>`).join('')
-        : '<p class="todo-empty">No rooms yet. Make one, add your agents and invite friends.</p>';
+        : '<p class="room-empty">No rooms yet. Make one, add your agents and invite friends.</p>';
     }
     const r = roomShown;
     const rs = JSON.stringify(r && [r.id, r.name, r.members, r.agents, r.messages.length, r.messages.at(-1)?.id, r.answering]);
@@ -2610,156 +2590,6 @@ function initialize() {
   $('rooms-view').addEventListener('keydown', (event) => {
     if (event.target.id === 'room-input' && event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendRoom(); }
   });
-
-  // ---- Todos (todos.mjs on the server, in ~/.synapse/todos.json): the user's and their agents' list. A todo can be
-  // linked to the agent doing it (by the id the server knows it by); when that agent ends, you are asked whether its
-  // open todos are done. With Linear connected, issues assigned to you come in, and ticking one moves it there too.
-  function todoList() { return state?.todos || []; }
-  function agentOfTodo(t) { return t.agent ? state.agents.find((a) => a.id === t.agent.id || a.backendId === t.agent.id) : null; }
-  function agentTodos(agent) { return todoList().filter((t) => t.agent && (t.agent.id === agent.id || t.agent.id === agent.backendId)); }
-  function todosOf(agent) { return agentTodos(agent).map((t) => [t.id, t.text, t.done]); } // (a signature)
-  function todoRef(a) { return { id: a.backendId || a.id, name: titleOf(a) }; }
-  // Start agent: the New session screen opens with the todo as the first message, and the agent it starts gets the todo
-  const canStartFromTodo = (t) => embedded && !paneKey && !!desktop && !t.done;
-  function startFromTodo(t) { showNew(agentOfTodo(t)?.cwd || null, null, t); }
-  const todoCall = (path, method, body) => api(path, { method, ...(body ? { body: JSON.stringify(body) } : {}) });
-  async function refreshLinear() { try { linear = await api('/api/linear'); } catch {} todosSignature = ''; if (view === 'todos') renderTodos(); }
-  function paintTodoCount() {
-    const open = todoList().filter((t) => !t.done).length;
-    $('todo-count').hidden = !open; $('todo-count').textContent = open > 99 ? '99+' : String(open);
-  }
-  // a todo; in a group the header already names its agent, elsewhere a quiet line says who has it
-  function todoRow(t, { grouped = false } = {}) {
-    const a = agentOfTodo(t), id = escapeHtml(t.id);
-    const who = grouped ? (t.agent ? '' : `<button type="button" class="todo-assign" data-todo-link="${id}">${icon('user')}<span>Assign</span></button>`)
-      : t.agent ? `<button type="button" class="todo-who${a ? '' : ' gone'}" data-todo-agent="${id}" title="${a ? `Open ${escapeHtml(titleOf(a))}` : `${escapeHtml(t.agent.name)} has ended`}">${a ? avatar(a) : icon('user')}<span>${escapeHtml(a ? titleOf(a) : t.agent.name)}</span></button>` : '';
-    const lin = t.linear ? `<a class="todo-linear" href="${escapeHtml(t.linear.url)}" target="_blank" rel="noopener" title="Open in Linear">${escapeHtml(t.linear.identifier)}</a>` : '';
-    const by = t.by && t.by !== 'you' && t.by !== 'Linear' ? `<span class="todo-by">by ${escapeHtml(t.by)}</span>` : '';
-    const start = canStartFromTodo(t) ? `<button type="button" class="todo-start" data-todo-start="${id}" title="Start a new agent on this todo">${icon('play')}<span>Start agent</span></button>` : '';
-    return `<div class="todo-row${t.done ? ' done' : ''}" data-todo="${id}"><button type="button" class="todo-check" data-todo-check="${id}" aria-pressed="${t.done}" aria-label="${t.done ? 'Mark not done' : 'Mark done'}">${icon('check')}</button><span class="todo-text">${escapeHtml(t.text)}</span>${by}${lin}${start}${who}<button type="button" class="icon-button todo-more" data-todo-more="${id}" aria-label="More" title="More">${icon('more')}</button></div>`;
-  }
-  // open todos by who has them: yours first, then each agent's under a header with its name and project
-  function todoGroups(open) {
-    const groups = new Map([['', { todos: [] }]]);
-    for (const t of open) {
-      const a = agentOfTodo(t), key = t.agent ? (a?.id || `gone:${t.agent.id}`) : '';
-      if (!groups.has(key)) groups.set(key, { agent: a, ref: t.agent, todos: [] });
-      groups.get(key).todos.push(t);
-    }
-    return [...groups.entries()].filter(([, g]) => g.todos.length).map(([key, g]) => {
-      const head = !key ? `<div class="todo-group-head mine">${icon('user')}<span class="todo-group-name">Yours</span><span class="count">${g.todos.length}</span></div>`
-        : `<button type="button" class="todo-group-head${g.agent ? '' : ' gone'}" ${g.agent ? `data-todo-open="${escapeHtml(g.agent.id)}" title="Open ${escapeHtml(titleOf(g.agent))}"` : `title="${escapeHtml(g.ref.name)} has ended" disabled`}>${g.agent ? avatar(g.agent) : icon('user')}<span class="todo-group-name">${escapeHtml(g.agent ? titleOf(g.agent) : g.ref.name)}</span>${g.agent?.project ? `<span class="todo-group-meta">${escapeHtml(g.agent.project)}</span>` : g.agent ? '' : '<span class="todo-group-meta">ended</span>'}<span class="count">${g.todos.length}</span></button>`;
-      return `<section class="todo-group">${head}${g.todos.map((t) => todoRow(t, { grouped: true })).join('')}</section>`;
-    }).join('');
-  }
-  function renderTodos() {
-    const all = todoList(), open = all.filter((t) => !t.done).sort((a, b) => b.createdAt - a.createdAt), done = all.filter((t) => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
-    const sig = JSON.stringify([all, linear, showDone, !!desktop, state.agents.map((a) => [a.id, a.backendId, titleOf(a)])]);
-    if (sig === todosSignature) return;
-    todosSignature = sig;
-    const picked = todoPick && agentOfTodo({ agent: todoPick });
-    if (todoPick && !picked) todoPick = null; // the picked agent ended
-    $('todo-agent-pick').classList.toggle('on', !!picked);
-    $('todo-agent-pick').title = picked ? `New todos go to ${titleOf(picked)}` : 'Give new todos to an agent';
-    $('todo-agent-pick').innerHTML = picked ? `${avatar(picked)}<span>${escapeHtml(titleOf(picked))}</span><span class="todo-pick-clear" data-todo-pick-clear role="button" aria-label="Keep new todos for yourself" title="Keep them for yourself">${icon('x')}</span>` : `${icon('user')}<span>Assign</span>`;
-    $('linear-box').innerHTML = linear.connected
-      ? `<span class="linear-state${linear.error ? ' error' : ''}" title="${escapeHtml(linear.error || (linear.syncedAt ? `Synced ${relativeTime(linear.syncedAt)} ago` : 'Not synced yet'))}"><span class="linear-mark"></span>Linear${linear.name ? ` · ${escapeHtml(linear.name)}` : ''}</span><button type="button" class="button secondary" data-linear="sync">Sync</button><button type="button" class="icon-button" data-linear="menu" aria-label="Linear settings" title="Linear settings">${icon('more')}</button>`
-      : `<button type="button" class="button secondary" data-linear="connect"><span class="linear-mark"></span>Connect Linear</button>`;
-    $('todo-list').innerHTML = (open.length ? todoGroups(open) : `<p class="todo-empty">Nothing to do. Add a todo above, or ask an agent to note one.</p>`)
-      + (done.length ? `<button type="button" class="todo-done-toggle" data-todo-done-toggle aria-expanded="${showDone}">${icon(showDone ? 'chevron-down' : 'chevron-right')}Done <span class="count">${done.length}</span></button>${showDone ? `<div class="todo-done-rows">${done.slice(0, 200).map((t) => todoRow(t)).join('')}</div>` : ''}` : '');
-  }
-  function todoSection(agent) {
-    const mine = todoList().filter((t) => t.agent && (t.agent.id === agent.id || t.agent.id === agent.backendId));
-    const open = mine.filter((t) => !t.done), done = mine.length - open.length;
-    if (agent.remote) return '';
-    return `<section class="inspector-section todo-section"><div class="inspector-title-row"><h3 class="inspector-label">Todos</h3><span class="count">${open.length}</span></div>${open.map(todoRow).join('')}${done ? `<p class="inspector-note">${done} done</p>` : ''}<form class="todo-add mini" data-todo-add-for="${escapeHtml(agent.id)}" autocomplete="off"><input maxlength="500" placeholder="Add a todo for this agent" aria-label="New todo for this agent"></form></section>`;
-  }
-  async function todoAction(fn) { try { await fn(); } catch (e) { toast(e.message); } }
-  function pickAgent(anchor, current, choose) {
-    const agents = state.agents.filter((a) => !a.remote && !a.exited && a.kind !== 'shell').sort((x, y) => (y.lastActivity || 0) - (x.lastActivity || 0)).slice(0, 25);
-    dropdown(anchor, [{ label: 'Yours (no agent)', icon: 'user', check: !current, run: () => choose(null) }, '-', { heading: 'Give it to' },
-      ...agents.map((a) => ({ label: titleOf(a), hint: a.project || kindName(a), avatar: avatar(a), check: !!current && (current === a.id || current === backend(a)), run: () => choose(a) }))]);
-  }
-  function todoMenu(anchor, t) {
-    dropdown(anchor, [
-      { label: t.done ? 'Mark not done' : 'Mark done', icon: 'check', run: () => todoAction(() => todoCall(`/api/todos/${t.id}`, 'PATCH', { done: !t.done })) },
-      ...(canStartFromTodo(t) ? [{ label: 'Start a new agent on it', icon: 'play', run: () => startFromTodo(t) }] : []),
-      { label: 'Edit…', icon: 'edit', run: () => openModal('Edit todo', `<label class="field-label" for="todo-edit">Todo</label><input class="field" id="todo-edit" maxlength="500" value="${escapeHtml(t.text)}">`, 'Save', () => todoCall(`/api/todos/${t.id}`, 'PATCH', { text: $('todo-edit').value })) },
-      { label: t.agent ? 'Link to another agent…' : 'Link to an agent…', icon: 'arrows', run: () => pickAgent(anchor, t.agent?.id, (a) => todoAction(() => todoCall(`/api/todos/${t.id}`, 'PATCH', { agent: a ? todoRef(a) : null }))) },
-      ...(t.linear ? [{ label: `Open ${t.linear.identifier} in Linear`, icon: 'external', run: () => window.open(t.linear.url, '_blank', 'noopener') }]
-        : linear.connected ? [{ label: 'Send to Linear', icon: 'arrow-up', run: () => todoAction(() => todoCall(`/api/todos/${t.id}/linear`, 'POST')) }] : []),
-      '-',
-      { label: 'Delete', icon: 'x', danger: true, run: () => todoAction(() => todoCall(`/api/todos/${t.id}`, 'DELETE')) },
-    ]);
-  }
-  document.addEventListener('click', (event) => {
-    if (event.target.closest('[data-todo-pick-clear]')) { event.preventDefault(); todoPick = null; todosSignature = ''; renderTodos(); return; }
-    const open = event.target.closest('[data-todo-open]');
-    if (open) { event.preventDefault(); navigate('session', open.dataset.todoOpen); return; }
-    const el = event.target.closest('[data-todo-check], [data-todo-more], [data-todo-agent], [data-todo-link], [data-todo-start], [data-todo-done-toggle], [data-linear], #todo-agent-pick');
-    if (!el) return;
-    event.preventDefault();
-    const t = todoList().find((x) => x.id === (el.dataset.todoCheck || el.dataset.todoMore || el.dataset.todoAgent || el.dataset.todoLink || el.dataset.todoStart));
-    if (el.dataset.todoStart && t) return startFromTodo(t);
-    if (el.dataset.todoCheck && t) {
-      el.closest('.todo-row')?.classList.toggle('ticking', !t.done);
-      return todoAction(() => todoCall(`/api/todos/${t.id}`, 'PATCH', { done: !t.done }));
-    }
-    if (el.dataset.todoMore && t) return todoMenu(el, t);
-    if (el.dataset.todoAgent && t) { const a = agentOfTodo(t); return a ? navigate('session', a.id) : todoMenu(el, t); }
-    if (el.dataset.todoLink && t) return pickAgent(el, null, (a) => todoAction(() => todoCall(`/api/todos/${t.id}`, 'PATCH', { agent: a ? todoRef(a) : null })));
-    if (el.hasAttribute('data-todo-done-toggle')) { showDone = !showDone; todosSignature = ''; return renderTodos(); }
-    if (el.id === 'todo-agent-pick') return pickAgent(el, todoPick?.id, (a) => { todoPick = a ? todoRef(a) : null; todosSignature = ''; renderTodos(); });
-    const act = el.dataset.linear;
-    if (act === 'connect') return openModal('Connect Linear', `<p class="dialog-copy">Issues assigned to you come in as todos. Ticking one here moves it to done in Linear, and any todo can be sent to Linear.</p><label class="field-label" for="linear-key">Personal API key</label><input class="field" id="linear-key" type="password" autocomplete="off" placeholder="lin_api_…"><p class="field-hint">In Linear: Settings → Security &amp; access → Personal API keys. It is kept on this Mac only, in ~/.synapse.</p>`, 'Connect', async () => { linear = await todoCall('/api/linear', 'PUT', { key: $('linear-key').value }); todosSignature = ''; renderTodos(); });
-    if (act === 'sync') return todoAction(async () => { el.disabled = true; try { await todoCall('/api/linear/sync', 'POST'); } finally { el.disabled = false; } await refreshLinear(); });
-    if (act === 'menu') return dropdown(el, [
-      ...(linear.teams?.length > 1 ? [{ heading: 'New issues go to' }, ...linear.teams.map((team) => ({ label: team.name, icon: team.id === linear.team ? 'check' : '', run: () => todoAction(async () => { linear = await todoCall('/api/linear', 'PATCH', { team: team.id }); todosSignature = ''; renderTodos(); }) })), '-'] : []),
-      { label: 'Disconnect Linear', icon: 'unlink', danger: true, run: () => todoAction(async () => { linear = await todoCall('/api/linear', 'DELETE'); todosSignature = ''; renderTodos(); }) },
-    ]);
-  });
-  $('todo-add').addEventListener('submit', (event) => {
-    event.preventDefault();
-    const input = $('todo-input'), text = input.value.trim(); if (!text) return;
-    input.value = '';
-    todoAction(() => todoCall('/api/todos', 'POST', { text, agent: todoPick }));
-  });
-  document.addEventListener('submit', (event) => {
-    const form = event.target.closest?.('[data-todo-add-for]'); if (!form) return;
-    event.preventDefault();
-    const input = form.querySelector('input'), text = input.value.trim(), a = byId.get(form.dataset.todoAddFor); if (!text || !a) return;
-    input.value = '';
-    todoAction(() => todoCall('/api/todos', 'POST', { text, agent: todoRef(a) }));
-  });
-  // An agent with open todos ended (closed, its process quit, or tidied away): are they done? Asked once per todo,
-  // for agents seen running in this window (one missing at startup may just not be listed yet), after a grace period
-  // (an agent can drop out of the list for a moment while its session is matched).
-  const relinking = new Set();
-  function askEndedTodos() {
-    // linked while the app had not yet matched the session to its agent: move the link to the id agents know it by
-    for (const t of todoList()) {
-      const a = t.agent && !relinking.has(t.id) && state.agents.find((x) => x.owned && x.id === t.agent.id && x.backendId);
-      if (a) { relinking.add(t.id); todoCall(`/api/todos/${t.id}`, 'PATCH', { agent: todoRef(a) }).catch(() => {}).finally(() => relinking.delete(t.id)); }
-    }
-    const live = new Set();
-    for (const a of state.agents) if (!a.exited) { live.add(a.id); if (a.backendId) live.add(a.backendId); }
-    for (const id of live) { seenLive.add(id); goneSince.delete(id); }
-    const ended = new Map();
-    for (const t of todoList()) {
-      if (t.done || t.asked || !t.agent || live.has(t.agent.id) || !seenLive.has(t.agent.id)) continue;
-      if (!goneSince.has(t.agent.id)) goneSince.set(t.agent.id, Date.now());
-      if (Date.now() - goneSince.get(t.agent.id) < 6000) { if (!askLater) askLater = setTimeout(() => { askLater = 0; askEndedTodos(); }, 6500); continue; }
-      ended.set(t.agent.id, [...(ended.get(t.agent.id) || []), t]);
-    }
-    if (!ended.size || $('action-dialog').open) return;
-    const [, list] = [...ended][0], name = list[0].agent.name;
-    for (const t of list) todoCall(`/api/todos/${t.id}`, 'PATCH', { asked: true }).catch(() => {});
-    for (const t of list) t.asked = true; // not asked twice while the change comes back
-    openModal(`${name} ended`, `<p class="dialog-copy">It had ${list.length === 1 ? 'an open todo' : `${list.length} open todos`}. Which are done?</p><div class="todo-ask">${list.map((t) => `<label class="todo-ask-row"><input type="checkbox" value="${escapeHtml(t.id)}" checked><span>${escapeHtml(t.text)}</span>${t.linear ? `<small>${escapeHtml(t.linear.identifier)}</small>` : ''}</label>`).join('')}</div><p class="field-hint">Cancel keeps them all open.</p>`, 'Mark done', async () => {
-      const ids = [...$('dialog-content').querySelectorAll('.todo-ask input:checked')].map((i) => i.value);
-      await Promise.all(ids.map((id) => todoCall(`/api/todos/${id}`, 'PATCH', { done: true })));
-    });
-  }
 
   // answering from the keyboard: while the box you type in is empty (or the card has focus), 1-9 picks, ↑↓ move,
   // Enter takes the highlighted answer, Esc cancels
@@ -2896,14 +2726,12 @@ function initialize() {
 
   // ---- New session, like T3: "What should we do in <project>?" with the project and agent as pickers,
   // and the first message typed right there. Enter starts the agent with that message.
-  const newDraft = { cwd: null, kind: getStorage('synapse-new-kind') || null, todo: null };
+  const newDraft = { cwd: null, kind: getStorage('synapse-new-kind') || null };
   const worktreeList = () => (desktop?.projects || []).flatMap((p) => p.worktrees.map((w) => ({ ...w, project: p.label, projectKey: p.key, home: w.path === p.worktrees[0]?.path })));
   // kind: open the screen on that agent (⌘T: a shell), otherwise the last one picked
-  // todo: start on that todo (its text is the first message, and the agent started gets it)
-  function showNew(cwd, kind = null, todo = null) {
+  function showNew(cwd, kind = null) {
     const list = worktreeList();
     if (!list.length) { addProject(); return; }
-    if (todo || newDraft.todo) { newDraft.todo = todo?.id || null; $('new-input').value = todo ? todo.text : ''; }
     const current = byId.get(selectedId);
     const want = cwd || current?.cwd;
     newDraft.cwd = list.find((w) => w.path === want)?.path || list.find((w) => want?.startsWith(`${w.path}/`))?.path || (list.some((w) => w.path === newDraft.cwd) ? newDraft.cwd : list[0].path);
@@ -2934,10 +2762,6 @@ function initialize() {
     $('new-input').placeholder = newDraft.kind === 'shell' ? 'Opens a shell in this folder. Type a command to run, or leave empty.' : 'Describe the task. Leave empty to just start the agent.';
     const command = String(profile.command || (newDraft.kind === 'shell' ? 'your shell' : newDraft.kind)).replace(/^exec\s+/, '').replace(/^\S*\//, '');
     $('new-hint').textContent = `Runs ${command} in ${w.path.replace(/^\/Users\/[^/]+/, '~')}`;
-    const todo = newDraft.todo && todoList().find((t) => t.id === newDraft.todo);
-    if (newDraft.todo && !todo) newDraft.todo = null;
-    $('new-todo').hidden = !todo || newDraft.kind === 'shell';
-    if (todo) $('new-todo').innerHTML = `${icon('todo')}<span class="new-todo-text">For your todo: ${escapeHtml(todo.text)}</span><button type="button" class="new-todo-clear" aria-label="Start without the todo" title="Start without the todo">${icon('x')}</button>`;
   }
   // The model picker (like T3 Code's): one button in the composer shows the agent, its model and effort; it opens a
   // panel with the agents on a rail, their models in a searchable list (favorites starred), the model's effort
@@ -3064,7 +2888,6 @@ function initialize() {
   $('new-model').onclick = openModelPicker;
   // ⇧⌘M opens it on the New session screen
   addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'm' && e.metaKey && e.shiftKey && view === 'new') { e.preventDefault(); openModelPicker(); } });
-  $('new-todo').addEventListener('click', (event) => { if (event.target.closest('.new-todo-clear')) { newDraft.todo = null; renderNew(); $('new-input').focus(); } });
   $('new-project').onclick = () => {
     const seen = new Set();
     const items = worktreeList().filter((w) => w.home && !seen.has(w.projectKey) && seen.add(w.projectKey)).map((w) => ({ label: w.project, icon: w.path === newDraft.cwd || newDraft.cwd?.startsWith(`${w.path}`) ? 'check' : null, run: () => { newDraft.cwd = w.path; renderNew(); $('new-input').focus(); } }));
@@ -3089,13 +2912,11 @@ function initialize() {
     starting = true; $('new-start').disabled = true; $('new-start').innerHTML = '<span class="spinner" aria-hidden="true"></span>';
     try {
       const shell = newDraft.kind === 'shell';
-      const todo = !shell && newDraft.todo && todoList().find((t) => t.id === newDraft.todo);
-      const first = todo ? `${prompt || todo.text}\n\n(This is Synapse todo ${todo.id}. When it is done, tick it with synapse_todo_update.)` : prompt;
+      const first = prompt;
       const result = await desktopCall('new-session', { cwd: newDraft.cwd, kind: newDraft.kind, prompt: shell ? '' : first, model: shell ? '' : pickedModel(newDraft.kind), effort: shell ? '' : effortFor(newDraft.kind), mode: shell ? '' : pickedMode(newDraft.kind) });
       desktop = await desktopCall('state'); applyState(rawState);
-      $('new-input').value = ''; newDraft.todo = null; attachments.delete(NEW); renderAttachments(); paintMentionBar();
+      $('new-input').value = ''; attachments.delete(NEW); renderAttachments(); paintMentionBar();
       if (tagged.length) connectWhenMatched(result.id, tagged);
-      if (todo) { const a = byId.get(result.id); todoAction(() => todoCall(`/api/todos/${todo.id}`, 'PATCH', { agent: a ? todoRef(a) : { id: result.id, name: desktop.profiles[newDraft.kind]?.label || newDraft.kind } })); }
       navigate('session', result.id);
       if (shell && prompt) desktopCall('submit', { id: result.id, text: prompt }).catch(() => {});
     } catch (e) { toast(e.message); }
@@ -3553,7 +3374,7 @@ function initialize() {
       document.querySelectorAll('[data-action="connect"]').forEach((b) => { b.innerHTML = icon('plus') + 'New session'; });
     }
     updateConnection(true); renderSidebar(); renderMain(first);
-    paintTodoCount(); if (!paneKey) askEndedTodos();
+
     if (first && embedded && !paneKey) { const people = () => loadFriends().then(() => { renderSidebar(); inspectorSignature = ''; if (inspectorOpen) renderInspector(); }, () => {}); people(); setInterval(people, 60_000); }
     if ($('search-dialog').open && paletteState === 'open') renderSearch(true);
   }

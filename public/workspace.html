@@ -42,7 +42,6 @@
       <div class="sidebar-bottom">
         <button class="icon-button" data-view="overview" aria-label="Overview" title="Overview"><span data-icon="grid"></span></button>
         <button class="icon-button" data-view="connections" hidden style="display:none" aria-label="Connections" title="Connections"><span data-icon="network"></span><span class="nav-count" id="connection-count">0</span></button>
-        <button class="icon-button" id="todos-nav" data-view="todos" hidden style="display:none" aria-label="Todos" title="Todos"><span data-icon="todo"></span><span class="nav-count" id="todo-count" hidden>0</span></button>
         <button class="icon-button" id="rooms-nav" data-view="rooms" aria-label="Rooms" title="Rooms: group chats with people and agents"><span data-icon="users"></span></button>
         <button class="icon-button desktop-only" id="desktop-activity" data-view="activity" aria-label="Activity" title="Activity"><span data-icon="activity"></span></button>
         <a href="/canvas" class="icon-button canvas-link web-only" aria-label="Canvas" title="Canvas"><span data-icon="canvas"></span></a>
@@ -101,7 +100,6 @@
         <section class="new-view" id="new-view" aria-labelledby="new-title" hidden>
           <div class="new-inner">
             <h1 id="new-title"><span id="new-lead">What should we do in</span> <button type="button" class="new-project" id="new-project" aria-haspopup="menu" aria-expanded="false"></button>?</h1>
-            <p class="new-todo" id="new-todo" hidden></p>
             <div class="new-compose-wrap" id="new-compose-wrap">
             <form class="composer new-composer" id="new-composer">
               <label class="sr-only" for="new-input">First message</label>
@@ -122,11 +120,6 @@
           <div class="page-heading"><div><h1 id="connections-title">Connections</h1><p class="page-description">Give your agents the context they need from each other.</p></div><button class="button secondary" id="new-connection"><span data-icon="plus"></span>Add connection</button></div>
           <div id="connections-list" class="connections-list"></div>
           <div id="friends-list" class="friends-list" aria-live="polite"></div>
-        </section>
-        <section class="todos-view page-view" id="todos-view" aria-labelledby="todos-title" hidden>
-          <div class="page-heading"><div><h1 id="todos-title">Todos</h1><p class="page-description">Yours and your agents'. Assign one to an agent: when that agent ends, you are asked whether it is done.</p></div><div class="linear-box" id="linear-box"></div></div>
-          <form class="todo-add" id="todo-add" autocomplete="off"><input id="todo-input" maxlength="500" placeholder="Add a todo" aria-label="New todo"><button type="button" class="todo-agent-pick" id="todo-agent-pick" aria-haspopup="menu">Assign</button><button class="button" type="submit">Add</button></form>
-          <div class="todo-list" id="todo-list" aria-live="polite"></div>
         </section>
         <section class="rooms-view page-view" id="rooms-view" aria-labelledby="rooms-title" hidden>
           <div class="page-heading"><div><h1 id="rooms-title">Rooms</h1><p class="page-description">Group chats with friends and your agents. @mention an agent to ask it: a read-only copy answers, its session is never touched.</p></div><button class="button secondary" id="room-new"><span data-icon="plus"></span>New room</button></div>

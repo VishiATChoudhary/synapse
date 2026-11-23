@@ -68,7 +68,7 @@ const set = (slot, status) => fs.writeFileSync(path.join(ctl, `state-${slot}`), 
   win.webContents.on('console-message', (e) => { if (e.level === 'error') errors.push(e.message); });
   await until(async () => { gui = win.webContents.mainFrame.frames.find((f) => f.url.includes('?desktop=1')); return gui; }, 'GUI frame');
   await until(() => ui(`!!document.querySelector('#desktop-settings')`), 'GUI ready');
-  assert.deepEqual(await ui(`['todos-nav', 'desktop-account'].map((id) => getComputedStyle(document.getElementById(id)).display).concat(getComputedStyle(document.querySelector('[data-view="connections"]')).display)`), ['none', 'none', 'none']);
+  assert.deepEqual(await ui(`[!document.getElementById('todos-nav'), !document.getElementById('todos-view'), getComputedStyle(document.getElementById('desktop-account')).display, getComputedStyle(document.querySelector('[data-view="connections"]')).display]`), [true, true, 'none', 'none']);
   const claude = path.join(bin, 'claude');
   for (const cwd of [projA, projB]) await native(`synapse.pty.spawn({ cwd: ${JSON.stringify(cwd)}, kind: 'claude', command: ${JSON.stringify(`exec ${claude}`)}, cols: 80, rows: 24 })`);
   await until(() => fs.existsSync(path.join(ctl, 'slot-1')), 'two agents');

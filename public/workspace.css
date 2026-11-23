@@ -1039,39 +1039,6 @@ body.sorting .session-row .row-actions { display: none; }
   .message.user.rise, .fresh-in, .send-button.ready { animation: none; }
 }
 
-/* Todos: a list shared with your agents; each row ticks, links to an agent, and can carry its Linear issue */
-.todo-add { display: flex; gap: 8px; align-items: center; max-width: 880px; margin: 0 auto 14px; padding: 6px 6px 6px 14px; border: 1px solid var(--color-border-strong); border-radius: 14px; background: var(--color-raised); transition: border-color 160ms ease, box-shadow 200ms ease; }
-.todo-add:focus-within { box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 10%, transparent); }
-.todo-add input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font-size: var(--text-md); padding: 6px 0; }
-.todo-list { max-width: 880px; margin: 0 auto; }
-.todo-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 10px; min-height: 40px; }
-.todo-row:hover { background: var(--color-hover, color-mix(in srgb, var(--color-ink) 4%, transparent)); }
-.todo-check { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--color-border-strong); background: transparent; color: transparent; transition: background 140ms ease, border-color 140ms ease, transform 160ms cubic-bezier(.2, .9, .3, 1.4); }
-.todo-check .icon { width: 13px; height: 13px; stroke-width: 2.6; }
-.todo-check:hover { border-color: var(--color-success); }
-.todo-check[aria-pressed='true'], .todo-row.ticking .todo-check { background: var(--color-success); border-color: var(--color-success); color: white; transform: scale(1.08); }
-.todo-text { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.45; transition: color 160ms ease; }
-.todo-row.done .todo-text, .todo-row.ticking .todo-text { color: var(--color-faint); text-decoration: line-through; }
-.todo-by { color: var(--color-faint); font-size: var(--text-sm); white-space: nowrap; }
-.todo-linear { font-size: var(--text-sm); font-family: var(--font-mono, ui-monospace, monospace); color: var(--color-muted); text-decoration: none; padding: 2px 7px; border-radius: 6px; background: color-mix(in srgb, #5e6ad2 14%, transparent); }
-.todo-linear:hover { color: var(--color-ink); }
-.todo-more { opacity: 0; }
-.todo-row:hover .todo-more, .todo-more:focus-visible, .todo-more[aria-expanded='true'] { opacity: 1; }
-.todo-empty { color: var(--color-muted); padding: 18px 8px; }
-.todo-done-toggle { display: inline-flex; align-items: center; gap: 6px; margin: 14px 0 4px; padding: 4px 8px; border: 0; background: none; color: var(--color-muted); font-size: var(--text-sm); }
-.todo-done-toggle .icon { width: 14px; height: 14px; }
-.linear-box { display: flex; align-items: center; gap: 8px; }
-.linear-state { display: inline-flex; align-items: center; gap: 7px; color: var(--color-muted); font-size: var(--text-sm); }
-.linear-state.error { color: var(--color-error); }
-.linear-mark { display: inline-block; width: 12px; height: 12px; border-radius: 4px; background: linear-gradient(135deg, #7c84f0, #5e6ad2); }
-.button .linear-mark { margin-inline-end: 4px; }
-.todo-section .todo-row { padding: 5px 4px; min-height: 34px; gap: 8px; }
-.todo-section .todo-who, .todo-section .todo-assign { display: none; }
-.todo-add.mini { margin: 6px 0 0; padding: 2px 4px 2px 10px; border-radius: 10px; }
-.todo-add.mini input { font-size: var(--text-sm); }
-.todo-ask { display: grid; gap: 6px; margin: 10px 0; }
-.todo-ask-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--color-panel); }
-.todo-ask-row small { color: var(--color-muted); margin-inline-start: auto; }
 
 
 /* files you attached to a sent prompt: chips with their name, under the pictures, opening the file */
@@ -1211,21 +1178,7 @@ body.sorting .session-row .row-actions { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .tab-glider.ready { transition: none !important; } .inspector-body.tab-in { animation: none; } }
 
-/* the Todos tab */
-.todo-tab { display: flex; flex-direction: column; gap: 2px; }
-.todo-tab-add { margin-bottom: 10px; }
-.todo-tab-add input { width: 100%; }
-.todo-empty { margin: 6px 2px 10px; }
-.todo-done-list { margin-top: 10px; }
-.todo-done-list summary { cursor: pointer; padding: 4px 2px; font-size: var(--text-sm); color: var(--color-muted); list-style: none; }
-.todo-done-list summary::-webkit-details-marker { display: none; }
-.todo-done-list summary::before { content: '›'; display: inline-block; margin-right: 6px; transition: transform 160ms; }
-.todo-done-list[open] summary::before { transform: rotate(90deg); }
-.todo-where { margin-top: 14px; font-size: var(--text-xs); }
 /* on the agent's own tab its name on every row says nothing: the text gets the room */
-.todo-tab .todo-who, .todo-tab .todo-assign { display: none; }
-.todo-tab .todo-row { align-items: flex-start; gap: 10px; padding: 6px 2px; }
-.todo-tab .todo-text { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
 
 /* the panel's left edge resizes it; Full size gives it the conversation's room */
 .panel-grip { display: none; }
@@ -1262,49 +1215,7 @@ body.sorting .session-row .row-actions { display: none; }
 .ws-hint { margin: 0; color: var(--color-muted); font-size: var(--text-sm); min-height: 1.4em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-hint.busy { color: var(--color-ink); }
 
-/* todos: grouped by who has them */
-.todo-group { margin-bottom: 18px; }
-.todo-group-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px 6px; margin-bottom: 2px; border-bottom: 1px solid var(--color-border); color: var(--color-ink); text-align: left; font-size: var(--text-sm); }
-button.todo-group-head:hover .todo-group-name { text-decoration: underline; text-underline-offset: 3px; }
-.todo-group-head .agent-avatar { width: 20px; height: 20px; font-size: 9px; }
-.todo-group-head > .icon { width: 16px; height: 16px; color: var(--color-muted); }
-.todo-group-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.todo-group-meta { color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.todo-group-head .count { margin-left: auto; color: var(--color-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
-.todo-group-head.gone { color: var(--color-muted); }
-.todo-group-head.gone .todo-group-name { text-decoration: line-through; }
-.todo-assign, .todo-who { flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 200px; padding: 3px 8px; border-radius: 7px; color: var(--color-muted); font-size: var(--text-sm); white-space: nowrap; }
-.todo-assign span, .todo-who span { overflow: hidden; text-overflow: ellipsis; }
-.todo-assign .icon, .todo-who .icon { width: 14px; height: 14px; }
-.todo-who .agent-avatar { width: 16px; height: 16px; font-size: 8px; }
-.todo-assign { opacity: 0; transition: opacity 120ms ease; }
-.todo-row:hover .todo-assign, .todo-assign:focus-visible { opacity: 1; }
-.todo-assign:hover, .todo-who:hover { background: var(--color-hover); color: var(--color-ink); }
-.todo-who.gone span { text-decoration: line-through; }
-.todo-start { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 7px; color: var(--color-muted); font-size: var(--text-sm); white-space: nowrap; opacity: 0; transition: opacity 120ms ease; }
-.todo-start .icon { width: 13px; height: 13px; }
-.todo-row:hover .todo-start, .todo-start:focus-visible { opacity: 1; }
-.todo-start:hover { background: var(--color-hover); color: var(--color-ink); }
-.todo-section .todo-start, .todo-tab .todo-start { display: none; }
-/* New session started from a todo */
-.new-todo { display: flex; align-items: center; gap: 8px; margin: 0 4px 10px; padding: 6px 6px 6px 10px; border: 1px solid var(--color-border); border-radius: 10px; color: var(--color-muted); font-size: var(--text-sm); }
-.new-todo[hidden] { display: none; }
-.new-todo > .icon { width: 15px; height: 15px; flex: none; }
-.new-todo-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-ink); }
-.new-todo-clear { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; color: var(--color-muted); flex: none; }
-.new-todo-clear:hover { background: var(--color-hover); color: var(--color-ink); }
-.new-todo-clear .icon { width: 12px; height: 12px; }
-.todo-done-rows .todo-who { opacity: .8; }
 /* the add bar's agent: a quiet Assign until one is picked */
-.todo-agent-pick { flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 5px 9px; border-radius: 9px; color: var(--color-muted); font-size: var(--text-sm); white-space: nowrap; }
-.todo-agent-pick > span:not(.todo-pick-clear) { overflow: hidden; text-overflow: ellipsis; }
-.todo-agent-pick .icon { width: 14px; height: 14px; }
-.todo-agent-pick .agent-avatar { width: 18px; height: 18px; font-size: 8px; }
-.todo-agent-pick:hover { background: var(--color-hover); color: var(--color-ink); }
-.todo-agent-pick.on { background: var(--color-hover); color: var(--color-ink); padding-right: 4px; }
-.todo-pick-clear { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; color: var(--color-muted); }
-.todo-pick-clear:hover { background: var(--color-border); color: var(--color-ink); }
-.todo-pick-clear .icon { width: 12px; height: 12px; }
 /* menus with an agent per item */
 .pop-menu button.with-avatar .agent-avatar { width: 20px; height: 20px; font-size: 9px; flex: none; }
 .pop-menu button > span:not(.pop-gap) { display: flex; flex-direction: column; min-width: 0; }
@@ -1457,3 +1368,5 @@ button.todo-group-head:hover .todo-group-name { text-decoration: underline; text
 .room-chip svg { width: 14px; height: 14px; color: var(--color-muted); }
 .room-agent-text { display: grid; text-align: left; line-height: 1.2; }
 .room-agent-text small { font-size: 11px; color: var(--color-muted); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.room-empty { color: var(--color-muted); padding: 18px 8px; }

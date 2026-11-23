@@ -11,10 +11,6 @@
 //   synapse plan [id]                  your latest shared plan (or that one); plans are with agents of any kind
 //   synapse plan start "<goal>" <agent>...   start one; they are linked with you and get the goal
 //   synapse plan note|task <text> | claim|done|reopen <n> | close   [--id id] change it; the others hear of it
-//   synapse todo [--mine|--done|--all]     the user's todos (open ones by default)
-//   synapse todo add <text...> [--agent a|none] [--linear]   add one, linked to you unless --agent says otherwise
-//   synapse todo done|open|rm <id>         tick, reopen or delete one; todo link <id> <agent|none> links it
-//   synapse linear sync                    bring in Linear issues assigned to you (once Linear is connected in the app)
 //   synapse saved [id]                     list archived chats (⌘S in the app), or print one
 //   synapse saved restore <id>             put an archived transcript back, byte for byte, to resume it
 //   synapse saved archive <file> [--keep]  archive a finished chat's transcript (removed unless --keep)
@@ -54,7 +50,6 @@ import * as plan from './plan.mjs';
 import * as remote from './remote.mjs';
 import * as account from './account.mjs';
 import * as saved from './saved.mjs';
-import * as todos from './todos.mjs';
 import * as rooms from './rooms.mjs';
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -177,18 +172,6 @@ try {
       else out = plan.list(whoami(), { id: sub });
       break;
     }
-    case 'todo': case 'todos': {
-      const [sub, ...more] = args, agent = opt('--agent');
-      const words = more.filter((a) => a !== agent);
-      const self = () => { try { const me = whoami(); return { id: me.id, name: me.name }; } catch { return null; } };
-      if (sub === 'add') { const me = self(); out = todos.show(await todos.add({ text: words.join(' '), agent: agent ?? me, by: me?.name || 'you', linear: flags.has('--linear') })); }
-      else if (sub === 'done' || sub === 'open') out = todos.show(await todos.update(words[0], { done: sub === 'done' }));
-      else if (sub === 'rm' || sub === 'remove') out = { removed: todos.show(todos.remove(words[0])) };
-      else if (sub === 'link') out = todos.show(await todos.update(words[0], { agent: words[1] === 'me' ? self() : words[1] || null }));
-      else out = todos.list({ agent: flags.has('--mine') ? self()?.id : undefined, done: flags.has('--all') ? undefined : flags.has('--done') }).map(todos.show);
-      break;
-    }
-    case 'linear': out = await todos.syncLinear(); break;
     case 'ask': {
       const conversation = opt('--conversation');
       const words = args.filter((a) => a !== conversation);

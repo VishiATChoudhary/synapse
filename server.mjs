@@ -15,7 +15,6 @@ import * as plan from './plan.mjs';
 import * as remote from './remote.mjs';
 import * as talk from './talk.mjs';
 import * as rooms from './rooms.mjs';
-import * as todos from './todos.mjs';
 
 const PORT = Number(process.env.PORT || 4747);
 const discovery = createDiscovery();
@@ -83,7 +82,6 @@ const state = () => ({
   agents: agents(), talks: talks({ open: true }).map(brief), talkRequests: talkRequests(), edges: readJSON(FILES.edges, []), layout: readJSON(FILES.layout, {}), hidden: readJSON(FILES.canvasHidden, []),
   demo: !!process.env.SYNAPSE_DEMO,
   messageRevision: fs.existsSync(FILES.messages) ? fs.statSync(FILES.messages).mtimeMs : 0,
-  todos: todos.all(),
 });
 
 // --- SSE ---
@@ -94,7 +92,7 @@ const broadcast = (event, data) => clients.forEach((c) => send(c, event, data));
 let lastSig = '';
 function broadcastState() {
   const s = state();
-  const sig = JSON.stringify([s.agents.map((a) => [a.id, a.status, a.name, a.lastActivity]), s.edges, s.messageRevision, s.talks, s.talkRequests, s.todos]);
+  const sig = JSON.stringify([s.agents.map((a) => [a.id, a.status, a.name, a.lastActivity]), s.edges, s.messageRevision, s.talks, s.talkRequests]);
   if (sig !== lastSig) { lastSig = sig; broadcast('state', s); }
 }
 const discoveryTimer = setInterval(async () => {
@@ -103,9 +101,6 @@ const discoveryTimer = setInterval(async () => {
   catch (error) { console.error(`Agent discovery: ${error.message}`); }
 }, 1000);
 
-// Linear: issues assigned to you come in as todos, every 5 minutes while the app is open
-const linearTimer = setInterval(() => { if (clients.size && todos.linearKey()) todos.syncLinear().then(broadcastState, () => {}); }, Number(process.env.SYNAPSE_LINEAR_MS || 300_000));
-linearTimer.unref?.();
 
 // Multiplayer: exchange agents and shared context with friends' machines every few seconds.
 // The state loop above notices what changed (their agents, links they drew) and pushes it to the canvas.
@@ -244,25 +239,6 @@ async function handleRequest(req, res) {
     // github.com/<owner>.png leads to the picture by account id; the by-name avatar address shows the default for some orgs
     res.writeHead(302, { location: `https://github.com/${encodeURIComponent(owner)}.png?size=96`, 'cache-control': 'max-age=86400' });
     return res.end();
-  }
-  // Todos (todos.mjs): the GUI's list; agents change the same file through MCP and the CLI
-  if (p === '/api/todos' || p.startsWith('/api/todos/') || p === '/api/linear' || p.startsWith('/api/linear/')) {
-    if (!ownPage(req)) return json(res, 403, { error: 'forbidden' });
-    const done = (value) => { lastSig = ''; broadcastState(); return json(res, 200, value); };
-    try {
-      if (p === '/api/todos' && req.method === 'GET') return json(res, 200, { todos: todos.all(), linear: todos.linearStatus() });
-      if (p === '/api/todos' && req.method === 'POST') { const b = await body(req); return done(await todos.add({ text: b.text, agent: b.agent || null, by: 'you', linear: !!b.linear })); }
-      const one = p.match(/^\/api\/todos\/([\w-]+)(\/linear)?$/);
-      if (one && one[2] && req.method === 'POST') return done(await todos.toLinear(one[1]));
-      if (one && req.method === 'PATCH') { const b = await body(req); const change = {}; for (const k of ['text', 'done', 'agent', 'asked']) if (k in b) change[k] = b[k]; return done(await todos.update(one[1], change)); }
-      if (one && req.method === 'DELETE') return done(todos.remove(one[1]));
-      if (p === '/api/linear' && req.method === 'GET') return json(res, 200, todos.linearStatus());
-      if (p === '/api/linear' && req.method === 'PUT') { const b = await body(req); const out = await todos.connectLinear(b.key); await todos.syncLinear().catch(() => {}); return done(out); }
-      if (p === '/api/linear' && req.method === 'PATCH') { const b = await body(req); return done(todos.setLinearTeam(b.team)); }
-      if (p === '/api/linear' && req.method === 'DELETE') return done(todos.disconnectLinear());
-      if (p === '/api/linear/sync' && req.method === 'POST') return done(await todos.syncLinear());
-      return json(res, 404, { error: 'not found' });
-    } catch (error) { return json(res, 400, { error: error.message }); }
   }
   if (p === '/api/plans' && req.method === 'POST') { // a shared plan from the GUI, as synapse_plan_start would
     const { from, agents: with_ = [], goal } = await body(req);
@@ -554,7 +530,6 @@ function shutdown() {
   clearInterval(flowTimer);
   clearInterval(remoteTimer);
   clearInterval(talkTimer);
-  clearInterval(linearTimer);
   for (const client of clients) client.end();
   server.close();
   discovery.close();

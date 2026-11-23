@@ -102,20 +102,6 @@ MCP tools: `synapse_plan_start`, `synapse_plan`, `synapse_plan_update`. When a p
 and answer on it (a note, or claiming tasks) before going on. Agree on who does what before anyone edits shared
 files, and say in a note when you finish a task.
 
-## Todos
-
-The user keeps a todo list in Synapse, shared with their agents (some may come from Linear and show its id, like
-ENG-12). When the user asks you to note or track something for later, add it; tick it when you finish it.
-
-```bash
-$S todo [--mine|--done|--all]               # open todos (--mine: linked to you)
-$S todo add "<text>" [--agent a|none]       # linked to you unless --agent says otherwise; --linear makes a Linear issue too
-$S todo done <id> | open <id> | rm <id>     # tick, reopen, delete
-$S todo link <id> <agent|me|none>
-```
-
-MCP tools: `synapse_todos`, `synapse_todo_add`, `synapse_todo_update`, `synapse_todo_remove`.
-
 ## How to use it
 
 1. **Start with `peers --all`** so you know the exact names. Pick the agent whose name, project or
