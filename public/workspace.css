@@ -1430,3 +1430,30 @@ button.todo-group-head:hover .todo-group-name { text-decoration: underline; text
 .room-pick legend { font-size: var(--text-sm); color: var(--color-muted); margin-bottom: 6px; }
 .room-pick label { display: flex; align-items: center; gap: 8px; font-size: var(--text-md); }
 @media (max-width: 760px) { .rooms-layout { grid-template-columns: 1fr; } .room-list { flex-direction: row; overflow-x: auto; } }
+
+/* Rooms: picking agents, grouped by project */
+.room-picker { display: grid; gap: 12px; margin-top: 12px; max-height: min(60vh, 520px); overflow: auto; }
+.room-picker-legend { margin: 0; font-size: var(--text-sm); color: var(--color-muted); }
+.room-picker-search { margin: 0; }
+.room-picker-group h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; font-size: var(--text-xs, 11px); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--color-muted); }
+.room-picker-group h4 span { font-weight: 500; opacity: .7; }
+.room-picker-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; cursor: pointer; }
+.room-picker-row:hover { background: var(--color-hover); }
+.room-picker-row:has(input:checked) { background: color-mix(in srgb, var(--color-ink) 8%, transparent); }
+.room-picker-row input { margin: 0; flex: none; }
+.room-picker-text { display: grid; min-width: 0; }
+.room-picker-text strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-picker-text > span { display: flex; align-items: center; gap: 4px; font-size: var(--text-sm); color: var(--color-muted); overflow: hidden; white-space: nowrap; }
+.room-picker-text > span svg { width: 12px; height: 12px; }
+.room-picker-row[hidden], .room-picker-group[hidden] { display: none; }
+.room-choose { gap: 4px; }
+.room-choice { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 10px; cursor: pointer; }
+.room-choice:hover { background: var(--color-hover); }
+.room-choice > span { display: grid; gap: 2px; flex: 1; }
+.room-choice > span > span { font-size: var(--text-sm); color: var(--color-muted); }
+.room-choice .field { margin-top: 4px; }
+.room-chip { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--color-ink); font: inherit; text-align: left; cursor: pointer; }
+.room-chip:hover { background: var(--color-hover); }
+.room-chip svg { width: 14px; height: 14px; color: var(--color-muted); }
+.room-agent-text { display: grid; text-align: left; line-height: 1.2; }
+.room-agent-text small { font-size: 11px; color: var(--color-muted); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -567,7 +567,7 @@ function initialize() {
   let sidebarOpen = !narrow.matches && getStorage('synapse-sidebar', 'open') === 'open';
   let inspectorOpen = wide.matches && getStorage('synapse-inspector', 'open') === 'open';
   // the panel's tabs: Details (the session) or Browser (the agent browser, agent-browser.mjs in the app)
-  const PANEL_TABS = ['details', 'todos', 'browser'];
+  const PANEL_TABS = ['details', 'browser']; // todos left the panel (and the bar): too much for too little
   let inspectorTab = PANEL_TABS.includes(getStorage('synapse-inspector-tab', 'details')) ? getStorage('synapse-inspector-tab', 'details') : 'details';
   let browserSettle = 0; // while the panel eases to its new width, the page waits to be placed
   let panelFull = false, panelDragging = false;
@@ -2006,14 +2006,15 @@ function initialize() {
     browserSignature = '';
     const peers = relations(agent.id), chat = recentCache.get(agent.id)?.data.chat || [];
     loadChanges(agent);
-    const signature = JSON.stringify([agent.id, agent.name, agent.status, agent.lastActivity, todosOf(agent), peers, chat.slice(-3), Math.floor(Date.now() / 60000), changeCache.get(agent.id)?.data, friends?.links?.length, friends?.outgoing?.length, friends?.incoming?.length]);
+    const signature = JSON.stringify([agent.id, agent.name, agent.status, agent.lastActivity, roomsSigFor(agent), peers, chat.slice(-3), Math.floor(Date.now() / 60000), changeCache.get(agent.id)?.data, friends?.links?.length, friends?.outgoing?.length, friends?.incoming?.length]);
     if (signature === inspectorSignature) return;
     inspectorSignature = signature;
     inspectorBody(agent).innerHTML = `
       <section class="inspector-section"><div class="session-summary">${avatar(agent)}<div><strong>${escapeHtml(agent.name)}</strong><span class="session-provider">${escapeHtml(kindName(agent))}</span></div></div><div class="detail-row"><span>Status</span><span class="status-label">${status(agent)}${activityLabel(agent)}</span></div><div class="detail-row"><span>Last activity</span><span>${relativeTime(agent.lastActivity) === 'now' ? 'Just now' : `${relativeTime(usedAt(agent))} ago`}</span></div><div class="folder-path">${icon('folder')}<span>${escapeHtml(agent.cwd)}</span></div></section>
       ${changesSection(agent)}
       ${sharingSection(agent)}
-      <section class="inspector-section"><div class="inspector-title-row"><h3 class="inspector-label">Connected agents</h3><span class="count">${peers.length}</span></div>${peers.map((peer) => `<div class="connection-row">${avatar(peer.agent)}<button class="connection-info" data-agent="${escapeHtml(peer.agent.id)}"><strong>${escapeHtml(peer.agent.name)}</strong><span>${icon(peer.reads && peer.shares ? 'arrows' : peer.reads ? 'arrow-left' : 'arrow-right')}${peer.reads && peer.shares ? 'Two-way context' : peer.reads ? 'Reads context from' : 'Shares context with'}</span></button><button class="icon-button unlink-button" data-remove-links="${peer.edges.map((edge) => escapeHtml(edge.id)).join(',')}" aria-label="Disconnect ${escapeHtml(peer.agent.name)}" title="Disconnect">${icon('unlink')}</button></div>`).join('')}<button class="add-context" data-action="add-connection">${icon('plus')}Add connection</button><p class="inspector-note">Linked agents can share context and message each other across tools.</p></section>
+      ${roomSection(agent)}
+      ${peers.length ? `<section class="inspector-section"><div class="inspector-title-row"><h3 class="inspector-label">Connected agents</h3><span class="count">${peers.length}</span></div>${peers.map((peer) => `<div class="connection-row">${avatar(peer.agent)}<button class="connection-info" data-agent="${escapeHtml(peer.agent.id)}"><strong>${escapeHtml(peer.agent.name)}</strong><span>${icon(peer.reads && peer.shares ? 'arrows' : peer.reads ? 'arrow-left' : 'arrow-right')}${peer.reads && peer.shares ? 'Two-way context' : peer.reads ? 'Reads context from' : 'Shares context with'}</span></button><button class="icon-button unlink-button" data-remove-links="${peer.edges.map((edge) => escapeHtml(edge.id)).join(',')}" aria-label="Disconnect ${escapeHtml(peer.agent.name)}" title="Disconnect">${icon('unlink')}</button></div>`).join('')}</section>` : ''}
       <section class="inspector-section"><h3 class="inspector-label">Recent messages</h3>${chat.slice(-3).reverse().map((message) => `<div class="recent-note"><strong>${icon('message')}${escapeHtml(message.fromName === 'You' ? 'You' : message.fromName)}</strong><p>${escapeHtml(message.text)}</p></div>`).join('') || '<p class="inspector-note">Messages between agents will appear here.</p>'}${chat.length ? '<button class="text-button" data-action="show-messages">View messages ' + icon('arrow-right') + '</button>' : ''}</section>`;
   }
 
@@ -2496,7 +2497,7 @@ function initialize() {
     const typing = r.agents.filter((a) => mine(a) && answering.has(a.id)).map((a) => a.name);
     $('room-pane').innerHTML = `<header class="room-head"><div><h2>${escapeHtml(r.name)}</h2><p>${r.members.map((m) => escapeHtml(m.name)).join(', ')}</p></div>
       <div class="room-actions"><button type="button" class="button secondary" data-room-add-agent>${icon('plus')}Add my agent</button>${r.hosted ? `<button type="button" class="button secondary" data-room-add-person>${icon('user')}Add person</button>` : ''}<button type="button" class="icon-button" data-room-leave title="${r.hosted ? 'Close this room for everyone' : 'Leave this room'}" aria-label="${r.hosted ? 'Close room' : 'Leave room'}">${icon('x')}</button></div></header>
-      <div class="room-agents">${r.agents.map((a) => `<button type="button" class="room-agent" data-room-mention="${escapeHtml(roomAgentLabel(a, r))}" title="Mention ${escapeHtml(a.name)} (agent of ${escapeHtml(a.owner)})"><span class="agent-avatar" data-logo="${escapeHtml(a.kind)}" aria-hidden="true">${escapeHtml(a.name.slice(0, 2).toUpperCase())}</span>@${escapeHtml(roomAgentLabel(a, r))}${mine(a) ? `<span class="room-x" role="button" data-room-drop="${escapeHtml(a.id)}" title="Take ${escapeHtml(a.name)} out" aria-label="Remove">${icon('x')}</span>` : ''}</button>`).join('') || '<span class="room-hint">No agents yet. Add one of yours; friends add theirs.</span>'}</div>
+      <div class="room-agents">${r.agents.map((a) => `<button type="button" class="room-agent" data-room-mention="${escapeHtml(roomAgentLabel(a, r))}" title="Mention ${escapeHtml(a.name)} (agent of ${escapeHtml(a.owner)})"><span class="agent-avatar" data-logo="${escapeHtml(a.kind)}" aria-hidden="true">${escapeHtml(a.name.slice(0, 2).toUpperCase())}</span><span class="room-agent-text"><span>@${escapeHtml(roomAgentLabel(a, r))}</span>${(() => { const g = mine(a) && byId.get(a.id); const sub = g ? [g.project, g.worktreeHome ? '' : g.worktreeName, titleOf(g) !== g.name ? titleOf(g) : ''].filter(Boolean).join(' · ') : `${a.owner}'s agent`; return sub ? `<small>${escapeHtml(sub)}</small>` : ''; })()}</span>${mine(a) ? `<span class="room-x" role="button" data-room-drop="${escapeHtml(a.id)}" title="Take ${escapeHtml(a.name)} out" aria-label="Remove">${icon('x')}</span>` : ''}</button>`).join('') || '<span class="room-hint">No agents yet. Add one of yours; friends add theirs.</span>'}</div>
       <div class="room-messages" aria-live="polite">${rows || '<p class="room-hint">Say hi. Type @ and an agent name to ask it.</p>'}${typing.length ? `<div class="room-msg system">${escapeHtml(typing.join(', '))} ${typing.length === 1 ? 'is' : 'are'} answering…</div>` : ''}</div>
       <form class="room-compose" id="room-compose" autocomplete="off"><textarea id="room-input" rows="1" maxlength="4000" placeholder="Message ${escapeHtml(r.name)}. @mention an agent to ask it"></textarea><button class="button" type="submit">Send</button></form>
       <p class="room-hint">Agents in rooms only read and answer. They have no tools, can not change anything, and secrets are scrubbed from what they say.</p>`;
@@ -2513,13 +2514,58 @@ function initialize() {
     catch (e) { input.value = text; toast(e.message); }
     loadRooms();
   }
+  // Your Claude and Codex agents to pick from, grouped by project like the sidebar: each shows the name you see
+  // there, its worktree and what it is doing, so two "claude-…" sessions can be told apart
+  function roomPicker(agents, legend, checked = []) {
+    const rows = agents.map((a) => { const g = byId.get(a.id); return { id: a.id, kind: a.kind, title: g ? titleOf(g) : a.name, name: a.name, project: g?.project || (a.cwd || '').split('/').filter(Boolean).at(-1) || 'Other', where: g && !g.worktreeHome && g.worktreeName ? g.worktreeName : '', agent: g || { kind: a.kind, name: a.name }, status: g?.status || '', last: g?.lastActivity || 0 }; });
+    const groups = new Map();
+    for (const r of rows.sort((x, y) => x.project.localeCompare(y.project) || y.last - x.last)) { if (!groups.has(r.project)) groups.set(r.project, []); groups.get(r.project).push(r); }
+    return `<div class="room-picker"><p class="room-picker-legend">${escapeHtml(legend)}</p>${agents.length > 6 ? '<input class="field room-picker-search" placeholder="Filter by project, worktree or name" aria-label="Filter agents">' : ''}
+      ${[...groups].map(([project, list]) => `<section class="room-picker-group" data-project="${escapeHtml(project.toLowerCase())}"><h4>${escapeHtml(project)}<span>${list.length}</span></h4>${list.map((r) => `<label class="room-picker-row" data-text="${escapeHtml(`${project} ${r.where} ${r.title} ${r.name}`.toLowerCase())}"><input type="checkbox" value="${escapeHtml(r.id)}"${checked.includes(r.id) ? ' checked' : ''}>${avatar(r.agent)}<span class="room-picker-text"><strong>${escapeHtml(r.title)}</strong><span>${[r.where ? `${icon('branch')}${escapeHtml(r.where)}` : '', escapeHtml(kindName(r.agent)), r.status ? escapeHtml(r.status === 'busy' ? 'working' : r.status) : ''].filter(Boolean).join(' · ')}</span></span></label>`).join('')}</section>`).join('')}</div>`;
+  }
+  document.addEventListener('input', (event) => {
+    if (!event.target.matches?.('.room-picker-search')) return;
+    const q = event.target.value.trim().toLowerCase(), box = event.target.closest('.room-picker');
+    for (const row of box.querySelectorAll('.room-picker-row')) row.hidden = !!q && !row.dataset.text.includes(q);
+    for (const g of box.querySelectorAll('.room-picker-group')) g.hidden = ![...g.querySelectorAll('.room-picker-row')].some((r) => !r.hidden);
+  });
+  // the agent panel: which rooms this agent is in, and a button to add it to one (or a new one)
+  let panelRooms = null, panelRoomsAt = 0;
+  const loadPanelRooms = () => { if (Date.now() - panelRoomsAt < 5000) return; panelRoomsAt = Date.now(); api('/api/rooms').then((d) => { panelRooms = d; inspectorSignature = ''; renderInspector(); }, () => {}); };
+  const roomsOfAgent = (agent) => (panelRooms?.rooms || []).filter((r) => (r.agents || []).some((a) => a.id === agent.id && a.machine === panelRooms.me?.machine));
+  const roomsSigFor = (agent) => roomsOfAgent(agent).map((r) => r.id).join();
+  function roomSection(agent) {
+    if (agent.remote || !['claude', 'codex'].includes(agent.kind)) return '';
+    loadPanelRooms();
+    const mine = roomsOfAgent(agent);
+    return `<section class="inspector-section"><div class="inspector-title-row"><h3 class="inspector-label">Rooms</h3><span class="count">${mine.length}</span></div>${mine.map((r) => `<button class="room-chip" data-open-room="${escapeHtml(r.id)}">${icon('users')}<span>${escapeHtml(r.name)}</span></button>`).join('')}<button class="add-context" data-add-to-room="${escapeHtml(agent.id)}">${icon('plus')}Add to a room</button></section>`;
+  }
+  async function addToRoom(agentId) {
+    let data; try { data = await api('/api/rooms'); } catch (e) { return toast(e.message); }
+    const agent = byId.get(agentId), title = agent ? titleOf(agent) : 'this agent';
+    const open = data.rooms.filter((r) => !(r.agents || []).some((a) => a.id === agentId && a.machine === data.me?.machine));
+    openModal(`Add ${title} to a room`, `<fieldset class="room-pick room-choose"><legend>It answers, read only, when someone @mentions it</legend>
+      ${open.map((r, i) => `<label class="room-choice"><input type="radio" name="room-target" value="${escapeHtml(r.id)}"${i === 0 ? ' checked' : ''}><span><strong>${escapeHtml(r.name)}</strong><span>${escapeHtml(r.members.map((m) => m.name).join(', '))}</span></span></label>`).join('')}
+      <label class="room-choice"><input type="radio" name="room-target" value=""${open.length ? '' : ' checked'}><span><strong>A new room</strong><input class="field" id="room-new-name" maxlength="60" placeholder="Name it"></span></label></fieldset>`, 'Add', async () => {
+      const target = $('dialog-content').querySelector('input[name="room-target"]:checked')?.value;
+      let id = target;
+      if (!id) { const name = $('room-new-name').value.trim(); if (!name) throw new Error('Give the new room a name.'); id = (await api('/api/rooms', { method: 'POST', body: JSON.stringify({ name, agents: [agentId] }) })).id; }
+      else await api(`/api/rooms/${encodeURIComponent(id)}/agents`, { method: 'POST', body: JSON.stringify({ agent: agentId }) });
+      panelRoomsAt = 0; loadPanelRooms(); toast(`Added ${title} to the room`);
+    });
+    $('room-new-name')?.addEventListener('focus', () => { const r = $('dialog-content').querySelector('input[name="room-target"][value=""]'); if (r) r.checked = true; });
+  }
+  document.addEventListener('click', (event) => {
+    const add = event.target.closest?.('[data-add-to-room]'); if (add) { addToRoom(add.dataset.addToRoom); return; }
+    const go = event.target.closest?.('[data-open-room]'); if (go) { roomOpen = go.dataset.openRoom; navigate('rooms'); loadRooms(true); }
+  });
   function newRoom() {
     const agents = roomsData.agents || [];
     openModal('New room', `<label class="field-label" for="room-name">Name</label><input class="field" id="room-name" maxlength="60" placeholder="launch prep">
-      ${agents.length ? `<fieldset class="room-pick"><legend>Your agents in it (Claude and Codex)</legend>${agents.map((a) => `<label><input type="checkbox" value="${escapeHtml(a.id)}"> ${escapeHtml(a.name)} <span class="room-tag">${escapeHtml(a.kind)}</span></label>`).join('')}</fieldset>` : ''}`, 'Create', async () => {
+      ${agents.length ? roomPicker(agents, 'Your agents in it (Claude and Codex)') : ''}`, 'Create', async () => {
       const name = $('room-name').value.trim();
       if (!name) throw new Error('Give the room a name.');
-      const picked = [...$('dialog-content').querySelectorAll('.room-pick input:checked')].map((x) => x.value);
+      const picked = [...$('dialog-content').querySelectorAll('.room-picker input:checked')].map((x) => x.value);
       const r = await api('/api/rooms', { method: 'POST', body: JSON.stringify({ name, agents: picked }) });
       roomOpen = r.id; loadRooms(true);
     });
@@ -2528,8 +2574,9 @@ function initialize() {
     const inRoom = new Set((roomShown?.agents || []).filter((a) => a.machine === roomsData.me?.machine).map((a) => a.id));
     const agents = (roomsData.agents || []).filter((a) => !inRoom.has(a.id));
     if (!agents.length) return toast('No Claude or Codex agent of yours to add. Start one first.');
-    openModal('Add your agent', `<fieldset class="room-pick"><legend>It answers read only when someone @mentions it</legend>${agents.map((a) => `<label><input type="checkbox" value="${escapeHtml(a.id)}"> ${escapeHtml(a.name)} <span class="room-tag">${escapeHtml(a.kind)}</span></label>`).join('')}</fieldset>`, 'Add', async () => {
-      const picked = [...$('dialog-content').querySelectorAll('.room-pick input:checked')].map((x) => x.value);
+    openModal('Add your agents', roomPicker(agents, 'They answer, read only, when someone @mentions them'), 'Add', async () => {
+      const picked = [...$('dialog-content').querySelectorAll('.room-picker input:checked')].map((x) => x.value);
+      if (!picked.length) throw new Error('Pick at least one agent.');
       for (const id of picked) await api(`/api/rooms/${encodeURIComponent(roomOpen)}/agents`, { method: 'POST', body: JSON.stringify({ agent: id }) });
       loadRooms(true);
     });

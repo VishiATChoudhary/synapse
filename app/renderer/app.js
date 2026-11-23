@@ -2494,6 +2494,7 @@ async function openSettings(start) {
     }, () => { used.textContent = 'Unavailable'; });
     const hist = el('div', 'talk-hist'); drawTalkHistory(hist);
     pane('people', null,
+      group('Account', row('Account & sharing', 'Your Synapse account, your handle, and who you share agents with.', button('Open', () => { close(); openAccount(); }))),
       group('Trusted people', people),
       group('Agent talk',
         row('Questions an hour', 'The most a friend’s agents may ask yours each hour.', perHour),
