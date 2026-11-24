@@ -23,6 +23,7 @@ git('branch', 'local-feature'); git('branch', 'closed-feature');
 git('worktree', 'add', '-b', 'merged-feature', retained);
 git('remote', 'add', 'origin', 'https://github.com/acme/repo.git');
 git('update-ref', 'refs/remotes/origin/remote-feature', 'HEAD');
+git('update-ref', 'refs/remotes/origin/main', 'HEAD'); git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
 const pulls = [['local-feature', 'open', null], ['closed-feature', 'closed', null], ['merged-feature', 'closed', '2026-10-16']].map(([ref, status, merged], i) => ({ head: { ref, repo: { full_name: 'acme/repo' } }, state: status, merged_at: merged, number: i + 1, html_url: `https://github.com/acme/repo/pull/${i + 1}` }));
 fs.writeFileSync(path.join(fixture, 'bin', 'gh'), `#!/bin/sh\nprintf '%s' '${JSON.stringify([pulls])}'\n`, { mode: 0o755 });
 Object.assign(process.env, { SYNAPSE_HOME: state, SUPERSET_HOME: path.join(fixture, 'superset'), SHELL: '/bin/sh', PATH: `${path.join(fixture, 'bin')}:${process.env.PATH}` });
@@ -44,7 +45,8 @@ async function picker() {
   await until(() => js(`document.querySelector('.branch-list .pr-status') !== null`), 'PR statuses loaded');
 }
 async function opened(branch) {
-  await until(() => js(`document.querySelector('#modal').hidden && [...document.querySelectorAll('.wt-name')].some(e => e.title.split('\\n')[1] === ${JSON.stringify(branch)})`), `opened ${branch}`);
+  // the sidebar rows are gone in the GUI-only app: the state is what says it opened
+  await until(async () => await js(`document.querySelector('#modal').hidden`) && (await js('synapse.state()')).projects.some(p => p.worktrees.some(w => w.branch === branch)), `opened ${branch}`);
   return (await js('synapse.state()')).projects.flatMap(p => p.worktrees).find(w => w.branch === branch);
 }
 (async () => {
@@ -69,12 +71,20 @@ async function opened(branch) {
   await picker(); await search('origin/remote-feature'); await enter();
   const remote = await opened('remote-feature');
   assert.equal(execFileSync('git', ['-C', remote.path, 'rev-parse', '--abbrev-ref', '@{upstream}']).toString().trim(), 'origin/remote-feature');
-  await picker(); await click('[data-mode="new"]'); await search('new//from ui?');
+  await picker(); await click('[data-mode="new"]');
+  // a new branch starts from the remote's default branch unless another is picked
+  assert.equal(await js(`document.querySelector('.branch-from select').value`), 'origin/main');
+  assert.ok(await js(`[...document.querySelectorAll('.branch-from option')].some(o => o.value === 'origin/remote-feature')`));
+  await js(`const s = document.querySelector('.branch-from select'); s.value = 'origin/remote-feature'; s.dispatchEvent(new Event('change'))`);
+  assert.match(await js(`document.querySelector('#modal-body .hint').textContent`), /from origin\/remote-feature/);
+  await search('new//from ui?');
   // the name field drops what git would reject as it is typed: a space becomes -, the rest goes
   assert.equal(await js(`document.querySelector('#modal-body input').value`), 'new/from-ui');
   await enter();
   const fresh = await opened('new/from-ui');
   assert.ok(fs.existsSync(fresh.path));
+  assert.equal(execFileSync('git', ['-C', fresh.path, 'rev-parse', 'HEAD']).toString(), execFileSync('git', ['-C', repo, 'rev-parse', 'origin/remote-feature']).toString());
+  assert.equal(spawnSync('git', ['-C', fresh.path, 'rev-parse', '--abbrev-ref', '@{upstream}']).status !== 0, true, 'a new branch does not track its base');
   console.log('PASS picker search, keyboard selection, PR symbols, existing session reuse, local/remote/new branches');
 
   const remove = () => js(`[...document.querySelectorAll('.wt-head')].find(e => e.querySelector('.wt-name').title.startsWith(${JSON.stringify(retained + '\n')})).querySelector('.wt-delete').click()`);

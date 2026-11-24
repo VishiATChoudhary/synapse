@@ -273,6 +273,9 @@ body.win .main > .top { padding-right: 140px; }
 .modal .seg button { flex: 1; padding: 9px 0; font: 10.5px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); border-left: 1px solid var(--rule); }
 .modal .seg button:first-child { border-left: 0; }
 .modal .seg button:hover { color: var(--ink); }
+.modal .branch-from { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--rule); font: 10.5px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
+.modal .branch-from[hidden] { display: none; }
+.modal .branch-from select { flex: 1; min-width: 0; padding: 5px 6px; font: 12px var(--mono); text-transform: none; letter-spacing: 0; color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; }
 .modal .seg button.on { background: var(--ink); color: var(--paper); box-shadow: inset 0 -2px 0 var(--sig); }
 .modal .hint.err { color: var(--sig); text-transform: none; }
 .modal input:disabled { color: var(--ink-3); }
