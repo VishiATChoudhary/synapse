@@ -308,6 +308,9 @@ const ICONS = {
   'arrow-down': '<path d="M12 4v16m-6-6 6 6 6-6"/>',
   'arrows': '<path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4"/>',
   x: '<path d="m6 6 12 12M18 6 6 18"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  'circle-check': '<circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
+  'circle-alert': '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16.2v.1"/>',
   unlink: '<path d="m3 3 18 18M10.5 13.5l3-3M8 16l-1 1a3.5 3.5 0 0 1-5-5l3-3m11-1 1-1a3.5 3.5 0 0 1 5 5l-3 3"/>',
   copy: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
@@ -420,7 +423,7 @@ function initialize() {
       const message = event.data;
       const owns = (id) => desktop?.sessions.some((s) => s.id === id && s.pane === pane.dataset.paneKey);
       if (message?.type === 'synapse:desktop-bootstrap') {
-        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-inspector-tab', 'synapse-panel-width'].map((key) => [key, getStorage(key, null)]));
+        const preferences = Object.fromEntries(['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-inspector-tab', 'synapse-panel-width', 'synapse-notifs', 'synapse-notifs-hidden'].map((key) => [key, getStorage(key, null)]));
         pane.contentWindow.postMessage({ type: 'synapse:desktop-bootstrap', preferences }, location.origin);
       }
       if (message?.type === 'synapse:desktop-ready') sendPaneState(pane);
@@ -780,6 +783,124 @@ function initialize() {
   const usedAt = (a) => (a.owned ? a.usedAt || a.lastActivity : a.lastActivity) || 0;
   const expiring = new Set(), archivedBusy = new Set(); // archivedBusy: archived by hand while working, stays archived
   const needsYou = (a) => ['waiting', 'needs_input'].includes(a.status);
+  // ---- Notifications: what your agents did while you looked elsewhere, as a stack at the bottom right (after
+  // bencho.dev's toast stack, MIT): the newest in front, two more peeking out above it, fanning out into a list on
+  // hover. Clicking one opens its agent and takes it off the stack; x just takes it off. The bell shows how many
+  // there are and hides or shows the stack.
+  const NOTIF_MAX = 30, NOTIF_PEEK = 12, NOTIF_GAP = 8, NOTIF_SHOWN = 3;
+  let notifs = readJSON('synapse-notifs', []).filter((n) => n && n.id && n.agent);
+  let notifsHidden = getStorage('synapse-notifs-hidden', '') === '1';
+  let notifOpen = false;
+  const saveNotifs = () => setStorage('synapse-notifs', JSON.stringify(notifs));
+  function pushNotif(a, kind) {
+    // looking right at it: nothing to tell
+    if (a.id === selectedId && view === 'session' && document.hasFocus() && !document.hidden) return;
+    const text = kind === 'needs' ? 'Needs you: waiting for your answer' : (a.preview && !/^Ready for your next prompt$/.test(a.preview) ? a.preview : 'Finished its turn');
+    notifs = [{ id: `${a.id}:${Date.now()}`, agent: a.id, kind, title: titleOf(a), text: String(text).replace(/\s+/g, ' ').slice(0, 160), at: Date.now() },
+      ...notifs.filter((n) => n.agent !== a.id)].slice(0, NOTIF_MAX);
+    saveNotifs(); renderNotifs(true);
+  }
+  function dropNotifs(test) {
+    const before = notifs.length;
+    notifs = notifs.filter((n) => !test(n));
+    if (notifs.length !== before) { saveNotifs(); renderNotifs(); }
+  }
+  function placeNotif(k, count) {
+    const h = 62;
+    if (notifOpen) return { y: -(k * (h + NOTIF_GAP)), scale: 1, opacity: 1 };
+    const d = Math.min(k, NOTIF_SHOWN - 1);
+    return { y: -(d * NOTIF_PEEK), scale: 1 - d * 0.05, opacity: k < NOTIF_SHOWN ? 1 : 0 };
+  }
+  function renderNotifs(arrived = false) {
+    const bell = $('notif-bell'), count = $('notif-count');
+    if (bell) {
+      count.textContent = notifs.length || '';
+      count.toggleAttribute('data-zero', !notifs.length);
+      bell.setAttribute('aria-pressed', String(!notifsHidden && notifs.length > 0));
+      bell.title = notifs.length ? `${notifs.length} notification${notifs.length === 1 ? '' : 's'}${notifsHidden ? ' (hidden, click to show)' : ''}` : 'No notifications';
+      if (arrived) { bell.classList.remove('ring'); void bell.offsetWidth; bell.classList.add('ring'); }
+    }
+    const root = $('notif-stack');
+    if (!root) return;
+    const show = notifs.length && !notifsHidden;
+    root.hidden = !show;
+    root.toggleAttribute('data-open', !!(show && notifOpen));
+    if (!show) { notifOpen = false; root.replaceChildren(); return; }
+    const shown = notifOpen ? notifs.slice(0, 6) : notifs.slice(0, NOTIF_SHOWN + 1);
+    const keep = new Map([...root.querySelectorAll('.ntf-toast')].map((el) => [el.dataset.id, el]));
+    shown.forEach((n, k) => {
+      let el = keep.get(n.id);
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'ntf-toast'; el.dataset.id = n.id; el.setAttribute('role', 'button'); el.tabIndex = 0;
+        el.innerHTML = `<span class="ntf-icon">${icon(n.kind === 'needs' ? 'circle-alert' : 'circle-check')}</span><span class="ntf-text"><b><span class="ntf-name"></span><time></time></b><span></span></span><button type="button" class="ntf-x">${icon('x')}</button>`;
+        el.querySelector('.ntf-text > span').textContent = n.text;
+        el.dataset.kind = n.kind;
+        const p0 = placeNotif(0, shown.length);
+        el.style.transform = `translateY(${p0.y + 24}px) scale(1)`; el.style.opacity = '0';
+        root.appendChild(el);
+        el.getBoundingClientRect(); // start from below the front, then spring into place
+      }
+      keep.delete(n.id);
+      const live = byId.get(n.agent), title = live ? titleOf(live) : n.title; // its name now (renames follow)
+      if (el.querySelector('.ntf-name').textContent !== title) { el.querySelector('.ntf-name').textContent = title; el.querySelector('.ntf-x').setAttribute('aria-label', `Dismiss ${title}`); }
+      el.querySelector('time').textContent = relativeTime(n.at);
+      const p = placeNotif(k, shown.length);
+      el.style.zIndex = String(100 - k);
+      el.style.transform = `translateY(${p.y}px) scale(${p.scale})`;
+      el.style.opacity = String(p.opacity);
+      el.toggleAttribute('data-front', k === 0);
+      el.setAttribute('aria-hidden', String(!notifOpen && k > 0));
+      el.querySelector('.ntf-x').tabIndex = notifOpen || k === 0 ? 0 : -1;
+    });
+    for (const el of keep.values()) leaveNotif(el);
+    const more = notifs.length - shown.length;
+    let foot = root.querySelector('.ntf-foot');
+    if (notifOpen && notifs.length > 1) {
+      if (!foot) { foot = document.createElement('div'); foot.className = 'ntf-foot'; foot.innerHTML = '<span></span><button type="button" class="text-button ntf-clear">Clear all</button>'; root.appendChild(foot); }
+      foot.querySelector('span').textContent = more > 0 ? `${more} more` : '';
+      foot.style.transform = `translateY(${-(shown.length * (62 + NOTIF_GAP))}px)`;
+    } else foot?.remove();
+    root.style.setProperty('--ntf-h', `${notifOpen ? shown.length * (62 + NOTIF_GAP) + (notifs.length > 1 ? 30 : 0) : 62 + (Math.min(shown.length, NOTIF_SHOWN) - 1) * NOTIF_PEEK}px`);
+  }
+  function leaveNotif(el) {
+    if (el.dataset.leaving) return;
+    el.dataset.leaving = '1';
+    el.style.transition = 'transform .22s cubic-bezier(.4,0,1,1), opacity .22s cubic-bezier(.4,0,1,1)';
+    el.style.transform = `${el.style.transform} translateX(60px)`;
+    el.style.opacity = '0';
+    setTimeout(() => el.remove(), 230);
+  }
+  function setupNotifs() {
+    const root = $('notif-stack');
+    if (!root) return;
+    root.addEventListener('pointerover', () => { if (!notifOpen) { notifOpen = true; renderNotifs(); } });
+    root.addEventListener('pointerout', (e) => { if (!e.relatedTarget || !root.contains(e.relatedTarget)) { notifOpen = false; renderNotifs(); } });
+    root.addEventListener('focusin', () => { if (!notifOpen) { notifOpen = true; renderNotifs(); } });
+    root.addEventListener('focusout', (e) => { if (!root.contains(e.relatedTarget)) { notifOpen = false; renderNotifs(); } });
+    root.addEventListener('click', (e) => {
+      if (e.target.closest('.ntf-clear')) { notifs = []; saveNotifs(); renderNotifs(); return; }
+      const el = e.target.closest('.ntf-toast');
+      if (!el || el.dataset.leaving) return;
+      const n = notifs.find((x) => x.id === el.dataset.id);
+      dropNotifs((x) => x.id === el.dataset.id);
+      if (!e.target.closest('.ntf-x') && n && byId.has(n.agent)) navigate('session', n.agent);
+    });
+    root.addEventListener('keydown', (e) => {
+      const el = e.target.closest('.ntf-toast');
+      if (el && e.target === el && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); el.click(); }
+      if (el && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); el.querySelector('.ntf-x').click(); }
+    });
+    $('notif-bell')?.addEventListener('click', () => {
+      notifsHidden = !notifsHidden && notifs.length > 0;
+      setStorage('synapse-notifs-hidden', notifsHidden ? '1' : '');
+      renderNotifs();
+    });
+    setInterval(() => { if (notifs.length && !notifsHidden) for (const el of root.querySelectorAll('.ntf-toast')) { const n = notifs.find((x) => x.id === el.dataset.id); if (n) el.querySelector('time').textContent = relativeTime(n.at); } }, 30_000);
+    renderNotifs();
+  }
+  if (paneKey) document.getElementById('notif-stack')?.remove(); else setupNotifs();
+
   function trackStates() {
     let changed = false;
     for (const a of state.agents) {
@@ -797,7 +918,9 @@ function initialize() {
       if (archived[a.id] && (doneSet.get(a.id) || 0) > archived[a.id]) { delete archived[a.id]; unarchivedAt[a.id] = Date.now(); changed = true; }
       if (a.status === 'busy' || needsYou(a)) flushing.delete(a.id);
       if (queued[a.id]?.length && a.owned && !a.exited && a.status !== 'busy' && !needsYou(a) && !(approvalFor === a.id && !$('approval-card').hidden) && !(Date.now() - (stoppedAt.get(a.id) || 0) < 4000) && (!flushing.has(a.id) || Date.now() - flushing.get(a.id) > 15_000)) sendQueued(a.id);
-      if (was === 'busy' && a.status !== 'busy' && !needsYou(a)) { doneSet.set(a.id, Date.now()); changed = true; }
+      if (was === 'busy' && a.status !== 'busy' && !needsYou(a)) { doneSet.set(a.id, Date.now()); changed = true; if (!a.remote) pushNotif(a, 'done'); }
+      if (was !== undefined && needsYou(a) && !['waiting', 'needs_input'].includes(was) && !a.remote) pushNotif(a, 'needs');
+      if (!needsYou(a) && notifs.some((n) => n.agent === a.id && n.kind === 'needs')) dropNotifs((n) => n.agent === a.id && n.kind === 'needs');
       if (a.status === 'busy' && doneSet.delete(a.id)) changed = true;
       if ((a.status === 'busy' || needsYou(a)) && settledAt[a.id] !== undefined) { delete settledAt[a.id]; changed = true; }
       const finished = doneSet.get(a.id);
@@ -4101,7 +4224,7 @@ if (typeof document !== 'undefined' && document.getElementById('workspace')) {
         const origin = new URLSearchParams(location.search).has('pane') ? location.origin : 'null';
         if (event.source !== parent || event.origin !== origin || event.data?.type !== 'synapse:desktop-bootstrap') return;
         clearTimeout(timer); removeEventListener('message', receive);
-        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-inspector-tab', 'synapse-panel-width'];
+        const keys = ['synapse-mode', 'synapse-selected', 'synapse-sidebar', 'synapse-inspector', 'synapse-drafts', 'synapse-collapsed', 'synapse-group', 'synapse-snoozed', 'synapse-done', 'synapse-archived', 'synapse-tidy', 'synapse-kept', 'synapse-queue', 'synapse-update-later', 'synapse-settled', 'synapse-inspector-tab', 'synapse-panel-width', 'synapse-notifs', 'synapse-notifs-hidden'];
         for (const key of keys) {
           try {
             const value = event.data.preferences?.[key];
