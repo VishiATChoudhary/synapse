@@ -223,7 +223,7 @@ try {
     }
     case 'rooms': out = rooms.list().map(({ id, name, hosted, members, agents, count }) => ({ id, name, hosted, people: members.map((m) => m.name), agents: agents.map((a) => `${a.name}@${a.owner}`), messages: count })); break;
     case 'room': {
-      // group chats: people and their agents; agents answer (read only) when @mentioned
+      // group chats: people and their agents; agents answer (read only) messages to everyone or that @mention them
       const [sub, q, ...rest] = args;
       const find = (x) => {
         const all = rooms.list();

@@ -2463,7 +2463,7 @@ function initialize() {
     const rs = JSON.stringify(r && [r.id, r.name, r.members, r.agents, r.messages.length, r.messages.at(-1)?.id, r.answering]);
     if (rs === roomSig && !reset) return;
     roomSig = rs;
-    if (!r) { $('room-pane').innerHTML = emptyState('No room open', 'Make a room, then @mention an agent to ask it something.', '', '', 'users'); return; }
+    if (!r) { $('room-pane').innerHTML = emptyState('No room open', 'Make a room and ask away: every agent answers, or @mention one.', '', '', 'users'); return; }
     const box = $('room-pane').querySelector('.room-messages');
     const atEnd = !box || box.scrollHeight - box.scrollTop - box.clientHeight < 40;
     const keep = $('room-input')?.value ?? '';
@@ -2479,7 +2479,7 @@ function initialize() {
       <div class="room-actions"><button type="button" class="button secondary" data-room-add-agent>${icon('plus')}Add my agent</button>${r.hosted ? `<button type="button" class="button secondary" data-room-add-person>${icon('user')}Add person</button>` : ''}<button type="button" class="icon-button" data-room-leave title="${r.hosted ? 'Close this room for everyone' : 'Leave this room'}" aria-label="${r.hosted ? 'Close room' : 'Leave room'}">${icon('x')}</button></div></header>
       <div class="room-agents">${r.agents.map((a) => `<button type="button" class="room-agent" data-room-mention="${escapeHtml(roomAgentLabel(a, r))}" title="Mention ${escapeHtml(a.name)} (agent of ${escapeHtml(a.owner)})"><span class="agent-avatar" data-logo="${escapeHtml(a.kind)}" aria-hidden="true">${escapeHtml(a.name.slice(0, 2).toUpperCase())}</span><span class="room-agent-text"><span>@${escapeHtml(roomAgentLabel(a, r))}</span>${(() => { const g = mine(a) && byId.get(a.id); const sub = g ? [g.project, g.worktreeHome ? '' : g.worktreeName, titleOf(g) !== g.name ? titleOf(g) : ''].filter(Boolean).join(' · ') : `${a.owner}'s agent`; return sub ? `<small>${escapeHtml(sub)}</small>` : ''; })()}</span>${mine(a) ? `<span class="room-x" role="button" data-room-drop="${escapeHtml(a.id)}" title="Take ${escapeHtml(a.name)} out" aria-label="Remove">${icon('x')}</span>` : ''}</button>`).join('') || '<span class="room-hint">No agents yet. Add one of yours; friends add theirs.</span>'}</div>
       <div class="room-messages" aria-live="polite">${rows || '<p class="room-hint">Say hi. Type @ and an agent name to ask it.</p>'}${typing.length ? `<div class="room-msg system">${escapeHtml(typing.join(', '))} ${typing.length === 1 ? 'is' : 'are'} answering…</div>` : ''}</div>
-      <form class="room-compose" id="room-compose" autocomplete="off"><textarea id="room-input" rows="1" maxlength="4000" placeholder="Message ${escapeHtml(r.name)}. @mention an agent to ask it"></textarea><button class="button" type="submit">Send</button></form>
+      <form class="room-compose" id="room-compose" autocomplete="off"><textarea id="room-input" rows="1" maxlength="4000" placeholder="Message ${escapeHtml(r.name)}. All agents answer, or @mention one"></textarea><button class="button" type="submit">Send</button></form>
       <p class="room-hint">Agents in rooms only read and answer. They have no tools, can not change anything, and secrets are scrubbed from what they say.</p>`;
     $('room-input').value = keep;
     if (focused || reset) $('room-input').focus();
@@ -2524,7 +2524,7 @@ function initialize() {
     let data; try { data = await api('/api/rooms'); } catch (e) { return toast(e.message); }
     const agent = byId.get(agentId), title = agent ? titleOf(agent) : 'this agent';
     const open = data.rooms.filter((r) => !(r.agents || []).some((a) => a.id === agentId && a.machine === data.me?.machine));
-    openModal(`Add ${title} to a room`, `<fieldset class="room-pick room-choose"><legend>It answers, read only, when someone @mentions it</legend>
+    openModal(`Add ${title} to a room`, `<fieldset class="room-pick room-choose"><legend>It answers, read only, to messages for everyone or that @mention it</legend>
       ${open.map((r, i) => `<label class="room-choice"><input type="radio" name="room-target" value="${escapeHtml(r.id)}"${i === 0 ? ' checked' : ''}><span><strong>${escapeHtml(r.name)}</strong><span>${escapeHtml(r.members.map((m) => m.name).join(', '))}</span></span></label>`).join('')}
       <label class="room-choice"><input type="radio" name="room-target" value=""${open.length ? '' : ' checked'}><span><strong>A new room</strong><input class="field" id="room-new-name" maxlength="60" placeholder="Name it"></span></label></fieldset>`, 'Add', async () => {
       const target = $('dialog-content').querySelector('input[name="room-target"]:checked')?.value;
@@ -2554,7 +2554,7 @@ function initialize() {
     const inRoom = new Set((roomShown?.agents || []).filter((a) => a.machine === roomsData.me?.machine).map((a) => a.id));
     const agents = (roomsData.agents || []).filter((a) => !inRoom.has(a.id));
     if (!agents.length) return toast('No Claude or Codex agent of yours to add. Start one first.');
-    openModal('Add your agents', roomPicker(agents, 'They answer, read only, when someone @mentions them'), 'Add', async () => {
+    openModal('Add your agents', roomPicker(agents, 'They answer, read only, to messages for everyone or that @mention them'), 'Add', async () => {
       const picked = [...$('dialog-content').querySelectorAll('.room-picker input:checked')].map((x) => x.value);
       if (!picked.length) throw new Error('Pick at least one agent.');
       for (const id of picked) await api(`/api/rooms/${encodeURIComponent(roomOpen)}/agents`, { method: 'POST', body: JSON.stringify({ agent: id }) });

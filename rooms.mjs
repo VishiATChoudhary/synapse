@@ -5,7 +5,7 @@
 // carries items between paired machines).
 //
 // People add their own agents, Claude and Codex only. An agent never posts on its own and never acts: when a
-// message @mentions it, its owner's machine runs a read-only copy (a fork of its session for Claude, a replay of
+// message is addressed to it (an @mention, or a person's message to the whole room), its owner's machine runs a read-only copy (a fork of its session for Claude, a replay of
 // its transcript for Codex) with no tools and no MCP servers, on a Claude model, and posts the answer back.
 // The answer is scrubbed of anything that looks like a secret first. The live session is never touched.
 import fs from 'node:fs';
@@ -95,6 +95,22 @@ export function mentionsIn(room, text) {
     if (full.test(t) || bare.test(t)) hit.add(agentKey(a));
   }
   return [...hit];
+}
+
+// Who a message is for. A person's message that names no agent goes to every agent in the room ("what are you all on?"),
+// as does @all, @everyone or @agents, unless it @names one of the people. Agents only reach the agents they @mention,
+// so they never set each other off without being asked.
+const EVERYONE = /(^|[^a-z0-9_.-])@(all|everyone|agents)(?![a-z0-9_@-])/;
+export function addressedIn(room, msg) {
+  const named = mentionsIn(room, msg.text);
+  if (msg.from?.type !== 'human') return named;
+  const t = String(msg.text || '').toLowerCase();
+  if (EVERYONE.test(t)) return room.agents.map(agentKey);
+  if (named.length) return named;
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const at = (w) => w && new RegExp(`(^|[^a-z0-9_.-])@${esc(w.toLowerCase())}(?![a-z0-9_@-])`).test(t);
+  const toPerson = room.members.some((m) => at(m.name) || at(String(m.name || '').split(' ')[0]));
+  return toPerson ? [] : room.agents.map(agentKey);
 }
 
 // ---------------------------------------------------------------- reading
@@ -240,7 +256,7 @@ function queueJobs(s, r, msg) {
   const self = me().machine;
   if (msg.from.type === 'system') return;
   if (msg.from.type === 'agent' && msg.depth >= LIMITS.depth) return;
-  for (const key of mentionsIn(r, msg.text)) {
+  for (const key of addressedIn(r, msg)) {
     const a = r.agents.find((x) => agentKey(x) === key);
     if (!a || a.machine !== self) continue;
     if (msg.from.type === 'agent' && msg.from.agent === a.id && msg.from.machine === self) continue;
@@ -379,7 +395,7 @@ function roomBlock(room, msg, nonce) {
   };
   let body = recent.map(line).join('\n\n');
   if (body.length > LIMITS.contextChars) body = body.slice(-LIMITS.contextChars);
-  return `<room nonce="${nonce}">\n${defangRoom(body)}\n</room nonce="${nonce}">\n\nThe last message mentions you. Reply to it.`;
+  return `<room nonce="${nonce}">\n${defangRoom(body)}\n</room nonce="${nonce}">\n\nThe last message is addressed to you (by name, or to everyone in the room). Reply to it.`;
 }
 
 // Nothing from the person's own Claude setup reaches the answering copy: no settings, hooks, plugins or MCP servers,
