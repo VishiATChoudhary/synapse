@@ -42,6 +42,7 @@
       <div class="sidebar-bottom">
         <button class="icon-button" data-view="overview" aria-label="Overview" title="Overview"><span data-icon="grid"></span></button>
         <button class="icon-button" data-view="connections" hidden style="display:none" aria-label="Connections" title="Connections"><span data-icon="network"></span><span class="nav-count" id="connection-count">0</span></button>
+        <button class="icon-button" id="notif-bell" aria-label="Notifications" aria-pressed="false" title="No notifications"><span data-icon="bell"></span><span class="nav-count" id="notif-count" data-zero></span></button>
         <button class="icon-button" id="rooms-nav" data-view="rooms" aria-label="Rooms" title="Rooms: group chats with people and agents"><span data-icon="users"></span></button>
         <button class="icon-button desktop-only" id="desktop-activity" data-view="activity" aria-label="Activity" title="Activity"><span data-icon="activity"></span></button>
         <a href="/canvas" class="icon-button canvas-link web-only" aria-label="Canvas" title="Canvas"><span data-icon="canvas"></span></a>
@@ -149,6 +150,7 @@
       <div class="dialog-footer"><button class="button secondary" type="button" id="cancel-dialog">Cancel</button><button class="button primary" type="submit" id="dialog-submit">Save</button></div>
     </form>
   </dialog>
+  <div class="ntf" id="notif-stack" role="region" aria-label="Agent notifications" hidden></div>
   <div class="toast" id="toast" role="status" hidden><span id="toast-text"></span><button class="text-button" id="toast-action" hidden>Undo</button></div>
   <noscript><p class="noscript">Enable JavaScript to view your local Synapse workspace.</p></noscript>
 </body>
