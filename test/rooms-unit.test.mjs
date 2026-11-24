@@ -59,6 +59,18 @@ test('mentions: @name, @name@owner, not inside other words or emails', () => {
   assert.deepEqual(rooms.mentionsIn(rm, '(@API)'), ['bob:c']);
 });
 
+test('a person talking to the room reaches every agent; agents and messages to a person do not', () => {
+  const rm = { members: [{ machine: 'host', name: 'Alice Smith' }, { machine: 'bob', name: 'Bob' }], agents: [{ id: 'a', name: 'ml-eval', owner: 'alice', machine: 'host' }, { id: 'c', name: 'api', owner: 'bob', machine: 'bob' }] };
+  const human = (text) => rooms.addressedIn(rm, { text, from: { type: 'human' } }).sort();
+  assert.deepEqual(human('yo, what are you all working on?'), ['bob:c', 'host:a']);
+  assert.deepEqual(human('@api status?'), ['bob:c']);
+  assert.deepEqual(human('@everyone and @api, quick check'), ['bob:c', 'host:a']);
+  assert.deepEqual(human('@bob lunch?'), []);
+  assert.deepEqual(human('@alice can you look'), []);
+  assert.deepEqual(rooms.addressedIn(rm, { text: 'done, thoughts?', from: { type: 'agent' } }), []);
+  assert.deepEqual(rooms.addressedIn(rm, { text: '@api thoughts?', from: { type: 'agent' } }), ['bob:c']);
+});
+
 test('redact scrubs keys, tokens, connection strings and named secrets, keeps ordinary text', () => {
   const t = rooms.redact([
     'key sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAA', 'aws AKIAABCDEFGHIJKLMNOP', 'gh ghp_0123456789abcdefghijABCDEFGHIJ',
