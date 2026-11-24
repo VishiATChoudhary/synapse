@@ -87,12 +87,17 @@ const launch = async (slot) => {
   // the one you look at finishing: nothing
   set(1, 'busy'); await sleep(1500); set(1, 'idle'); await sleep(2000);
   assert.equal((await toasts()).length, 1, 'no toast for the agent on screen');
-  // the bell hides the stack and shows it again
-  await ui(`document.querySelector('#notif-bell').click()`);
-  assert.equal(await ui(`document.querySelector('#notif-stack').hidden`), true, 'bell hides');
+  // a new toast shows for a few seconds, then the stack goes away by itself
+  await until(() => ui(`document.querySelector('#notif-stack').hidden`), 'stack hides by itself', 9000);
   assert.equal(await count(), '1', 'the count stays');
+  // the bell shows the stack and hides it again
   await ui(`document.querySelector('#notif-bell').click()`);
   assert.equal(await ui(`document.querySelector('#notif-stack').hidden`), false, 'bell shows');
+  await sleep(7000);
+  assert.equal(await ui(`document.querySelector('#notif-stack').hidden`), false, 'bell-opened stack stays');
+  await ui(`document.querySelector('#notif-bell').click()`);
+  await until(() => ui(`document.querySelector('#notif-stack').hidden`), 'bell hides');
+  await ui(`document.querySelector('#notif-bell').click()`);
   // three more finishes from the first agent replace its toast (one per agent)
   set(0, 'busy'); await sleep(1500); set(0, 'idle');
   await sleep(1500);
@@ -113,7 +118,7 @@ const launch = async (slot) => {
   await ui(`document.querySelector('#notif-stack .ntf-toast .ntf-x').click()`);
   await until(async () => (await toasts()).length === 0, 'x removes it');
   assert.equal(await ui('location.hash'), `#agent=${first}`, 'x does not navigate');
-  console.log(`PASS notification bell and stack (${name}): done toast, not for the agent on screen, bell hides/shows, one per agent, hover fans out, click opens + removes, x removes`);
+  console.log(`PASS notification bell and stack (${name}): done toast, not for the agent on screen, auto-hides, bell shows/hides, one per agent, hover fans out, click opens + removes, x removes`);
   assert.deepEqual(errors.filter((e) => !/Content-Security-Policy|net::ERR/.test(e)), []);
 })().catch(async (e) => {
   failed = true; console.error(e); console.error('page errors:', errors);
