@@ -783,13 +783,14 @@ function initialize() {
   const usedAt = (a) => (a.owned ? a.usedAt || a.lastActivity : a.lastActivity) || 0;
   const expiring = new Set(), archivedBusy = new Set(); // archivedBusy: archived by hand while working, stays archived
   const needsYou = (a) => ['waiting', 'needs_input'].includes(a.status);
-  // ---- Notifications: what your agents did while you looked elsewhere, as a stack at the bottom right (after
+  // ---- Notifications: what your agents did while you looked elsewhere, as a stack above the bell (after
   // bencho.dev's toast stack, MIT): the newest in front, two more peeking out above it, fanning out into a list on
   // hover. Clicking one opens its agent and takes it off the stack; x just takes it off. The bell shows how many
-  // there are and hides or shows the stack.
-  const NOTIF_MAX = 30, NOTIF_PEEK = 12, NOTIF_GAP = 8, NOTIF_SHOWN = 3;
+  // there are and opens or closes the stack. A new one shows the stack for a few seconds, then it goes away again
+  // (it stays while the pointer is on it); the stack is never on screen for good unless the bell opened it.
+  const NOTIF_MAX = 30, NOTIF_PEEK = 12, NOTIF_GAP = 8, NOTIF_SHOWN = 3, NOTIF_LINGER = 5000;
   let notifs = readJSON('synapse-notifs', []).filter((n) => n && n.id && n.agent);
-  let notifsHidden = getStorage('synapse-notifs-hidden', '') === '1';
+  let notifsPinned = false, notifPeek = false, notifPeekTimer = 0, notifHideTimer = 0;
   let notifOpen = false;
   const saveNotifs = () => setStorage('synapse-notifs', JSON.stringify(notifs));
   function pushNotif(a, kind) {
@@ -798,6 +799,8 @@ function initialize() {
     const text = kind === 'needs' ? 'Needs you: waiting for your answer' : (a.preview && !/^Ready for your next prompt$/.test(a.preview) ? a.preview : 'Finished its turn');
     notifs = [{ id: `${a.id}:${Date.now()}`, agent: a.id, kind, title: titleOf(a), text: String(text).replace(/\s+/g, ' ').slice(0, 160), at: Date.now() },
       ...notifs.filter((n) => n.agent !== a.id)].slice(0, NOTIF_MAX);
+    notifPeek = true; clearTimeout(notifPeekTimer);
+    notifPeekTimer = setTimeout(() => { notifPeek = false; renderNotifs(); }, NOTIF_LINGER);
     saveNotifs(); renderNotifs(true);
   }
   function dropNotifs(test) {
@@ -816,18 +819,27 @@ function initialize() {
     if (bell) {
       count.textContent = notifs.length || '';
       count.toggleAttribute('data-zero', !notifs.length);
-      bell.setAttribute('aria-pressed', String(!notifsHidden && notifs.length > 0));
-      bell.title = notifs.length ? `${notifs.length} notification${notifs.length === 1 ? '' : 's'}${notifsHidden ? ' (hidden, click to show)' : ''}` : 'No notifications';
+      bell.setAttribute('aria-pressed', String(notifsPinned && notifs.length > 0));
+      bell.title = notifs.length ? `${notifs.length} notification${notifs.length === 1 ? '' : 's'}, click to ${notifsPinned ? 'hide' : 'show'}` : 'No notifications';
       if (arrived) { bell.classList.remove('ring'); void bell.offsetWidth; bell.classList.add('ring'); }
     }
     const root = $('notif-stack');
     if (!root) return;
-    const show = notifs.length && !notifsHidden;
-    root.hidden = !show;
-    root.toggleAttribute('data-open', !!(show && notifOpen));
-    if (!show) { notifOpen = false; root.replaceChildren(); return; }
+    const show = notifs.length > 0 && (notifsPinned || notifPeek || notifOpen);
+    root.toggleAttribute('data-open', show && notifOpen);
+    if (!show) {
+      // slide the toasts out, then take the stack away
+      notifOpen = false;
+      root.querySelectorAll('.ntf-toast').forEach(leaveNotif);
+      root.querySelector('.ntf-foot')?.remove();
+      clearTimeout(notifHideTimer);
+      notifHideTimer = setTimeout(() => { root.hidden = true; root.replaceChildren(); }, 240);
+      return;
+    }
+    clearTimeout(notifHideTimer);
+    root.hidden = false;
     const shown = notifOpen ? notifs.slice(0, 6) : notifs.slice(0, NOTIF_SHOWN + 1);
-    const keep = new Map([...root.querySelectorAll('.ntf-toast')].map((el) => [el.dataset.id, el]));
+    const keep = new Map([...root.querySelectorAll('.ntf-toast:not([data-leaving])')].map((el) => [el.dataset.id, el]));
     shown.forEach((n, k) => {
       let el = keep.get(n.id);
       if (!el) {
@@ -892,11 +904,11 @@ function initialize() {
       if (el && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); el.querySelector('.ntf-x').click(); }
     });
     $('notif-bell')?.addEventListener('click', () => {
-      notifsHidden = !notifsHidden && notifs.length > 0;
-      setStorage('synapse-notifs-hidden', notifsHidden ? '1' : '');
+      notifsPinned = !notifsPinned && notifs.length > 0;
+      notifPeek = false; clearTimeout(notifPeekTimer);
       renderNotifs();
     });
-    setInterval(() => { if (notifs.length && !notifsHidden) for (const el of root.querySelectorAll('.ntf-toast')) { const n = notifs.find((x) => x.id === el.dataset.id); if (n) el.querySelector('time').textContent = relativeTime(n.at); } }, 30_000);
+    setInterval(() => { if (!root.hidden) for (const el of root.querySelectorAll('.ntf-toast')) { const n = notifs.find((x) => x.id === el.dataset.id); if (n) el.querySelector('time').textContent = relativeTime(n.at); } }, 30_000);
     renderNotifs();
   }
   if (paneKey) document.getElementById('notif-stack')?.remove(); else setupNotifs();
