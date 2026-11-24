@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { git, listChoices, createWorktree, openWorktree, deleteWorktree, safeDeleteWorktree, choicePullRequest, pullRequests, fetchBranches } from '../worktrees.mjs';
+import { git, listChoices, createWorktree, defaultBase, freshenBase, openWorktree, deleteWorktree, safeDeleteWorktree, choicePullRequest, pullRequests, fetchBranches } from '../worktrees.mjs';
 
 const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-worktrees-')));
 const repo = path.join(fixture, 'repo'), home = path.join(fixture, 'checkouts');
@@ -45,6 +45,24 @@ try {
   assert.equal(git(fresh, ['branch', '--show-current']), 'new/nested');
   assert.ok(fresh.startsWith(home + path.sep));
   for (const name of ['../escape', '-bad', 'HEAD', 'bad..branch']) assert.throws(() => createWorktree(repo, name, '', home));
+  // a new branch from a remote branch: the remote's default is offered first, the base is fetched fresh, nothing tracked
+  assert.equal(defaultBase(repo), 'origin/main');
+  const upstream = path.join(fixture, 'upstream');
+  execFileSync('git', ['clone', '-q', remote, upstream], { stdio: 'pipe' });
+  git(upstream, ['switch', '-q', '-c', 'release']);
+  git(upstream, ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'On release']);
+  git(upstream, ['push', '-q', 'origin', 'release']);
+  await fetchBranches(repo);
+  git(upstream, ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'Newer on release']);
+  git(upstream, ['push', '-q', 'origin', 'release']);
+  await freshenBase(repo, 'origin/release');
+  const fromRemote = createWorktree(repo, 'fix/from-release', 'origin/release', home);
+  assert.equal(git(fromRemote, ['log', '-1', '--format=%s']), 'Newer on release');
+  assert.throws(() => git(fromRemote, ['rev-parse', '--abbrev-ref', '@{upstream}']));
+  assert.throws(() => createWorktree(repo, 'nope', 'origin/missing', home), /no branch "origin\/missing"/);
+  assert.throws(() => createWorktree(repo, 'nope', '--orphan', home), /invalid base/);
+  await freshenBase(repo, 'feature/local'); // a local base: nothing to fetch, no error
+
   assert.throws(() => deleteWorktree(repo, repo), /Only a linked/);
   git(repo, ['worktree', 'lock', retained]);
   assert.throws(() => deleteWorktree(repo, retained), /locked/);

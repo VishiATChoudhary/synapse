@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import pty from 'node-pty';
-import { git, listChoices, listWorktrees, createWorktree, openWorktree, deleteWorktree, safeDeleteWorktree, fetchBranches, pullRequests, choicePullRequest, changesAsync, commitAll, pushBranch, pullRequest } from './worktrees.mjs';
+import { git, listChoices, listWorktrees, createWorktree, defaultBase, freshenBase, openWorktree, deleteWorktree, safeDeleteWorktree, fetchBranches, pullRequests, choicePullRequest, changesAsync, commitAll, pushBranch, pullRequest } from './worktrees.mjs';
 import * as saved from '../saved.mjs';
 import { createApiKeys, withKeys } from './api-keys.mjs';
 import { cleanPolicy, planCleanup, parkWorktree, DAY as GC_DAY } from './worktree-gc.mjs';
@@ -278,7 +278,8 @@ async function pickFolder() {
   return r.canceled ? null : addWorkspace(r.filePaths[0]);
 }
 
-function addWorktree(repo, name, base) {
+async function addWorktree(repo, name, base) {
+  if (base) await freshenBase(repo, base);
   return addWorkspace(createWorktree(repo, name, base, path.join(DATA, 'worktrees')));
 }
 
@@ -1548,6 +1549,7 @@ handle('worktree:list', ({ repo }) => {
   return listChoices(repo).map(w => ({ ...w, label: c.worktreeNames?.[w.path] || w.name, added: c.workspaces.includes(w.path) }));
 });
 handle('worktree:open', ({ repo, choice }) => addWorkspace(openWorktree(repo, choice, path.join(DATA, 'worktrees'))));
+handle('worktree:base', ({ repo }) => { try { return defaultBase(repo); } catch { return ''; } });
 handle('worktree:fetch', async ({ repo }) => { await fetchBranches(repo); });
 handle('worktree:prs', async ({ repo, choices }) => {
   const { pulls, error } = await pullRequests(repo);

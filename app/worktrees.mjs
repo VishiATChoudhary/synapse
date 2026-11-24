@@ -44,13 +44,41 @@ function destination(repo, name, home) {
   return dir;
 }
 
+// A new branch starts from `base`: a remote branch (origin/main), a local one, or HEAD when none is given. It does not
+// track a remote base, so its first push makes a branch of its own name instead of pushing onto the base.
 export function createWorktree(repo, name, base, home) {
   name = String(name || '').trim();
   git(repo, ['check-ref-format', `refs/heads/${name}`]);
   if (name.startsWith('-') || name === 'HEAD') throw new Error('invalid branch name');
+  base = String(base || '').trim();
+  if (base.startsWith('-')) throw new Error('invalid base branch');
+  if (base) { try { git(repo, ['rev-parse', '--verify', '--quiet', `${base}^{commit}`]); } catch { throw new Error(`There is no branch "${base}". Fetch remotes and pick again.`); } }
   const dir = destination(repo, name, home);
-  git(repo, ['worktree', 'add', '-b', name, dir, base || 'HEAD']);
+  git(repo, ['worktree', 'add', '--no-track', '-b', name, dir, base || 'HEAD']);
   return dir;
+}
+
+// The branch a new worktree starts from by default: the remote's default branch (origin/HEAD, so origin/main), else ''
+// for the current HEAD.
+export function defaultBase(repo) {
+  const remotes = git(repo, ['remote']).split('\n').filter(Boolean);
+  for (const r of [...remotes.filter((x) => x === 'origin'), ...remotes.filter((x) => x !== 'origin')]) {
+    try { return git(repo, ['symbolic-ref', '--short', `refs/remotes/${r}/HEAD`]); } catch {}
+  }
+  return '';
+}
+
+// Bring a remote base up to date just before branching from it, so the new branch starts from what is on the remote
+// now. Offline or a failed fetch leaves the last fetched copy, which is still a fine start.
+export async function freshenBase(repo, base) {
+  base = String(base || '');
+  let remotes = [];
+  try { remotes = git(repo, ['remote']).split('\n').filter(Boolean); } catch { return; }
+  const remote = remotes.sort((a, b) => b.length - a.length).find((r) => base.startsWith(r + '/'));
+  if (!remote) return;
+  try { git(repo, ['rev-parse', '--verify', '--quiet', `refs/remotes/${base}`]); } catch { return; }
+  const branch = base.slice(remote.length + 1);
+  await exec('git', ['-C', repo, 'fetch', '--quiet', remote, `+refs/heads/${branch}:refs/remotes/${base}`], { timeout: 30000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }).catch(() => {});
 }
 
 export function openWorktree(repo, choice, home) {

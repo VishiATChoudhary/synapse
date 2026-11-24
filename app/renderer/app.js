@@ -1525,6 +1525,11 @@ function promptWorktree(project) {
     const seg = el('div', 'seg'), inp = el('input'), list = el('div', 'lib branch-list');
     const hint = el('div', 'hint'), row = el('div', 'row');
     const fetch = el('button', 'btn', 'fetch remotes'), go = el('button', 'btn sig', 'create branch');
+    // where a new branch starts: any remote branch (the remote's default one first picked), a local branch, or HEAD
+    const from = el('label', 'branch-from'), fromSel = el('select');
+    fromSel.setAttribute('aria-label', 'Create the branch from');
+    from.append(el('span', '', 'from'), fromSel);
+    let base = null;
     inp.setAttribute('aria-label', 'Search branches and worktrees');
     let mode = 'existing', choices = [], matches = [], sel = 0, busy = false, generation = 0;
     const alive = () => body.contains(inp) && !$('#modal').hidden;
@@ -1533,7 +1538,7 @@ function promptWorktree(project) {
       if (busy || choice?.missing) return;
       busy = true; go.disabled = fetch.disabled = inp.disabled = true;
       try {
-        const dir = choice ? await synapse.worktree.open({ repo: project.path, choice }) : await synapse.worktree.add({ repo: project.path, name: inp.value.trim() });
+        const dir = choice ? await synapse.worktree.open({ repo: project.path, choice }) : await synapse.worktree.add({ repo: project.path, name: inp.value.trim(), base: fromSel.value });
         if (choice?.pr) prStatuses.set(dir, choice.pr);
         if (alive()) close(); await refresh(); M.open.add(project.key);
         // already open there: its agent, rather than a shell (a shell's only view is its terminal)
@@ -1561,12 +1566,30 @@ function promptWorktree(project) {
         list.appendChild(option);
       });
     };
+    const fillFrom = () => {
+      const keep = fromSel.value || base || '';
+      const group = (label, names) => {
+        if (!names.length) return null;
+        const g = document.createElement('optgroup'); g.label = label;
+        for (const n of names) { const o = document.createElement('option'); o.value = n; o.textContent = n; g.appendChild(o); }
+        return g;
+      };
+      const uniq = (xs) => [...new Set(xs)].sort((a, b) => a.localeCompare(b));
+      const remote = uniq(choices.filter(w => w.kind === 'remote').map(w => w.name));
+      const local = uniq(choices.filter(w => w.kind === 'local' || (w.kind === 'worktree' && w.branch)).map(w => w.kind === 'local' ? w.name : w.branch));
+      const head = document.createElement('option'); head.value = ''; head.textContent = 'current HEAD';
+      fromSel.replaceChildren(...[group('remote', remote), group('local', local), head].filter(Boolean));
+      fromSel.value = [...fromSel.options].some(o => o.value === keep) ? keep : '';
+      if (mode === 'new') hint.textContent = `Create a branch and worktree from ${fromSel.value || 'the current HEAD'}.`;
+    };
+    fromSel.onchange = () => { if (mode === 'new') { hint.textContent = `Create a branch and worktree from ${fromSel.value || 'the current HEAD'}.`; hint.classList.remove('err'); } inp.focus(); };
     const load = async () => {
       const request = ++generation;
       try {
-        const loaded = await synapse.worktree.list(project.path);
+        const [loaded, start] = await Promise.all([synapse.worktree.list(project.path), base === null ? synapse.worktree.base(project.path).catch(() => '') : base]);
         if (!alive() || request !== generation) return;
-        choices = loaded; draw();
+        if (base === null) base = start || '';
+        choices = loaded; draw(); fillFrom();
         if (mode === 'existing') { hint.textContent = '↑↓ Enter to open · fetch remotes to update remote branches'; hint.classList.remove('err'); }
         const result = await synapse.worktree.prs(project.path, loaded);
         if (!alive() || request !== generation) return;
@@ -1579,10 +1602,10 @@ function promptWorktree(project) {
       if (busy) return;
       mode = value; inp.value = ''; sel = 0;
       for (const b of seg.children) b.classList.toggle('on', b.dataset.mode === mode);
-      list.hidden = fetch.hidden = mode !== 'existing'; go.hidden = mode !== 'new';
+      list.hidden = mode !== 'existing'; from.hidden = go.hidden = mode !== 'new';
       inp.placeholder = mode === 'existing' ? 'Search local, remote, and worktrees…' : 'New branch name';
       inp.setAttribute('aria-label', mode === 'existing' ? 'Search branches and worktrees' : 'New branch name');
-      hint.textContent = mode === 'existing' ? '↑↓ Enter to open · fetch remotes to update remote branches' : 'Create a branch and worktree from the current HEAD.';
+      hint.textContent = mode === 'existing' ? '↑↓ Enter to open · fetch remotes to update remote branches' : `Create a branch and worktree from ${fromSel.value || 'the current HEAD'}.`;
       hint.classList.remove('err'); draw(); inp.focus();
     };
     for (const [value, label] of [['existing', 'existing'], ['new', 'new branch']]) {
@@ -1612,7 +1635,7 @@ function promptWorktree(project) {
       if (e.key === 'Enter') { e.preventDefault(); if (mode === 'new') go.click(); else if (matches[sel]) pick(matches[sel]); }
       if (e.key === 'Escape') close();
     };
-    row.append(fetch, go); body.append(seg, inp, list, hint, row); set(mode);
+    row.append(fetch, go); body.append(seg, inp, from, list, hint, row); set(mode);
     hint.textContent = 'Loading branches and worktrees…';
     // modal() makes the dialog visible after this callback.
     queueMicrotask(load);
