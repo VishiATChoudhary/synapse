@@ -1918,13 +1918,19 @@ function removeWorktreeAsk(project, w) {
   });
 }
 // forget a checkout (or a whole project): app.json only, files and library links stay
-async function removeFromSidebar(paths, label) {
+// The GUI folds the project away first, then everything goes in one step: closing its sessions one by one and
+// removing each checkout with its own redraw made the list jump several times.
+async function removeFromSidebar(paths, label, key) {
   const open = slotsIn(paths);
   const go = async () => {
+    const gui = key && workspaceOpen && workspaceLive;
+    if (gui) { workspacePost({ type: 'synapse:project-leaving', key }); await new Promise((r) => setTimeout(r, 280)); }
     closeSlots(open);
-    for (const p of paths) { try { await synapse.project.remove(p); } catch (e) { toast(e.message, true); } }
-    toast(`${label} removed from the sidebar · still in the library`);
+    const failed = (await Promise.allSettled(paths.map((p) => synapse.project.remove(p)))).filter((r) => r.status === 'rejected');
+    for (const r of failed) toast(r.reason?.message || String(r.reason), true);
+    if (!failed.length) toast(`${label} removed from the sidebar · still in the library`);
     await refresh();
+    if (gui) workspacePost({ type: 'synapse:project-left', key });
   };
   if (open.length) confirm(`${open.length} session${open.length === 1 ? '' : 's'} run in ${label}. Close them and remove it from the sidebar?`, go, { danger: 'Remove' });
   else go();
@@ -1984,7 +1990,7 @@ $('.side').addEventListener('contextmenu', async (e) => {
     const first = p.worktrees[0]?.path;
     if (first) items.push({ label: 'New agent', sub: agentMenu(first) });
     const b = await browserItem(p);
-    items.push({ label: 'New worktree', run: () => promptWorktree(p) }, revealItem(p.path), ...(b ? [b] : []), '-', { label: 'Remove from sidebar', run: () => removeFromSidebar(p.worktrees.map((x) => x.path), p.label) });
+    items.push({ label: 'New worktree', run: () => promptWorktree(p) }, revealItem(p.path), ...(b ? [b] : []), '-', { label: 'Remove from sidebar', run: () => removeFromSidebar(p.worktrees.map((x) => x.path), p.label, p.key) });
   } else {
     items.push({ label: 'New workspace', run: () => promptProject() });
   }
@@ -2059,7 +2065,7 @@ function canvasMenu({ hit, agent, group, x, y, hiddenCount }, r = $('#canvas-fra
     if (cwd) items.push({ label: `New agent in ${group.label}`, sub: agentMenuIn(cwd) });
     if (p) items.push({ label: 'New worktree', run: () => promptWorktree(p) });
     items.push({ label: 'Rename project', run: () => tellCanvas({ action: 'rename-project', key: group.key }) }, '-');
-    if (p) items.push({ label: 'Remove from sidebar', run: () => removeFromSidebar(p.worktrees.map((q) => q.path), p.label) });
+    if (p) items.push({ label: 'Remove from sidebar', run: () => removeFromSidebar(p.worktrees.map((q) => q.path), p.label, p.key) });
     else if (group.cwd) items.push({ label: 'Add to sidebar', run: () => agentIn(group.cwd, null) });
   } else {
     items.push({ label: 'New workspace', run: () => promptProject() }, '-', { label: 'Arrange', run: () => tellCanvas({ action: 'arrange' }) }, { label: 'Fit', run: () => tellCanvas({ action: 'fit' }) });
@@ -4367,7 +4373,7 @@ async function desktopAction(action, args) {
         { label: 'Worktrees', sub: worktrees },
         { label: 'Rename project', run: () => rename('Rename project', p.label, (name) => synapse.project.rename(p.key, name)) },
         ...(await browserItem(p).then((b) => (b ? [b] : []))),
-        '-', { label: 'Remove from sidebar', danger: true, run: () => removeFromSidebar(p.worktrees.map((w) => w.path), p.label) },
+        '-', { label: 'Remove from sidebar', danger: true, run: () => removeFromSidebar(p.worktrees.map((w) => w.path), p.label, p.key) },
       ], Math.max(0, Number(args.x) || 0), Math.max(guiTop(), (Number(args.y) || 0) + guiTop()));
       return;
     }
