@@ -527,6 +527,32 @@ function initialize() {
     if (message?.type === 'synapse:desktop-navigate') navigate(message.view === 'back' || (message.toggle && view === message.view) ? byId.has(selectedId) ? 'session' : 'overview' : message.view, message.id || selectedId);
     if (message?.type === 'synapse:activity-progress') activityView.progress(message.progress);
     if (message?.type === 'synapse:add-project' && !paneKey) { addProject(); return; }
+    // a project removed from the sidebar folds shut and fades before it goes, so the list below glides up once
+    if (message?.type === 'synapse:project-leaving') {
+      const section = document.querySelector(`.project-group[data-project-key="${CSS.escape(message.key)}"]`);
+      if (!section || section.dataset.leaving) return;
+      section.dataset.leaving = '1';
+      if (matchMedia('(prefers-reduced-motion: reduce)').matches) { section.style.display = 'none'; return; }
+      const cs = getComputedStyle(section);
+      section.style.overflow = 'hidden';
+      section.animate([
+        { height: `${section.offsetHeight}px`, marginBottom: cs.marginBottom, opacity: 1, transform: 'none' },
+        { opacity: 0, transform: 'translateX(-10px)', offset: 0.45 },
+        { height: '0px', marginBottom: '0px', opacity: 0, transform: 'translateX(-10px)' },
+      ], { duration: 260, easing: 'cubic-bezier(.2, .8, .2, 1)', fill: 'forwards' });
+      return;
+    }
+    // still listed (removing failed, or sessions from outside Synapse keep it): unfold it again
+    if (message?.type === 'synapse:project-left') {
+      const section = document.querySelector(`.project-group[data-project-key="${CSS.escape(message.key)}"]`);
+      if (!section?.dataset.leaving) return;
+      delete section.dataset.leaving;
+      const restore = () => { section.getAnimations().forEach((a) => a.cancel()); section.style.removeProperty('display'); section.style.removeProperty('overflow'); };
+      const anim = section.getAnimations()[0];
+      if (!anim) return restore();
+      anim.reverse(); anim.finished.then(restore, restore);
+      return;
+    }
     if (message?.type === 'synapse:clone-progress') { const hint = $('ws-hint'); if (hint && cloning) hint.textContent = message.line; return; }
     if (message?.type === 'synapse:update' && !paneKey) { update = message.update || {}; renderUpdateCard(); return; }
     if (message?.type === 'synapse:desktop-key') {
