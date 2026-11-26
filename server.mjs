@@ -446,6 +446,33 @@ async function handleRequest(req, res) {
   json(res, 404, { error: 'not found' });
 }
 
+// Open with (macOS): editors and viewers people use, shown when installed and when they suit the file's kind
+const OPEN_WITH = [
+  ['Obsidian', 'Obsidian', ['md']], ['Typora', 'Typora', ['md']], ['iA Writer', 'iA Writer', ['md']],
+  ['Visual Studio Code', 'VS Code', ['md', 'text', 'dir']], ['Cursor', 'Cursor', ['md', 'text', 'dir']], ['Antigravity', 'Antigravity', ['md', 'text', 'dir']], ['Zed', 'Zed', ['md', 'text', 'dir']],
+  ['Sublime Text', 'Sublime Text', ['md', 'text', 'dir']], ['Xcode', 'Xcode', ['text']], ['TextEdit', 'TextEdit', ['md', 'text']],
+  ['Preview', 'Preview', ['pdf', 'image']], ['QuickTime Player', 'QuickTime Player', ['video', 'audio']],
+];
+const APP_DIRS = ['/Applications', path.join(os.homedir(), 'Applications'), '/System/Applications', '/System/Applications/Utilities'];
+function fileKind(file, st) {
+  if (st.isDirectory()) return 'dir';
+  const ext = path.extname(file).slice(1).toLowerCase();
+  if (['md', 'markdown', 'mdx'].includes(ext)) return 'md';
+  if (ext === 'pdf') return 'pdf';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'svg', 'bmp', 'tiff'].includes(ext)) return 'image';
+  if (['mp4', 'mov', 'm4v', 'webm'].includes(ext)) return 'video';
+  if (['mp3', 'm4a', 'wav', 'aac', 'flac'].includes(ext)) return 'audio';
+  return 'text';
+}
+function openWithApps(file, st) {
+  if (process.platform !== 'darwin') return [];
+  const kind = fileKind(file, st);
+  return OPEN_WITH.filter(([, , kinds]) => kinds.includes(kind)).map(([name, label]) => {
+    const at = APP_DIRS.map((d) => path.join(d, `${name}.app`)).find((x) => fs.existsSync(x));
+    return at && { name, label, path: at };
+  }).filter(Boolean);
+}
+
 async function files(req, res, p, q) {
   if (p === '/api/link') {
     if (!/^https?:\/\//.test(q.url || '')) return json(res, 400, { error: 'http(s) only' });
@@ -466,6 +493,14 @@ async function files(req, res, p, q) {
   }
   const file = resolveFile(cwd, q.path), st = file && stat(file);
   if (!st) return json(res, 404, { error: 'not found', path: file });
+  // Open with: the apps on this Mac that suit the file, from a known list (an app outside it is never run)
+  if (p === '/api/file/apps') return json(res, 200, { apps: openWithApps(file, st).map(({ name, label }) => ({ name, label })) });
+  if (p === '/api/file/open' && req.method === 'POST' && q.app) {
+    const app = openWithApps(file, st).find((a) => a.name === q.app);
+    if (!app) return json(res, 400, { error: `${String(q.app).slice(0, 60)} is not installed` });
+    execFile('open', ['-a', app.path, file], () => {});
+    return json(res, 200, { ok: true });
+  }
   if (p === '/api/file/open' && req.method === 'POST') {
     if (process.platform === 'win32') execFile('explorer.exe', q.reveal ? [`/select,${file}`] : [file], () => {});
     else if (process.platform === 'darwin') execFile('open', q.reveal ? ['-R', file] : [file], () => {});

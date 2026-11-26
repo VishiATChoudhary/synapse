@@ -553,7 +553,7 @@ textarea.field { line-height: 1.5; resize: vertical; }
 }
 @media (min-width: 1280px) {
   .inspector { position: relative; flex: 0 0 var(--inspector-width); box-shadow: none; z-index: auto; margin-inline-start: auto; } /* stays right when splits leave it the only flex child */
-  .inspector.file-mode { flex-basis: min(560px, 42vw); }
+  .inspector.file-mode { flex-basis: var(--panel-w, min(560px, 42vw)); } /* the edge's drag sets --panel-w */
 }
 @media (pointer: coarse) {
   .icon-button, .send-button, .nav-item, .session-row, .project-button, .button, .thread-tabs button, .segmented-control button, .text-button, .connection-info { min-height: 44px; }
@@ -614,7 +614,7 @@ textarea.field { line-height: 1.5; resize: vertical; }
 }
 
 /* a file opened from a reply, in the right-hand pane */
-.inspector.file-mode { width: min(560px, 100%); display: flex; flex-direction: column; padding-bottom: 0; }
+.inspector.file-mode { width: min(var(--panel-w, 560px), 100%); display: flex; flex-direction: column; padding-bottom: 0; }
 .file-heading { gap: 6px; margin-bottom: 8px; }
 .file-title { flex: 1; min-width: 0; }
 .file-title h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1067,7 +1067,7 @@ body.sorting .session-row .row-actions { display: none; }
 .workspace.panels-ready .inspector { transition: transform var(--panel-dur) var(--panel-ease), opacity 220ms var(--ease-out); }
 @media (min-width: 1280px) {
   .workspace[data-inspector='closed'] .inspector { transform: translateX(24px); margin-inline-end: calc(-1 * var(--inspector-width)); }
-  .workspace[data-inspector='closed'] .inspector.file-mode { margin-inline-end: calc(-1 * min(560px, 42vw)); }
+  .workspace[data-inspector='closed'] .inspector.file-mode { margin-inline-end: calc(-1 * var(--panel-w, min(560px, 42vw))); }
   .workspace.panels-ready .inspector { transition: margin-inline-end var(--panel-dur) var(--panel-ease), transform var(--panel-dur) var(--panel-ease), opacity 240ms var(--ease-out); }
 }
 /* leaving, the panel fades late, so it is seen sliding away rather than vanishing in place */
