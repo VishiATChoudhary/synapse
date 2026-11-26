@@ -41,6 +41,26 @@
     .md-view[contenteditable='true'] { outline: none; caret-color: var(--color-accent); }
     .md-view .mdb > :first-child { margin-top: 0; }
     .md-view .mdb { margin-bottom: .75em; }
+    /* a markdown preview reads like a note in Obsidian: the page's own white (or near black), not the grey panel,
+       a calm column with a heading scale, and the chat's tight markdown opened up */
+    body:has(.md-view) { background: var(--color-paper); }
+    .md-view { box-sizing: border-box; max-width: 54rem; margin: 0 auto; padding: 28px clamp(20px, 5%, 48px) 80px; font: 15.5px/1.7 var(--font-body); color: var(--color-ink); }
+    .md-view h1, .md-view h2, .md-view h3, .md-view h4, .md-view h5, .md-view h6 { font-weight: 700; line-height: 1.3; letter-spacing: -.01em; margin: 1.4em 0 .5em; color: var(--color-ink); }
+    .md-view h1 { font-size: 1.8em; } .md-view h2 { font-size: 1.5em; } .md-view h3 { font-size: 1.3em; }
+    .md-view h4 { font-size: 1.15em; } .md-view h5, .md-view h6 { font-size: 1em; }
+    .md-view h6 { color: var(--color-muted); }
+    .md-view .mdb:first-child > :is(h1, h2, h3) { margin-top: 0; }
+    .md-view p { margin: 0 0 1em; }
+    .md-view ul, .md-view ol { margin: 0 0 1em; padding-inline-start: 1.6em; }
+    .md-view li { margin-bottom: .3em; }
+    .md-view a { color: var(--color-accent-text); text-decoration: none; }
+    .md-view a:hover { text-decoration: underline; }
+    .md-view blockquote { margin: 1em 0; padding: .1em 0 .1em 1em; border-inline-start: 3px solid var(--color-accent); color: var(--color-secondary, var(--color-muted)); }
+    .md-view hr { border: 0; border-top: 1px solid var(--color-border-strong); margin: 2em 0; }
+    .md-view code { font-size: .88em; padding: .15em .4em; border-radius: 4px; background: var(--color-hover); color: var(--color-accent-text); }
+    .md-view pre { border-radius: 8px; background: var(--color-panel); }
+    .md-view pre code { color: var(--color-ink); background: none; padding: 0; }
+    .md-view img { max-width: 100%; border-radius: 6px; }
     .bar .dot { color: var(--color-muted); margin-right: 4px; }
     .embed .bar { padding-left: 8px; }
     /* comments: a chip on the selection, a small form, and the list at the bottom */

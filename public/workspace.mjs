@@ -1786,7 +1786,7 @@ function initialize() {
     const raw = `/api/file/raw?${new URLSearchParams({ path: f.path, v: String(f.mtime || '') })}`;
     const lines = f.type === 'text' ? f.text.split('\n') : [];
     const facts = [f.type === 'dir' ? `${f.entries.length} items` : f.type === 'text' ? `${lines.length} lines` : f.ext || f.type, f.type !== 'dir' && fileSize(f.size), `edited ${relativeTime(f.mtime)} ago`, f.truncated && 'first 1 MB'].filter(Boolean);
-    const tools = `<div class="file-tools"><span>${facts.map(escapeHtml).join(' · ')}</span><button class="text-button" data-file-act="open">Open</button><button class="text-button" data-file-act="reveal">Show in Finder</button><button class="text-button" data-file-act="copy">Copy path</button></div>`;
+    const tools = `<div class="file-tools"><span>${facts.map(escapeHtml).join(' · ')}</span><button class="text-button" data-file-act="open" title="Open it in its default app">Open</button><button class="text-button" data-file-act="open-with" aria-haspopup="menu" aria-expanded="false" title="Pick the app to open it in">Open with…</button><button class="text-button" data-file-act="reveal">Show in Finder</button><button class="text-button" data-file-act="copy">Copy path</button></div>`;
     let body;
     if (f.type === 'dir') body = `<div class="file-dir">${f.entries.map((e) => `<button type="button" class="file-link" data-file="${escapeHtml(`${f.path}/${e.name}`)}">${escapeHtml(e.name)}${e.dir ? '/' : ''}</button>`).join('') || '<p class="inspector-note">Empty folder.</p>'}</div>`;
     else if (f.type === 'image') body = `<div class="file-media"><img src="${raw}" alt="${escapeHtml(f.name)}"></div>`;
@@ -1833,6 +1833,13 @@ function initialize() {
     else if (act === 'back') { inspectorFile.stack.pop(); const prev = inspectorFile.stack.at(-1); openFile(prev.path, prev.cwd, { back: true }); }
     else if (act === 'mode') { inspectorFile.mode = event.target.textContent === 'Source' ? 'source' : 'rendered'; renderInspector(); }
     else if (act === 'copy') navigator.clipboard.writeText(path).catch(() => toast(path));
+    else if (act === 'open-with' && path) {
+      const anchor = event.target.closest('[data-file-act]');
+      api(`/api/file/apps?${new URLSearchParams({ path })}`).then(({ apps }) => {
+        const open = (app) => api('/api/file/open', { method: 'POST', body: JSON.stringify({ path, app }) }).catch((error) => toast(error.message));
+        dropdown(anchor, apps.length ? apps.map((a) => ({ label: a.label, run: () => open(a.name) })) : [{ label: 'Default app', run: () => open('') }]);
+      }).catch((error) => toast(error.message));
+    }
     else if (path) api('/api/file/open', { method: 'POST', body: JSON.stringify({ path, reveal: act === 'reveal' }) }).catch((error) => toast(error.message));
   });
 

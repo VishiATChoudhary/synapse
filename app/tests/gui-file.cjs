@@ -142,6 +142,29 @@ const shot = async (w, name) => { if (process.env.SHOT_DIR) { await sleep(700); 
   assert.equal(await inPane(`getComputedStyle(document.documentElement).getPropertyValue('--file-zoom').trim()`), '1.1', 'A+ made the text bigger');
   await inPane(`document.querySelector('[data-act="smaller"]').click()`);
   console.log('PASS markdown: the preview edits in place, ⌘B / ⌘U / ⌘⌥2, only the changed block rewritten, text size');
+  // the panel's edge drags wider for a file too, and the preview is a page, not the grey panel
+  const widthOf = () => ui(`document.querySelector('#inspector').getBoundingClientRect().width`);
+  const wBefore = await widthOf();
+  const frameAt = await win.webContents.executeJavaScript(`(() => { const r = document.querySelector('#workspace-frame').getBoundingClientRect(); return { x: r.x, y: r.y }; })()`);
+  const grip = await ui(`(() => { const r = document.querySelector('#panel-grip').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+  try { win.webContents.debugger.attach('1.3'); } catch {}
+  const mouse = (type, x, y) => win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type, x: frameAt.x + x, y: frameAt.y + y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1 });
+  await mouse('mousePressed', grip.x, grip.y);
+  for (let i = 1; i <= 10; i++) { await mouse('mouseMoved', grip.x - 30 * i, grip.y); await sleep(16); }
+  await mouse('mouseReleased', grip.x - 300, grip.y);
+  await sleep(500);
+  const wAfter = await widthOf();
+  assert.ok(wAfter > wBefore + 200, `a file panel drags wider: ${wBefore} -> ${wAfter}`);
+  assert.ok(await inPane(`(() => { const probe = document.createElement('div'); probe.style.background = 'var(--color-panel)'; document.body.append(probe); const grey = getComputedStyle(probe).backgroundColor; probe.remove(); return getComputedStyle(document.body).backgroundColor !== grey; })()`), 'the preview has the page color, not the panel grey');
+  if (process.env.SHOTS) fs.writeFileSync(path.join(process.env.SHOTS, 'md-wide.png'), (await win.webContents.capturePage()).toPNG());
+  await ui(`document.querySelector('[data-file-act="open-with"]').click()`);
+  await until(() => ui(`!!document.querySelector('.pop-menu')`), 'Open with lists apps');
+  const apps = await ui(`[...document.querySelectorAll('.pop-menu button')].map((b) => b.textContent.trim())`);
+  assert.ok(apps.length >= 1, `apps to open it with: ${apps}`);
+  if (process.env.SHOTS) fs.writeFileSync(path.join(process.env.SHOTS, 'md-open-with.png'), (await win.webContents.capturePage()).toPNG());
+  await ui(`document.querySelector('[data-file-act="open-with"]').click()`); // again: the menu closes
+  await until(() => ui(`!document.querySelector('.pop-menu')`), 'Open with closes');
+  console.log(`PASS markdown: the panel drags wider (${Math.round(wBefore)} -> ${Math.round(wAfter)}px), page background, Open with: ${apps.join(', ')}`);
   // comments: two collected and sent at once, then one sent straight away
   const comment = async (word, body, how) => {
     assert.ok(await selectWord(word));
