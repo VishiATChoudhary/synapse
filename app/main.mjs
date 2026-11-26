@@ -793,9 +793,11 @@ const CANVAS_PORT = Number(process.env.SYNAPSE_APP_PORT || 0);
 let canvasProc = null, canvasStart = null;
 async function ensureCanvas() {
   if (canvasStart) return canvasStart;
-  canvasStart = new Promise((resolve, reject) => {
+  // the user's PATH, not launchd's: Rooms and agent talk run `claude` from this server, and an app started from the
+  // Dock would not find it in ~/.local/bin ("Claude Code is not installed here")
+  canvasStart = (shellPath === undefined ? shellPathReady : Promise.resolve()).then(() => new Promise((resolve, reject) => {
     canvasProc = spawn(process.execPath, [path.join(ROOT, '..', 'server.mjs')], {
-      env: { ...process.env, SYNAPSE_HOME: DATA, ELECTRON_RUN_AS_NODE: '1', PORT: String(CANVAS_PORT), NO_OPEN: '1', SYNAPSE_APP_PID: String(process.pid) },
+      env: { ...cleanEnv(), SYNAPSE_HOME: DATA, ELECTRON_RUN_AS_NODE: '1', PORT: String(CANVAS_PORT), NO_OPEN: '1', SYNAPSE_APP_PID: String(process.pid) },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const timer = setTimeout(() => { canvasProc?.kill(); reject(new Error('The local Synapse server did not start.')); }, 15000);
@@ -808,7 +810,7 @@ async function ensureCanvas() {
     canvasProc.stderr.on('data', (data) => { if (process.env.SYNAPSE_DEBUG) console.error(String(data)); });
     canvasProc.on('error', (error) => { clearTimeout(timer); reject(error); });
     canvasProc.on('exit', () => { clearTimeout(timer); canvasProc = null; canvasStart = null; reject(new Error('The local Synapse server stopped.')); });
-  }).catch((error) => { canvasStart = null; throw error; });
+  })).catch((error) => { canvasStart = null; throw error; });
   return canvasStart;
 }
 // The canvas server also syncs with friends and answers their agents' questions, so a connected machine (signed
@@ -1564,7 +1566,7 @@ handle('worktree:rename', ({ path: dir, name }) => {
   writeJSON(FILES.app, c);
   return { path: dir, name: name || path.basename(dir) };
 });
-handle('synapse', ({ args, as }) => execFileSync(process.execPath, [path.join(ROOT, '..', 'cli.mjs'), ...args], { encoding: 'utf8', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SYNAPSE_AGENT: as || '' }, timeout: 8000 }));
+handle('synapse', ({ args, as }) => execFileSync(process.execPath, [path.join(ROOT, '..', 'cli.mjs'), ...args], { encoding: 'utf8', env: { ...cleanEnv(), ELECTRON_RUN_AS_NODE: '1', SYNAPSE_AGENT: as || '' }, timeout: 8000 }));
 handle('linked', ({ a, b }) => linked(readJSON(FILES.edges, []), a, b));
 handle('account:get', async () => { if (FAKE) return readJSON(FAKE, {}).account || null; const a = await acct().catch(() => null); return a?.account()?.user || null; });
 handle('account:skipped', () => !!config().skipLogin || !!process.env.SYNAPSE_DEMO);
