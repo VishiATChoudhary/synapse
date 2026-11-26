@@ -389,13 +389,14 @@ function sforkFilter(get) {
   };
 }
 
-async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resume = null, cwd = worktreePath, title = kind, prompt = null, liaisonFor = null, drawer = false, model = null, tune = null } = {}) {
+async function newSlot(worktreePath, kind, split = null, phoneReq = null, { resume = null, cwd = worktreePath, title = kind, prompt = null, liaisonFor = null, drawer = false, model = null, tune = null, quiet = false } = {}) {
   closeCanvas();
   const prof = M.profiles[kind] || { command: kind };
   const s = { id: nextId++, worktree: worktreePath, sessions: [], path: [] };
   const previous = M.focused;
   M.slots.push(s);
-  if (!drawer) M.focused = s.id; // a GUI drawer terminal opens beside the session in view, not instead of it
+  if (!drawer && !quiet) M.focused = s.id; // a GUI drawer terminal opens beside the session in view, not instead of it; the orchestrator's sessions open in the background
+  if (M.focused == null) M.focused = s.id;
   const home = worktreeOf(worktreePath); if (home) M.open.add(home.project.key); // a new session unfolds its project, once
   try {
     const made = await makeSession(s, {
@@ -471,6 +472,8 @@ function sessionBranch(s, id) {
 function requestCloseSession(s, id) {
   const x = sess(s, id);
   if (!x) return;
+  // closing the orchestrator by hand turns it off (it would come back at the next launch otherwise)
+  if (x.orchestrator) return confirm('Turn the orchestrator off? Settings > Agents turns it back on.', () => setOrchestrator({ on: false }).catch((e) => toast(e.message, true)), { danger: 'Turn off' });
   const branch = sessionBranch(s, id);
   const working = branch.some((sid) => statusOf(sess(s, sid)) === 'working');
   if (branch.length > 1 || working) {
@@ -522,6 +525,151 @@ function orderedSlots() {
   return out;
 }
 
+// ---------------------------------------------------------------- the orchestrator
+// One agent of any kind (Settings > Agents > Orchestrator) pinned at the top of the sidebar. It runs in its own
+// folder (~/.synapse/orchestrator) and drives the other sessions through the synapse_orch_* tools: main forwards
+// each call here (orchestrator.mjs), since this page owns the sessions, and only that agent's calls are taken.
+let orchSaved = null, orchReady = false, orchBusy = null, orchReported;
+const orchSession = () => { for (const s of M.slots) for (const x of s.sessions) if (x.orchestrator) return { s, x }; return null; };
+function syncOrchestrator({ restart = false } = {}) {
+  if (!orchReady) return Promise.resolve();
+  if (orchBusy) return orchBusy.then(() => syncOrchestrator({ restart }));
+  orchBusy = (async () => {
+    const want = !!M.orchestrator?.on, kind = M.orchestrator?.kind;
+    let have = orchSession();
+    // off, another agent picked, or (asked to) ended: it goes; an ended one stays in place until asked
+    if (have && (!want || have.x.kind !== kind || (restart && have.x.exited))) { closeSession(have.s, have.x.id); have = null; }
+    if (have || !want || !M.profiles?.[kind]) return;
+    const dir = await synapse.orchestrator.folder();
+    const saved = orchSaved?.kind === kind ? orchSaved : null; orchSaved = null;
+    let s = saved?.resume ? await newSlot(dir, kind, null, null, { resume: saved.resume, title: 'Orchestrator', quiet: true }) : null;
+    s ||= await newSlot(dir, kind, null, null, { title: 'Orchestrator', quiet: true });
+    const x = s?.sessions[0];
+    if (!x) return;
+    x.orchestrator = true;
+    if (saved?.key) x.key = saved.key; // the GUI keeps its draft and place for it
+    render(); scheduleSave();
+  })().finally(() => { orchBusy = null; });
+  return orchBusy;
+}
+async function setOrchestrator({ on, kind, restart }) {
+  const now = M.orchestrator || {};
+  if (restart) { await syncOrchestrator({ restart: true }); return M.orchestrator; }
+  const st = await synapse.settings.set({ orchestrator: { on: on ?? now.on, kind: kind ?? now.kind } });
+  M.orchSig = JSON.stringify(st.orchestrator); M.orchestrator = st.orchestrator;
+  await syncOrchestrator();
+  const o = orchSession(); if (o && on) { M.focused = o.s.id; render(); }
+  return M.orchestrator;
+}
+// main only takes tool calls from the agent the orchestrator runs now
+function reportOrchestrator() {
+  const o = orchSession();
+  const id = o && !o.x.exited ? M.agents[o.x.pty]?.synapseId || null : null;
+  if (id === orchReported) return;
+  orchReported = id;
+  synapse.orchestrator.agent(id).catch(() => { orchReported = undefined; });
+}
+const orchIso = (t) => (t ? new Date(t).toISOString() : null);
+function orchFind(query) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) throw new Error('Name the session (its id or name from synapse_orch_sessions).');
+  const all = M.slots.flatMap((s) => s.sessions.filter((x) => !x.drawer).map((x) => ({ s, x, a: M.agents[x.pty] })));
+  const name = ({ x, a }) => String(a?.name || x.title || '').toLowerCase();
+  const hit = all.find(({ x, a }) => `desktop-${x.key}` === query || x.key === query || a?.synapseId === query)
+    || all.find((h) => name(h) === q) || all.filter((h) => name(h).startsWith(q)).sort((h, k) => (h.x.exited - k.x.exited))[0];
+  if (!hit) throw new Error(`No session matches "${query}". synapse_orch_sessions lists them.`);
+  if (hit.x.orchestrator) throw new Error('That is you, the orchestrator.');
+  return hit;
+}
+function orchPlace({ project, worktree, cwd } = {}) {
+  const all = M.projects.flatMap((p) => p.worktrees.map((w) => ({ p, w })));
+  const lc = (v) => String(v || '').trim().toLowerCase();
+  if (cwd) { const hit = all.find(({ w }) => w.path === cwd); if (!hit) throw new Error(`${cwd} is not an open project or worktree.`); return hit; }
+  let list = all;
+  if (project) {
+    const exact = list.filter(({ p }) => [p.label, p.key, p.path].some((v) => lc(v) === lc(project)));
+    list = exact.length ? exact : list.filter(({ p }) => lc(p.label).includes(lc(project)));
+  }
+  if (worktree) {
+    const exact = list.filter(({ w }) => [w.name, w.branch, w.path].some((v) => lc(v) === lc(worktree)));
+    list = exact.length ? exact : list.filter(({ w }) => lc(w.name).includes(lc(worktree)) || lc(w.branch).includes(lc(worktree)));
+  } else list = list.filter(({ w }) => w.home).concat(list.filter(({ w }) => !w.home));
+  if (!list.length) throw new Error('No open project or worktree matches. synapse_orch_sessions lists them.');
+  if (!worktree && new Set(list.map(({ p }) => p.key)).size > 1) throw new Error(`Several projects match: ${[...new Set(list.map(({ p }) => p.label))].join(', ')}. Name one exactly.`);
+  return list[0];
+}
+async function orchStart(dir, { kind, prompt, model }) {
+  kind = kind || M.orchestrator?.kind || 'claude';
+  if (!Object.hasOwn(M.profiles, kind)) throw new Error(`No agent "${kind}". Installed: ${profileOrder().join(', ')}.`);
+  const s = await newSlot(dir, kind, null, null, {
+    prompt: typeof prompt === 'string' && prompt.trim() && kind !== 'shell' ? prompt.slice(0, 12000) : null,
+    model: typeof model === 'string' && model ? model.slice(0, 160) : null, quiet: true,
+  });
+  const x = s?.sessions[0];
+  if (!x) throw new Error('The session could not start. Check the agent command in Settings.');
+  return { id: `desktop-${x.key}`, kind, cwd: dir, note: prompt ? 'Started; the prompt goes in once the agent is ready.' : 'Started.' };
+}
+async function orchAct(action, args) {
+  switch (action) {
+    case 'sessions': {
+      await refresh();
+      const sessions = M.slots.flatMap((s) => s.sessions.filter((x) => !x.orchestrator && !x.drawer).map((x) => {
+        const a = M.agents[x.pty], wt = worktreeOf(s.worktree);
+        return { id: `desktop-${x.key}`, name: a?.name || x.title, kind: x.kind, project: wt?.project.label || null, worktree: wt?.worktree.name || null, branch: wt?.worktree.branch || null, cwd: s.worktree,
+          status: x.exited ? 'exited' : statusOf(x), lastActivity: orchIso(x.updatedAt), ...(x.parent != null ? { forkOf: `desktop-${sess(s, x.parent)?.key}` } : {}), ...(x.question ? { question: x.question } : {}) };
+      }));
+      const projects = M.projects.map((p) => ({ project: p.label, path: p.path, worktrees: p.worktrees.map((w) => ({ name: w.name, branch: w.branch || null, path: w.path, main: !!w.home, sessions: sessions.filter((x) => x.cwd === w.path).length })) }));
+      return { projects, sessions, agents: profileOrder().filter((k) => k !== 'shell') };
+    }
+    case 'find': { const { x, a } = orchFind(args.session); return { id: `desktop-${x.key}`, synapseId: a?.synapseId || null, name: a?.name || x.title, kind: x.kind, exited: !!x.exited }; }
+    case 'start': { const { w } = orchPlace(args); return orchStart(w.path, args); }
+    case 'prompt': {
+      const { x, a } = orchFind(args.session);
+      if (x.exited) throw new Error('That session has ended.');
+      const text = String(args.text || '').trim(); if (!text) throw new Error('Write the message to send.');
+      await synapse.pty.submit(x.pty, text.slice(0, 12000));
+      return { sent: true, to: a?.name || x.title, status: statusOf(x) };
+    }
+    case 'close': {
+      const { s, x, a } = orchFind(args.session);
+      closeSession(s, x.id);
+      return { closed: a?.name || x.title };
+    }
+    case 'worktree-open': {
+      const { p } = orchPlace({ project: args.project });
+      const name = branchName(String(args.branch || '').trim());
+      if (!name) throw new Error('Give the branch name.');
+      const choices = await synapse.worktree.list(p.path);
+      const hit = choices.find((c) => !c.missing && [c.name, c.label].includes(name));
+      const dir = hit ? await synapse.worktree.open({ repo: p.path, choice: hit })
+        : await synapse.worktree.add({ repo: p.path, name, base: args.base || await synapse.worktree.base(p.path).catch(() => '') || '' });
+      await refresh(); M.open.add(p.key); render();
+      const out = { path: dir, branch: name, project: p.label, created: !hit };
+      if (args.kind || args.prompt) out.session = await orchStart(dir, args);
+      return out;
+    }
+    case 'worktree-close': {
+      const { p, w } = orchPlace({ project: args.project, worktree: args.worktree });
+      if (w.home) throw new Error(`${w.name} is the project's main checkout, not a worktree; it is never deleted.`);
+      const dirty = await synapse.git.dirty(w.path).catch(() => 0);
+      if (dirty && !M.safeDelete && !args.force) throw new Error(`${w.name} has ${dirty} uncommitted change${dirty === 1 ? '' : 's'} and safe deletion is off, so they would be lost. Ask the user, then pass force: true.`);
+      const open = slotsIn([w.path]);
+      const r = await synapse.worktree.remove({ repo: p.path, dir: w.path, force: true });
+      closeSlots(open); await refresh();
+      return { removed: w.name, closedSessions: open.length, ...(r?.saved && r.files ? { savedChanges: r.files, onBranch: r.branch } : {}) };
+    }
+    default: throw new Error(`Unknown orchestrator action "${action}".`);
+  }
+}
+synapse.orchestrator.onCall(async ({ id, agent, action, args }) => {
+  try {
+    const o = orchSession();
+    if (!o || o.x.exited || M.agents[o.x.pty]?.synapseId !== agent) throw new Error('Only the Synapse orchestrator can use this tool.');
+    const value = await orchAct(String(action), args || {});
+    await synapse.orchestrator.reply({ id, value: value ?? null });
+  } catch (e) { synapse.orchestrator.reply({ id, error: e.message }).catch(() => {}); }
+});
+
 // ---------------------------------------------------------------- persistence
 
 // Open sessions survive a restart: every slot's live sessions, their fork tree and the agent id to resume
@@ -531,7 +679,10 @@ function orderedSlots() {
 let persist = false, lastSaved = '', saveTimer = null;
 function snapshot() {
   const slots = [];
+  let orchestrator = null;
   for (const s of orderedSlots()) {
+    const o = s.sessions.find((x) => x.orchestrator);
+    if (o) { if (!o.exited) orchestrator = { kind: o.kind, key: o.key, resume: o.resume || null }; continue; }
     const index = new Map(), sessions = [];
     for (const x of s.sessions) {
       if (x.exited) continue;
@@ -544,7 +695,7 @@ function snapshot() {
     const t = [...s.path].reverse().find((id) => index.has(id));
     slots.push({ worktree: s.worktree, top: t == null ? sessions.length - 1 : index.get(t), focused: s.id === M.focused, sessions });
   }
-  return { version: 1, slots };
+  return { version: 1, slots, orchestrator };
 }
 function scheduleSave() {
   if (!persist) return;
@@ -561,6 +712,7 @@ function scheduleSave() {
 // Panes come back side by side (each one's sessions in order, a fork after its parent), not one after another
 async function restoreSessions(saved) {
   let focus = null;
+  orchSaved = saved?.orchestrator || null;
   const panes = (saved?.slots || []).filter((sv) => worktreeOf(sv.worktree)) // its workspace may have been removed
     .map((sv) => { const s = { id: nextId++, worktree: sv.worktree, sessions: [], path: [] }; M.slots.push(s); return { sv, s }; });
   await Promise.all(panes.map(async ({ sv, s }) => {
@@ -2184,7 +2336,14 @@ async function openSettings(start) {
       finally { saveCommands.disabled = false; }
     });
     const actions = el('div', 'set-actions'); actions.append(saveCommands); commands.append(actions);
+    const orchKind = el('select', 'set-input');
+    for (const k of profileOrder().filter((k) => k !== 'shell')) { const o = el('option', '', M.profiles[k].label || k); o.value = k; orchKind.appendChild(o); }
+    orchKind.value = s.orchestrator?.kind || 'claude'; orchKind.setAttribute('aria-label', 'Orchestrator agent');
+    orchKind.onchange = async () => { try { orchKind.value = (await setOrchestrator({ kind: orchKind.value })).kind; } catch (e) { toast(e.message, true); } };
     pane('agents', null,
+      group('Orchestrator',
+        row('Orchestrator', 'An agent pinned at the top of your sessions. It sees every session and can answer questions about them, start sessions, send them prompts, and open or close worktrees.', toggle(!!s.orchestrator?.on, async (on) => { await setOrchestrator({ on }); toast(on ? 'The orchestrator is pinned at the top of your sessions' : 'The orchestrator is off'); })),
+        row('Runs on', 'Which agent the orchestrator is. Changing it starts a new orchestrator.', orchKind)),
       group('Integrations', card(row('Agent integrations', 'Add Synapse tools and prompt hooks to your agents’ settings. Existing files are backed up.', setupButton), setupReport)),
       group('Commands', el('p', 'set-desc set-pad', 'The command each agent starts with. New sessions use these; running ones keep theirs.'), commands),
       group('Forks', row('Send forks right away', 'Send a fork’s question at once, instead of leaving it in the child’s prompt for you to send.', toggle(!!s.autoSendFork, async (on) => { M.autoSendFork = (await synapse.settings.set({ autoSendFork: on })).autoSendFork; toast(on ? 'Forks send their question right away' : 'A fork’s question waits in its prompt for you'); }))));
@@ -3100,6 +3259,7 @@ async function refreshPullRequests() {
 async function refresh() { apply(await synapse.state()); }
 function apply(st) {
   M.projects = st.projects; M.agents = st.agents; M.unread = st.unread; M.profiles = st.profiles; M.edges = st.edges; M.demo = st.demo; M.autoSendFork = !!st.autoSendFork; M.safeDelete = st.safeWorktreeDelete !== false; M.openWith = st.openWith || 'shell'; M.wakeAgents = !!st.wakeAgents;
+  const orch = JSON.stringify(st.orchestrator || null); if (orch !== M.orchSig) { M.orchSig = orch; M.orchestrator = st.orchestrator || null; syncOrchestrator(); }
   const talks = JSON.stringify([st.talks || [], st.talkRequests || []]);
   if (talks !== M.talksSig) { M.talksSig = talks; M.talks = st.talks || []; M.talkRequests = st.talkRequests || []; renderDot(); }
   // remember which agent each session runs while it is alive: that id is what a restart resumes. A resumed
@@ -3125,6 +3285,7 @@ function apply(st) {
       renameTab(x, x.title).catch(() => { x.nameFailed = want; }).finally(() => { x.renaming = false; });
     }
   }
+  reportOrchestrator();
   wakeAgents();
   refreshPullRequests();
   render();
@@ -4112,15 +4273,16 @@ function workspaceState() {
   };
   const layout = M.layouts.find((node) => paneIds(node).includes(M.focused));
   return {
-    projects: M.projects, profiles: M.profiles, theme: document.documentElement.dataset.theme,
+    projects: M.projects, profiles: M.profiles, theme: document.documentElement.dataset.theme, orchestrator: M.orchestrator || null,
     layout: layout == null ? null : pane(layout),
     active: top(focusedSlot()) ? `desktop-${top(focusedSlot()).key}` : null,
     sessions: M.slots.flatMap((s) => s.sessions.map((x) => ({
       id: `desktop-${x.key}`, pty: x.pty, pid: x.pid, backendId: M.agents[x.pty]?.synapseId || null,
       pane: `pane-${root(s).key}`,
       name: M.agents[x.pty]?.name || x.title, kind: x.kind, cwd: s.worktree,
-      projectKey: worktreeOf(s.worktree)?.project.key || s.worktree,
-      project: worktreeOf(s.worktree)?.project.label || s.worktree.split('/').pop(),
+      projectKey: x.orchestrator ? 'synapse:orchestrator' : worktreeOf(s.worktree)?.project.key || s.worktree,
+      project: x.orchestrator ? 'Orchestrator' : worktreeOf(s.worktree)?.project.label || s.worktree.split('/').pop(),
+      orchestrator: !!x.orchestrator,
       status: x.exited ? 'exited' : statusOf(x) === 'working' ? 'busy' : statusOf(x),
       lastActivity: x.updatedAt, parent: x.parent == null ? null : `desktop-${sess(s, x.parent)?.key}`,
       exited: x.exited, drawer: !!x.drawer,
@@ -4246,6 +4408,7 @@ async function desktopAction(action, args) {
       return workspaceState();
     }
     case 'preference': return synapse.workspace.save(args.key, args.value);
+    case 'orchestrator': return setOrchestrator(args || {});
     case 'new-session': {
       // a terminal under the chat (drawer) may open in any folder inside an open worktree; it stays out of the GUI's list
       const worktrees = M.projects.flatMap((p) => p.worktrees.map((w) => w.path));
@@ -4497,6 +4660,8 @@ if (WIN) {
   const restored = keep ? await restoreSessions(await synapse.sessions.load().catch(() => null)) : 0;
   if (!restored && here) { M.open.add(worktreeOf(here.path)?.project.key); await newSlot(here.path, openWith() === 'new' ? 'shell' : openWith()); } // first launch: something to look at
   persist = keep;
+  orchReady = !flags.demo && !flags.shot;
+  await syncOrchestrator();
   render();
   if (wantGui) await openWorkspace();
   if (flags.demo && here) {

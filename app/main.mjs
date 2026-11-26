@@ -24,6 +24,7 @@ import { collect as collectActivity, lastWeek } from './activity.mjs';
 import { createDiscovery } from '../discovery.mjs';
 import * as chats from './history.mjs';
 import { createAgentBrowser } from './agent-browser.mjs';
+import { createOrchestrator } from './orchestrator.mjs';
 import * as vault from './vault.mjs';
 import * as connectors from '../connectors.mjs';
 import { createLogins } from './logins.mjs';
@@ -462,7 +463,7 @@ function state() {
   const messages = readJSON(FILES.messages, []);
   const unread = {};
   for (const m of messages) if (!m.delivered) unread[m.to] = (unread[m.to] || 0) + 1;
-  return { projects: projects(), agents: byPty, edges, unread, talks: openTalks(), talkRequests: openTalkRequests(edges), profiles: config().profiles, autoSendFork: !!config().autoSendFork, safeWorktreeDelete: config().safeWorktreeDelete !== false, openWith: config().openWith || 'new', wakeAgents: config().wakeAgents !== false, demo: DEMO };
+  return { projects: projects(), agents: byPty, edges, unread, talks: openTalks(), talkRequests: openTalkRequests(edges), profiles: config().profiles, autoSendFork: !!config().autoSendFork, safeWorktreeDelete: config().safeWorktreeDelete !== false, openWith: config().openWith || 'new', wakeAgents: config().wakeAgents !== false, orchestrator: orchestratorOut(config()), demo: DEMO };
 }
 
 // ---------------------------------------------------------------- agent talk
@@ -918,6 +919,7 @@ function noReload() {
 
 app.whenReady().then(() => {
   agentBrowser.start();
+  orchestrator.start();
   ensureCanvas().catch(() => {}); // the GUI's server, started with the app rather than when the window asks
   integrationSetup = autoSetup(); // install guidance before a new or restored agent starts
   if (WIN) Menu.setApplicationMenu(null); // its accelerators (Ctrl+W closes the window, Ctrl+R reloads) belong to the terminals
@@ -962,6 +964,7 @@ let quitting = false;
 app.on('before-quit', (e) => {
   try { gcFlush(); } catch {}
   agentBrowser.stop();
+  orchestrator.stop();
   discovery.close();
   phone.stopShares(); // no tunnel outlives the app
   try { canvasProc?.kill(); } catch {}
@@ -1130,6 +1133,12 @@ handle('logins:remove', ({ base }) => logins.remove(String(base || '')));
 const agentBrowser = createAgentBrowser({ dataDir: DATA, root: ROOT, vault: signIns, packaged: app.isPackaged, getWin: () => win, askSites: () => config().browserAskSites === true,
   onAgentOpened: (id) => { if (config().showBrowser !== false) win?.webContents.send('agent-browser:show', { agent: id }); }, agentName: (id) => listAgents().find((a) => a.id === id)?.name || 'Agent' });
 const agentId = (v) => { const id = String(v || ''); if (!id || id.length > 200) throw new Error('Pick an agent.'); return id; };
+// the orchestrator (orchestrator.mjs): its folder, which agent it is, and the renderer's answers to its tools
+const orchestrator = createOrchestrator({ dataDir: DATA, getWin: () => win });
+const orchestratorOut = (c) => ({ on: !!c.orchestrator?.on, kind: Object.hasOwn(c.profiles || {}, c.orchestrator?.kind) && c.orchestrator.kind !== 'shell' ? c.orchestrator.kind : Object.hasOwn(c.profiles || {}, 'claude') ? 'claude' : Object.keys(c.profiles || {}).find((k) => k !== 'shell') || 'claude' });
+handle('orchestrator:folder', () => orchestrator.folder());
+handle('orchestrator:agent', ({ id }) => orchestrator.setAgent(id));
+handle('orchestrator:reply', (a) => orchestrator.reply(a));
 handle('agent-browser:state', () => agentBrowser.snapshot());
 handle('agent-browser:bounds', (a) => agentBrowser.setBounds(agentId(a.agent), a.bounds || null));
 handle('agent-browser:user', (a) => agentBrowser.user(agentId(a.agent), String(a.action || ''), a.args || {}));
@@ -1350,7 +1359,7 @@ handle('project:rename', ({ key, name }) => {
   if (name && all.some((p) => p.key !== key && p.label.toLowerCase() === name.toLowerCase())) throw new Error('another workspace already has that name');
   return renameProject(key, name);
 });
-const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, safeWorktreeDelete: c.safeWorktreeDelete !== false, openWith: c.openWith || 'new', showBrowser: c.showBrowser !== false, synapseBrowserOnly: c.synapseBrowserOnly !== false, browserAskSites: c.browserAskSites === true, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [], worktreeGc: cleanPolicy(c.worktreeGc), tidy: readTidy() });
+const settingsOut = (c) => ({ profiles: c.profiles, openAtLogin: loginOpen(), autoSymlink: !!c.autoSymlink, autoSendFork: !!c.autoSendFork, safeWorktreeDelete: c.safeWorktreeDelete !== false, openWith: c.openWith || 'new', showBrowser: c.showBrowser !== false, synapseBrowserOnly: c.synapseBrowserOnly !== false, browserAskSites: c.browserAskSites === true, notifyDone: c.notifyDone !== false, doneSound: DONE_SOUNDS.includes(c.doneSound) ? c.doneSound : 'bubbleTap', errorSound: c.errorSound !== false, talkPerHour: talkPerHour(), talkModel: talkModel(), look: c.look || {}, themes: c.themes || {}, shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts : [], worktreeGc: cleanPolicy(c.worktreeGc), tidy: readTidy(), orchestrator: orchestratorOut(c) });
 // how agents are tidied (Done to Idle, Archived, ended): the GUI keeps it with its other preferences
 const TIDY_DEFAULT = { idle: GC_DAY, archive: 3 * GC_DAY, close: 7 * GC_DAY };
 const cleanTidy = (t = {}) => Object.fromEntries(Object.entries(TIDY_DEFAULT).map(([k, d]) => { const n = Number(t?.[k]); return [k, Number.isFinite(n) && n >= 0 && n <= 365 * GC_DAY ? n : d]; }));
@@ -1449,6 +1458,7 @@ handle('settings:set', (patch) => {
   if ('shortcuts' in patch) c.shortcuts = cleanShortcuts(patch.shortcuts);
   if ('worktreeGc' in patch) c.worktreeGc = cleanPolicy({ ...cleanPolicy(c.worktreeGc), ...patch.worktreeGc });
   if ('tidy' in patch) writeJSON(UI_STATE, { ...readJSON(UI_STATE, {}), 'synapse-tidy': JSON.stringify(cleanTidy(patch.tidy)) });
+  if ('orchestrator' in patch) c.orchestrator = { on: !!patch.orchestrator?.on, kind: typeof patch.orchestrator?.kind === 'string' && Object.hasOwn(c.profiles || {}, patch.orchestrator.kind) && patch.orchestrator.kind !== 'shell' ? patch.orchestrator.kind : orchestratorOut(c).kind };
   if ('talkModel' in patch) c.talkModel = ['opus', 'sonnet', 'haiku'].includes(patch.talkModel) ? patch.talkModel : 'agent';
   writeJSON(FILES.app, c);
   if ('autoSymlink' in patch && c.autoSymlink) scanLibrary(true);

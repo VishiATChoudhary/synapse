@@ -4,7 +4,7 @@
 import readline from 'node:readline';
 import fs from 'node:fs';
 import path from 'node:path';
-import { agentForProcess, DATA } from './lib.mjs';
+import { agentForProcess, DATA, listAgents, readAgentMessages, formatMessages } from './lib.mjs';
 import * as ops from './ops.mjs';
 import * as plan from './plan.mjs';
 import * as remote from './remote.mjs';
@@ -100,6 +100,56 @@ The first time you open a site, the user is asked to allow it: the call waits fo
     run: (me, a) => browser(me, a) },
 ];
 
+// The orchestrator's tools (app/orchestrator.mjs): only the agent the user pinned as orchestrator gets them, and the
+// app checks every call is from it. The app answers through a local endpoint named in ~/.synapse/orchestrator.json.
+const ORCH_DIR = path.join(DATA, 'orchestrator');
+const sessionArg = { type: 'string', description: 'Session id (desktop-...) or name, from synapse_orch_sessions' };
+const placeArgs = { project: { type: 'string', description: 'Project name, from synapse_orch_sessions' }, worktree: { type: 'string', description: 'Worktree name or branch; omit for the main checkout' } };
+const startArgs = { kind: { type: 'string', description: 'Agent: claude, codex, gemini, ... (synapse_orch_sessions lists the installed ones). Default: the orchestrator\'s own kind' }, prompt: { type: 'string', description: 'First prompt for the new session' }, model: { type: 'string', description: 'Model id, optional' } };
+const ORCH_TOOLS = [
+  { name: 'synapse_orch_sessions', description: 'Every open project with its worktrees, and every session in Synapse: id, name, agent kind, project, worktree, branch, status (working, waiting, idle, exited) and last activity.',
+    inputSchema: { type: 'object', properties: {} }, run: (me) => orch(me, 'sessions') },
+  { name: 'synapse_orch_read', description: 'Read the recent conversation of one session, to tell what it is doing, what it decided, whether it is stuck or done.',
+    inputSchema: { type: 'object', properties: { session: sessionArg, max_chars: { type: 'number' } }, required: ['session'] },
+    run: async (me, a) => {
+      const found = await orch(me, 'find', { session: a.session });
+      const agent = found.synapseId && listAgents().find((x) => x.id === found.synapseId);
+      if (!agent) return { session: found.id, name: found.name, kind: found.kind, context: '(Synapse has not found this agent\'s conversation yet. Try again in a moment, or ask it with synapse_orch_prompt.)' };
+      const { messages } = readAgentMessages(agent);
+      return { agent: { name: found.name, kind: found.kind, cwd: agent.cwd }, context: messages.length ? formatMessages(messages, Math.min(Number(a.max_chars) || 12000, 40000)) : '(No readable transcript for this agent type yet.)' };
+    } },
+  { name: 'synapse_orch_start', description: 'Start a new session in an open project or worktree. It opens in the background; the user sees it in the sidebar.',
+    inputSchema: { type: 'object', properties: { ...placeArgs, ...startArgs } }, run: (me, a) => orch(me, 'start', a) },
+  { name: 'synapse_orch_prompt', description: 'Send a message to a running session, as if the user typed it.',
+    inputSchema: { type: 'object', properties: { session: sessionArg, text: { type: 'string' } }, required: ['session', 'text'] }, run: (me, a) => orch(me, 'prompt', a) },
+  { name: 'synapse_orch_close', description: 'Close a session (and its forks). Ask the user first if it is working.',
+    inputSchema: { type: 'object', properties: { session: sessionArg }, required: ['session'] }, run: (me, a) => orch(me, 'close', a) },
+  { name: 'synapse_orch_worktree_open', description: 'Open a worktree in a project: an existing branch, or a new branch made from base (default: the remote\'s default branch). Give kind and/or prompt to start a session in it right away.',
+    inputSchema: { type: 'object', properties: { project: placeArgs.project, branch: { type: 'string', description: 'Branch name (existing or new)' }, base: { type: 'string', description: 'For a new branch: the branch to start from' }, ...startArgs }, required: ['project', 'branch'] },
+    run: (me, a) => orch(me, 'worktree-open', a) },
+  { name: 'synapse_orch_worktree_close', description: 'Delete a worktree: its sessions close and the folder is removed. With safe deletion on (the default), uncommitted work is committed to its branch first. Get the user\'s yes first.',
+    inputSchema: { type: 'object', properties: { ...placeArgs, force: { type: 'boolean', description: 'Only when safe deletion is off and the user agreed to lose uncommitted changes' } }, required: ['worktree'] },
+    run: (me, a) => orch(me, 'worktree-close', a) },
+];
+async function orch(me, action, args = {}) {
+  let at;
+  try { at = JSON.parse(fs.readFileSync(path.join(DATA, 'orchestrator.json'), 'utf8')); } catch { throw new Error('The Synapse app is not running. Ask the user to open Synapse.'); }
+  let res;
+  try {
+    res = await fetch(`http://127.0.0.1:${at.port}/act`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${at.token}` }, body: JSON.stringify({ agent: me.id, action, args }), signal: AbortSignal.timeout(150_000) });
+  } catch { throw new Error('Could not reach the Synapse app. Is it open?'); }
+  const body = await res.json().catch(() => ({}));
+  if (body.error) throw new Error(body.error);
+  return body.value;
+}
+// listed for the orchestrator only: it runs in its own folder, or it is the agent the app named
+function isOrchestrator() {
+  const inside = (d) => { try { const r = path.resolve(d); return r === ORCH_DIR || r.startsWith(ORCH_DIR + path.sep); } catch { return false; } };
+  if (inside(process.cwd()) || (process.env.PWD && inside(process.env.PWD))) return true;
+  try { const at = JSON.parse(fs.readFileSync(path.join(DATA, 'orchestrator.json'), 'utf8')); const id = agentForProcess(process.ppid)?.id; return !!at.agent && at.agent === id; } catch { return false; }
+}
+const toolsFor = () => (isOrchestrator() ? [...TOOLS, ...ORCH_TOOLS] : TOOLS);
+
 // the agent browser lives in the Synapse app (app/agent-browser.mjs); it says where in ~/.synapse/agent-browser.json
 async function browser(me, { action, ...args }) {
   let at;
@@ -151,9 +201,9 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
       } });
     }
     if (method === 'ping') return write({ id, result: {} });
-    if (method === 'tools/list') return write({ id, result: { tools: TOOLS.map(({ run, ...t }) => t) } });
+    if (method === 'tools/list') return write({ id, result: { tools: toolsFor().map(({ run, ...t }) => t) } });
     if (method === 'tools/call') {
-      const tool = TOOLS.find((t) => t.name === params?.name);
+      const tool = [...TOOLS, ...ORCH_TOOLS].find((t) => t.name === params?.name);
       if (!tool) return write({ id, error: { code: -32602, message: `Unknown tool ${params?.name}` } });
       try {
         const me = self();

@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('synapse', {
     onShow: (fn) => on('agent-browser:show', fn),
   },
   notify: { done: (a) => call('notify:done', a), onOpen: (fn) => on('notify:open', fn) },
+  orchestrator: { folder: () => call('orchestrator:folder'), agent: (id) => call('orchestrator:agent', { id }), reply: (a) => call('orchestrator:reply', a), onCall: (fn) => on('orchestrator:call', fn) },
   history: {
     sources: () => call('history:sources'),
     import: (kind) => call('history:import', { kind }),
@@ -80,8 +81,7 @@ contextBridge.exposeInMainWorld('synapse', {
   // the worktree cleanup (settings: Cleanup): what is due, run it now, and what a run did
   gc: { preview: () => call('gc:preview'), run: () => call('gc:run'), onDone: (fn) => on('gc:done', fn) },
   settings: { usage: () => call('talk:usage'), get: () => call('settings:get'), set: (patch) => call('settings:set', patch) },
-  git: { dirty: (cwd) => call('git:dirty', { cwd }) },
-  git: { changes: (dir) => call('git:changes', { dir }), commit: (dir, message) => call('git:commit', { dir, message }), push: (dir) => call('git:push', { dir }), pr: (dir) => call('git:pr', { dir }) },
+  git: { dirty: (cwd) => call('git:dirty', { cwd }), changes: (dir) => call('git:changes', { dir }), commit: (dir, message) => call('git:commit', { dir, message }), push: (dir) => call('git:push', { dir }), pr: (dir) => call('git:pr', { dir }) },
   files: { exists: (cwd, paths) => call('files:exists', { cwd, paths }), reveal: (dir) => call('folder:reveal', { dir }), pick: (cwd) => call('files:pick', { cwd }), fromClipboard: () => call('clipboard:files'), save: (name, data) => call('files:save', { name, data }) },
   agent: { kill: (pid) => call('agent:kill', { pid }), rename: (pty, name) => call('agent:rename', { pty, name }) },
   account: {
