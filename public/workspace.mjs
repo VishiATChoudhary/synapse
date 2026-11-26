@@ -748,6 +748,7 @@ function initialize() {
     }]));
     for (const agent of state.agents) {
       if (local && agent.remote) continue; // friends' agents live under People
+      if (agent.orchestrator) continue; // pinned above the projects instead
       if (!groups.has(agent.projectKey)) groups.set(agent.projectKey, { key: agent.projectKey, name: agent.project, agents: [], worktrees: [] });
       const group = groups.get(agent.projectKey);
       group.agents.push(agent);
@@ -1192,6 +1193,7 @@ function initialize() {
     return el;
   }
 
+  let orchestratorPin = null;
   function renderSidebar() {
     if (sidebarDrag || paneKey) return;
     trackStates();
@@ -1276,6 +1278,19 @@ function initialize() {
       return node;
     };
     const visibleGroups = groups.filter((g) => !hits || g.agents.some((a) => hits.has(a.id)));
+    // the orchestrator (Settings > Agents) stays pinned at the top, whatever the grouping, never settled or archived
+    const orchestrator = state.agents.find((a) => a.orchestrator);
+    if (orchestrator && (!hits || hits.has(orchestrator.id))) {
+      if (!orchestratorPin) {
+        orchestratorPin = document.createElement('section'); orchestratorPin.className = 'orchestrator-pin';
+        orchestratorPin.innerHTML = `<h3 class="orchestrator-heading">${icon('network')}<span>Orchestrator</span></h3><div class="orchestrator-list"></div>`;
+      }
+      const node = sessionNode({ agent: orchestrator, children: [] }, 0, '');
+      node.querySelector('.row-actions').hidden = true;
+      sortHandle(node, node.firstElementChild, 'session', orchestrator.id, false);
+      syncChildren(orchestratorPin.lastElementChild, [node]);
+      desired.push(orchestratorPin);
+    }
     if (groupBy === 'project') {
       for (const group of groups) {
         let section = projectElements.get(group.key);
@@ -3307,6 +3322,7 @@ function initialize() {
       add(`New worktree in ${p.label}`, 'branch', () => runDesktop('worktree', { key: p.key }));
     }
     if (embedded) add('Add project', 'folder-plus', () => addProject());
+    if (embedded) add(desktop?.orchestrator?.on ? 'Turn the orchestrator off' : 'Turn the orchestrator on', 'network', () => runDesktop('orchestrator', { on: !desktop?.orchestrator?.on }));
     if (agent) {
       add(`Rename "${titleOf(agent)}"`, 'edit', renameAgent);
       if (agent.owned) {

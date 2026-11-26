@@ -1398,3 +1398,8 @@ body.sorting .session-row .row-actions { display: none; }
 #notif-bell[aria-pressed='true'] { color: var(--color-ink); }
 @keyframes bell-ring { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(14deg); } 40% { transform: rotate(-11deg); } 60% { transform: rotate(7deg); } 80% { transform: rotate(-4deg); } }
 @media (prefers-reduced-motion: reduce) { .ntf, .ntf-toast, .ntf-foot { transition: none; } #notif-bell.ring .icon { animation: none; } }
+
+/* the orchestrator (Settings > Agents): pinned at the top of the session list, it stays in view while the list scrolls */
+.orchestrator-pin { position: sticky; top: 0; z-index: 2; margin: 0 0 8px; padding: 2px 0 6px; background: var(--color-sidebar); border-bottom: 1px solid var(--color-border); }
+.orchestrator-heading { display: flex; align-items: center; gap: 6px; margin: 4px 0 2px; padding: 4px 10px; font-size: var(--text-xs); font-weight: 600; color: var(--color-muted); }
+.orchestrator-heading .icon { width: 13px; height: 13px; stroke-width: 1.8; }
