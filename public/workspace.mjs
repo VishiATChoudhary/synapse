@@ -836,9 +836,10 @@ function initialize() {
   }
   function placeNotif(k, count) {
     const h = 62;
-    if (notifOpen) return { y: -(k * (h + NOTIF_GAP)), scale: 1, opacity: 1 };
+    // top right, under the bell: the newest on top, older ones peeking out below it and fanning down on hover
+    if (notifOpen) return { y: k * (h + NOTIF_GAP), scale: 1, opacity: 1 };
     const d = Math.min(k, NOTIF_SHOWN - 1);
-    return { y: -(d * NOTIF_PEEK), scale: 1 - d * 0.05, opacity: k < NOTIF_SHOWN ? 1 : 0 };
+    return { y: d * NOTIF_PEEK, scale: 1 - d * 0.05, opacity: k < NOTIF_SHOWN ? 1 : 0 };
   }
   function renderNotifs(arrived = false) {
     const bell = $('notif-bell'), count = $('notif-count');
@@ -859,7 +860,7 @@ function initialize() {
       root.querySelectorAll('.ntf-toast').forEach(leaveNotif);
       root.querySelector('.ntf-foot')?.remove();
       clearTimeout(notifHideTimer);
-      notifHideTimer = setTimeout(() => { root.hidden = true; root.replaceChildren(); }, 240);
+      notifHideTimer = setTimeout(() => { root.hidden = true; root.replaceChildren(); notifMoved(); }, 240);
       return;
     }
     clearTimeout(notifHideTimer);
@@ -875,7 +876,7 @@ function initialize() {
         el.querySelector('.ntf-text > span').textContent = n.text;
         el.dataset.kind = n.kind;
         const p0 = placeNotif(0, shown.length);
-        el.style.transform = `translateY(${p0.y + 24}px) scale(1)`; el.style.opacity = '0';
+        el.style.transform = `translateY(${p0.y - 24}px) scale(1)`; el.style.opacity = '0';
         root.appendChild(el);
         el.getBoundingClientRect(); // start from below the front, then spring into place
       }
@@ -897,9 +898,17 @@ function initialize() {
     if (notifOpen && notifs.length > 1) {
       if (!foot) { foot = document.createElement('div'); foot.className = 'ntf-foot'; foot.innerHTML = '<span></span><button type="button" class="text-button ntf-clear">Clear all</button>'; root.appendChild(foot); }
       foot.querySelector('span').textContent = more > 0 ? `${more} more` : '';
-      foot.style.transform = `translateY(${-(shown.length * (62 + NOTIF_GAP))}px)`;
+      foot.style.transform = `translateY(${shown.length * (62 + NOTIF_GAP)}px)`;
     } else foot?.remove();
+    notifMoved();
     root.style.setProperty('--ntf-h', `${notifOpen ? shown.length * (62 + NOTIF_GAP) + (notifs.length > 1 ? 30 : 0) : 62 + (Math.min(shown.length, NOTIF_SHOWN) - 1) * NOTIF_PEEK}px`);
+  }
+  // the stack floats over the page: a docked terminal (a native layer) leaves a hole for it and the agent browser
+  // steps aside while they overlap, or they would hide it. Measured once the height has settled.
+  let notifMoveTimer = 0;
+  function notifMoved() {
+    const sync = () => { try { syncDocks(); placeBrowser(); } catch {} }; // before the dock code has run, nothing is docked yet
+    sync(); clearTimeout(notifMoveTimer); notifMoveTimer = setTimeout(sync, 420);
   }
   function leaveNotif(el) {
     if (el.dataset.leaving) return;
@@ -937,7 +946,7 @@ function initialize() {
     setInterval(() => { if (!root.hidden) for (const el of root.querySelectorAll('.ntf-toast')) { const n = notifs.find((x) => x.id === el.dataset.id); if (n) el.querySelector('time').textContent = relativeTime(n.at); } }, 30_000);
     renderNotifs();
   }
-  if (paneKey) document.getElementById('notif-stack')?.remove(); else setupNotifs();
+  if (paneKey) { document.getElementById('notif-stack')?.remove(); document.getElementById('notif-bell')?.remove(); } else setupNotifs();
 
   function trackStates() {
     let changed = false;
@@ -2061,7 +2070,9 @@ function initialize() {
     const agent = byId.get(selectedId), slot = $('browser-slot');
     const visible = slot && agent && !$('inspector').hidden && inspectorTab === 'browser' && view === 'session' && !browserCovered && !document.querySelector('dialog[open], .pop-menu, .approval-card:not([hidden]) .ask-menu') && !asksOf(agent).length && document.visibilityState === 'visible' && Date.now() >= browserSettle;
     const r = visible ? slot.getBoundingClientRect() : null;
-    const bounds = r && r.width > 40 && r.height > 40 ? { x: r.left, y: r.top, width: r.width, height: r.height } : null;
+    const stack = $('notif-stack'), sr = stack && !stack.hidden ? stack.getBoundingClientRect() : null;
+    const underStack = r && sr && sr.height && sr.left < r.right && sr.right > r.left && sr.top < r.bottom && sr.bottom > r.top;
+    const bounds = r && !underStack && r.width > 40 && r.height > 40 ? { x: r.left, y: r.top, width: r.width, height: r.height } : null;
     const key = browserKey(agent) || '';
     if (document.body.dataset.browserAgent !== key) document.body.dataset.browserAgent = key; // which agent's browser the panel is for (tests read it)
     const placed = JSON.stringify([key, bounds && Object.values(bounds).map(Math.round)]);
@@ -3142,7 +3153,7 @@ function initialize() {
     if (!embedded || paneKey || !desktop) return;
     const agent = byId.get(selectedId), session = desktopActive && view === 'session' && agent && !splitActive && !$('thread-view').hidden;
     // what floats over the page (the update card, a toast): the docked terminals leave a hole there
-    const covers = ['update-card', 'toast'].map((id) => $(id)).filter((el) => el && !el.hidden && el.getClientRects().length)
+    const covers = ['update-card', 'toast', 'notif-stack'].map((id) => $(id)).filter((el) => el && !el.hidden && el.getClientRects().length)
       .map((el) => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height }; });
     const want = {
       main: session && agent.owned && tab === 'terminal' ? { id: agent.id, rect: dockRect($('term-host')), covers } : null,
@@ -3341,14 +3352,18 @@ function initialize() {
     for (const agent of state.agents) if (agent.project) seen.set(agent.project, (seen.get(agent.project) || 0) + 1);
     return [...seen].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
   };
-  function searchEntries() {
+  // shown: the keys on screen, for a background refresh. Those keep their rows; working agents' activity times
+  // change every second, and picking the newest few anew swapped rows in and out while you looked.
+  function searchEntries(shown = null) {
     const query = $('search-input').value.trim().toLowerCase(), words = query.split(/\s+/).filter(Boolean);
     const score = (label) => (words.length ? words.map((w) => wordScore(w, label)).reduce((a, b) => (a < 0 || b < 0 ? -1 : a + b), 0) : 0);
     const groups = [];
     const scope = searchScope?.kind;
     const pool = scope === 'project' ? state.agents.filter((agent) => agent.project === searchScope.name) : state.agents;
     if (!scope || scope === 'sessions' || scope === 'project') {
-      const sessions = searchSessions(pool, query).slice(0, scope ? 40 : query ? 10 : 6);
+      let sessions = searchSessions(pool, query);
+      if (shown) sessions = [...sessions.filter((a) => shown.has(`a:${a.id}`)), ...sessions.filter((a) => !shown.has(`a:${a.id}`))];
+      sessions = sessions.slice(0, scope ? 40 : query ? 10 : 6);
       if (sessions.length) groups.push(['Sessions', sessions.map((agent) => ({ key: `a:${agent.id}`, agent }))]);
     }
     if (scope === 'projects') {
@@ -3375,7 +3390,7 @@ function initialize() {
   // background: a state refresh while the palette is open (about once a second). Rows keep their places and the
   // highlighted row stays highlighted; only what a row says changes. Reordering here made the list flash.
   function renderSearch(background = false) {
-    const { query, groups } = searchEntries();
+    const { query, groups } = searchEntries(background ? new Set(searchHits.map((h) => h.key)) : null);
     const selectedKey = searchHits[searchIndex]?.key;
     if (background) {
       const was = new Map(searchHits.map((h, i) => [h.key, i]));
@@ -3391,10 +3406,13 @@ function initialize() {
       for (const hit of hits) entries.push({ key: hit.key, html: hitHtml(hit, index++), row: true });
     }
     if (!entries.length) entries.push({ key: `empty:${query}`, html: `<p class="search-empty">Nothing matches “${escapeHtml(query)}”.</p>` });
+    // a working agent's spinner carries its phase (the clock), so its html differed on every refresh and the row
+    // was rebuilt each second: the palette flashed while agents worked. Rows compare without it.
+    for (const entry of entries) entry.sig = entry.html.replace(/animation-delay:-\d+ms/g, '');
     const list = $('search-results'), motion = !background && !stillMotion() && paletteState === 'open';
     if (background) { // nothing changed: leave the DOM alone
       const rows = [...list.children].filter((e) => !e.classList.contains('leave'));
-      if (rows.length === entries.length && rows.every((e, i) => e.dataset.key === entries[i].key && e.dataset.html === entries[i].html)) return;
+      if (rows.length === entries.length && rows.every((e, i) => e.dataset.key === entries[i].key && e.dataset.html === entries[i].sig)) return;
     }
     const old = new Map([...list.children].filter((e) => !e.classList.contains('leave')).map((e) => [e.dataset.key, e]));
     const before = new Map([...old].map(([key, e]) => [key, e.offsetTop]));
@@ -3407,12 +3425,12 @@ function initialize() {
     let arriving = 0;
     const nodes = entries.map((entry) => {
       let e = old.get(entry.key);
-      if (e && e.dataset.html !== entry.html) { const t = document.createElement('template'); t.innerHTML = entry.html; const fresh = t.content.firstElementChild; for (const a of [...e.attributes]) if (!['data-key', 'data-html', 'class', 'style'].includes(a.name)) e.removeAttribute(a.name); for (const a of fresh.attributes) if (a.name !== 'class') e.setAttribute(a.name, a.value); e.className = fresh.className; e.innerHTML = fresh.innerHTML; }
+      if (e && e.dataset.html !== entry.sig) { const t = document.createElement('template'); t.innerHTML = entry.html; const fresh = t.content.firstElementChild; for (const a of [...e.attributes]) if (!['data-key', 'data-html', 'class', 'style'].includes(a.name)) e.removeAttribute(a.name); for (const a of fresh.attributes) if (a.name !== 'class') e.setAttribute(a.name, a.value); e.className = fresh.className; e.innerHTML = fresh.innerHTML; }
       if (!e) {
         const t = document.createElement('template'); t.innerHTML = entry.html; e = t.content.firstElementChild;
         if (motion || paletteState === 'opening') { e.classList.add('arrive'); e.style.setProperty('--d', `${40 + Math.min(arriving++ * 15, 80)}ms`); }
       }
-      e.dataset.key = entry.key; e.dataset.html = entry.html;
+      e.dataset.key = entry.key; e.dataset.html = entry.sig;
       return e;
     });
     const leaving = [...list.querySelectorAll(':scope > .leave')];
