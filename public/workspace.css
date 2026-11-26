@@ -1373,10 +1373,10 @@ body.sorting .session-row .row-actions { display: none; }
 
 /* agent notifications: a toast stack at the bottom right (after bencho.dev's toast stack, MIT). Newest in front,
    two more peeking above it a step smaller; hovering fans them out into a list on one spring. */
-.ntf { position: fixed; z-index: var(--z-toast); left: 10px; bottom: 58px; width: calc(var(--sidebar-width) - 20px); height: var(--ntf-h, 62px); transition: height .38s cubic-bezier(.32, 1.18, .44, 1); }
+.ntf { position: fixed; z-index: var(--z-toast); right: 12px; top: 56px; width: min(340px, calc(100vw - 24px)); height: var(--ntf-h, 62px); transition: height .38s cubic-bezier(.32, 1.18, .44, 1); }
 .ntf[hidden] { display: none; }
 .ntf::before { content: ''; position: absolute; inset: -12px -12px -12px -12px; } /* the hover frame reaches a little past the cards */
-.ntf-toast { position: absolute; left: 0; right: 0; bottom: 0; height: 62px; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 10px; border-radius: 14px; background: var(--color-raised); color: var(--color-ink); box-shadow: var(--shadow-pop); transform-origin: 50% 0; cursor: pointer; transition: transform .42s cubic-bezier(.32, 1.18, .44, 1), opacity .3s ease, background-color .15s ease; will-change: transform; }
+.ntf-toast { position: absolute; left: 0; right: 0; top: 0; height: 62px; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 10px; border-radius: 14px; background: var(--color-raised); color: var(--color-ink); box-shadow: var(--shadow-pop); transform-origin: 50% 100%; cursor: pointer; transition: transform .42s cubic-bezier(.32, 1.18, .44, 1), opacity .3s ease, background-color .15s ease; will-change: transform; }
 .ntf-toast:not([data-front]) { background: color-mix(in srgb, var(--color-raised) 92%, var(--color-ink)); }
 .ntf[data-open] .ntf-toast, .ntf-toast:hover { background: var(--color-raised); }
 .ntf-toast:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
@@ -1393,7 +1393,13 @@ body.sorting .session-row .row-actions { display: none; }
 .ntf-toast:hover .ntf-x, .ntf-toast:focus-within .ntf-x, .ntf-x:focus-visible { opacity: 1; }
 .ntf-x:hover { background: var(--color-hover); color: var(--color-ink); }
 .ntf-x .icon { width: 14px; height: 14px; }
-.ntf-foot { position: absolute; left: 0; right: 0; bottom: 0; height: 26px; display: flex; align-items: center; justify-content: space-between; padding: 0 6px; font-size: var(--text-xs); color: var(--color-muted); transition: transform .42s cubic-bezier(.32, 1.18, .44, 1); }
+.ntf-foot { position: absolute; left: 0; right: 0; top: 0; height: 26px; display: flex; align-items: center; justify-content: space-between; padding: 0 6px; font-size: var(--text-xs); color: var(--color-muted); transition: transform .42s cubic-bezier(.32, 1.18, .44, 1); }
+/* the bell: right end of the top bar, the stack drops down under it */
+#notif-bell { position: relative; flex: none; display: inline-grid; place-items: center; width: 30px; height: 30px; color: var(--color-muted); }
+#notif-bell:hover { color: var(--color-ink); background: var(--color-hover); }
+#notif-bell .icon { width: 16px; height: 16px; }
+#notif-bell .nav-count { position: absolute; top: 2px; right: 1px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--color-selected); font-size: 9px; line-height: 14px; text-align: center; color: var(--color-secondary); }
+#notif-bell .nav-count[data-zero], #notif-bell .nav-count:empty { display: none; }
 #notif-bell.ring .icon { animation: bell-ring .7s ease; transform-origin: 50% 10%; }
 #notif-bell[aria-pressed='true'] { color: var(--color-ink); }
 @keyframes bell-ring { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(14deg); } 40% { transform: rotate(-11deg); } 60% { transform: rotate(7deg); } 80% { transform: rotate(-4deg); } }

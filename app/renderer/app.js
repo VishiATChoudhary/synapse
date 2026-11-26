@@ -2159,7 +2159,7 @@ async function openSettings(start) {
     paintSound(s.doneSound || 'bubbleTap');
     pane('notifications', null,
       group('When an agent finishes',
-        row('Notify when done', 'A notification when an agent finishes while Synapse is in the background, a toast when you are looking at another one.', toggle(s.notifyDone !== false, async (on, cb) => { cb.checked = CUES.notify = (await synapse.settings.set({ notifyDone: on })).notifyDone; })),
+        row('Sound when done', 'Play the done sound when an agent finishes. Finished agents show in the notification stack, top right.', toggle(s.notifyDone !== false, async (on, cb) => { cb.checked = CUES.notify = (await synapse.settings.set({ notifyDone: on })).notifyDone; })),
         row('Done sound', 'Plays when an agent finishes a turn. Pick one to hear it.'), soundSeg),
       group('When something fails',
         row('Error sound', 'A low purr when something fails or an agent quits with an error.', toggle(s.errorSound !== false, async (on) => { CUES.error = (await synapse.settings.set({ errorSound: on })).errorSound; if (CUES.error) playSound('purr'); }))));
@@ -3176,11 +3176,9 @@ function watchTurn(x, a) {
   const s = M.slots.find((sl) => sl.sessions.includes(x));
   const looking = document.hasFocus() && !canvasOpen && !fanOpen && (!workspaceOpen || workspaceView === 'session') && $('#modal').hidden && s && focusedSlot() === s && top(s) === x;
   if (looking) return;
-  // a tab still called just "codex" says little with three of them open; the agent's name says which
-  const name = x.title && x.title !== x.kind ? x.title : a.name || x.title;
+  // the GUI's notification stack says it (public/workspace.mjs pushNotif); a toast or a macOS notification on top
+  // of that told the same thing twice
   if (CUES.done !== 'off' && CUES.notify) playSound(CUES.done);
-  if (document.hasFocus()) toast(`✓ ${name} is done · open`, false, () => openTurn(x.pty));
-  else synapse.notify.done({ pty: x.pty, title: name, took: long });
 }
 function openTurn(pty) {
   const s = M.slots.find((sl) => sl.sessions.some((x) => x.pty === pty));

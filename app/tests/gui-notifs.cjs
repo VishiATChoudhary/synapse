@@ -93,6 +93,11 @@ const launch = async (slot) => {
   // the bell shows the stack and hides it again
   await ui(`document.querySelector('#notif-bell').click()`);
   assert.equal(await ui(`document.querySelector('#notif-stack').hidden`), false, 'bell shows');
+  await sleep(500);
+  const place = await ui(`(() => { const s = document.querySelector('#notif-stack').getBoundingClientRect(), b = document.querySelector('#notif-bell'); return { right: innerWidth - s.right, top: s.top, inTopbar: !!b.closest('.topbar'), bellRight: innerWidth - b.getBoundingClientRect().right }; })()`);
+  assert.ok(place.inTopbar && place.bellRight < 20, `bell at the top bar's right end: ${JSON.stringify(place)}`);
+  assert.ok(place.right < 20 && place.top < 70, `stack top right: ${JSON.stringify(place)}`);
+  fs.writeFileSync('/tmp/gui-notifs-top-right.png', (await win.webContents.capturePage()).toPNG());
   await sleep(7000);
   assert.equal(await ui(`document.querySelector('#notif-stack').hidden`), false, 'bell-opened stack stays');
   await ui(`document.querySelector('#notif-bell').click()`);
