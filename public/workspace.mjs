@@ -41,15 +41,48 @@ const toolRow = (t) => `${icon(t.icon)}<span class="tool-verb">${escapeHtml(t.ve
 // "@mara" in a message, not inside an email address
 export const MENTION = /(^|[\s(])@([A-Za-z0-9][\w-]{1,31})\b/g;
 
+// Graphics in the chat, as in Claude and T3: ```svg and ```mermaid draw in place; ```html (or ```html preview)
+// shows a page in a sandbox. Each keeps its source one click away. A fence still being written stays code.
+const GRAPHIC = { svg: 'svg', mermaid: 'mermaid', html: 'html', 'html preview': 'html', visual: 'html' };
+function codeBlock(language, code, closed) {
+  const kind = closed && GRAPHIC[language.toLowerCase()], copy = '<button type="button" data-copy-code>Copy code</button>';
+  const pre = (hidden) => `<pre${hidden ? ' hidden' : ''}><code>${escapeHtml(code)}</code></pre>`;
+  if (kind === 'svg' && /<svg[\s>]/i.test(code)) // as an image an svg can never run script
+    return `<div class="code-block graphic" data-graphic="svg"><div class="code-label"><span>svg</span><span class="code-actions"><button type="button" data-graphic-toggle>Code</button>${copy}</span></div><div class="graphic-view"><img alt="" src="data:image/svg+xml;charset=utf-8,${escapeHtml(encodeURIComponent(code))}"></div>${pre(true)}</div>`;
+  if (kind === 'mermaid')
+    return `<div class="code-block graphic" data-graphic="mermaid"><div class="code-label"><span>mermaid</span><span class="code-actions"><button type="button" data-graphic-toggle>Code</button>${copy}</span></div><div class="graphic-view" data-pending></div>${pre(true)}</div>`;
+  if (kind === 'html') {
+    // plain ```html is often a snippet of the user's code: it opens on the code, with Preview a click away
+    const show = language.toLowerCase() !== 'html' || /^\s*(<!doctype html|<html[\s>])/i.test(code);
+    return `<div class="code-block graphic" data-graphic="html"${show ? '' : ' data-code'}><div class="code-label"><span>html</span><span class="code-actions"><button type="button" data-graphic-toggle>${show ? 'Code' : 'Preview'}</button>${copy}</span></div><div class="graphic-view" data-pending${show ? '' : ' hidden'}></div>${pre(show)}</div>`;
+  }
+  return `<div class="code-block"><div class="code-label"><span>${escapeHtml(language)}</span>${copy}</div>${pre(false)}</div>`;
+}
+
+// An html graphic runs in a sandboxed frame with no access to Synapse, the disk or the local network: its own
+// origin, scripts and styles inline or from the web, no requests of its own. It reports its height to fit.
+export function graphicDoc(code, dark) {
+  const csp = "default-src 'none'; script-src 'unsafe-inline' https:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'";
+  const fit = '<script>(()=>{const s=()=>parent.postMessage({synapseGraphic:1,height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*");new ResizeObserver(s).observe(document.documentElement);addEventListener("load",s);s()})()<\/script>';
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="color-scheme" content="${dark ? 'dark' : 'light'}"><style>html{color-scheme:${dark ? 'dark' : 'light'}}body{margin:0;padding:12px;font:14px system-ui,sans-serif}</style></head><body>${code}${fit}</body></html>`;
+}
+
 export function renderMarkdown(value) {
   const blocks = [];
   const hold = (html) => `\u0000${blocks.push(html) - 1}\u0000`;
-  const source = String(value ?? '').replace(/[\u0000\u0001]/g, '').replace(/```([^\n`]*)\n([\s\S]*?)(?:```|$)/g, (_, language, code) =>
-    `\n${hold(`<div class="code-block"><div class="code-label"><span>${escapeHtml(language.trim())}</span><button type="button" data-copy-code>Copy code</button></div><pre><code>${escapeHtml(code.replace(/\n$/, ''))}</code></pre></div>`)}\n`);
+  const source = String(value ?? '').replace(/[\u0000\u0001]/g, '').replace(/```([^\n`]*)\n([\s\S]*?)(```|$)/g, (_, language, code, closed) =>
+    `\n${hold(codeBlock(language.trim(), code.replace(/\n$/, ''), !!closed))}\n`);
   const inline = (text) => {
     const parts = [];
     const keep = (html) => `\u0001${parts.push(html) - 1}\u0001`;
     let result = text.replace(/`([^`]+)`/g, (_, code) => keep(`<code>${escapeHtml(code)}</code>`));
+    // ![alt](src): a web or data image as is, a file on disk through the file server (graphicsIn adds the folder)
+    result = result.replace(/!\[([^\]]*)\]\(<?([^\s)>]+)>?(?:\s+"[^"]*")?\)/g, (all, alt, src) => {
+      if (/^(https?:|data:image\/)/i.test(src)) return keep(`<img class="md-image" alt="${escapeHtml(alt)}" loading="lazy" src="${escapeHtml(src)}">`);
+      if (/^[a-z][\w+.-]*:/i.test(src) && !/^file:/i.test(src)) return all;
+      const file = src.replace(/^file:\/\//i, '');
+      return keep(`<button type="button" class="md-image-file" data-file="${escapeHtml(file)}" title="${escapeHtml(file)}"><img class="md-image" alt="${escapeHtml(alt)}" loading="lazy" data-local-src="${escapeHtml(file)}"></button>`);
+    });
     result = result.replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, (_, label, url) => {
       let safe = false;
       try { safe = ['https:', 'http:'].includes(new URL(url).protocol); } catch {}
@@ -1753,11 +1786,63 @@ function initialize() {
 
   // Paths in a reply become links once the server confirms them; they open in the right-hand pane
   const fileSeen = new Map(); // cwd + path -> exists
+  // images from disk get the file server's address; mermaid draws; an html graphic gets its sandboxed frame
+  let mermaidLib = null;
+  const drawn = new Map(); // theme + source -> svg, so a message drawn again does not redraw
+  const loadMermaid = () => mermaidLib ||= new Promise((resolve, reject) => {
+    const s = document.createElement('script'); s.src = '/vendor/mermaid.min.js';
+    s.onload = () => resolve(globalThis.mermaid); s.onerror = () => { mermaidLib = null; reject(new Error('mermaid did not load')); };
+    document.head.append(s);
+  });
+  const darkTheme = () => document.documentElement.dataset.theme === 'night';
+  function graphicFrame(view) {
+    const code = view.parentElement.querySelector('pre code').textContent;
+    const frame = document.createElement('iframe');
+    frame.className = 'graphic-frame'; frame.title = 'Graphic'; frame.setAttribute('sandbox', 'allow-scripts');
+    frame.srcdoc = graphicDoc(code, darkTheme());
+    view.replaceChildren(frame); delete view.dataset.pending;
+  }
+  async function graphicsIn(elements, cwd) {
+    for (const el of elements) {
+      for (const img of el.querySelectorAll('img[data-local-src]')) {
+        img.src = `/api/file/raw?${new URLSearchParams({ path: img.dataset.localSrc, cwd: cwd || '' })}`;
+        img.removeAttribute('data-local-src');
+        img.closest('button')?.setAttribute('data-cwd', cwd || '');
+      }
+      for (const view of el.querySelectorAll('[data-graphic="html"] .graphic-view[data-pending]:not([hidden])')) graphicFrame(view);
+      for (const view of el.querySelectorAll('[data-graphic="mermaid"] .graphic-view[data-pending]')) {
+        delete view.dataset.pending;
+        const block = view.parentElement, code = block.querySelector('pre code').textContent, key = `${darkTheme()}\0${code}`;
+        try {
+          if (!drawn.has(key)) {
+            const lib = await loadMermaid();
+            lib.initialize({ startOnLoad: false, securityLevel: 'strict', theme: darkTheme() ? 'dark' : 'default', fontFamily: 'inherit' });
+            const { svg } = await lib.render(`mermaid-${Math.random().toString(36).slice(2)}`, code);
+            drawn.set(key, svg);
+          }
+          view.innerHTML = drawn.get(key);
+        } catch (e) {
+          // not a diagram after all: show its source with what was wrong
+          block.dataset.code = ''; view.hidden = true; block.querySelector('pre').hidden = false;
+          block.querySelector('[data-graphic-toggle]')?.remove();
+          view.insertAdjacentHTML('afterend', `<p class="graphic-error">${escapeHtml(String(e?.message || e).split('\n')[0].slice(0, 200))}</p>`);
+          document.querySelectorAll('body > [id^="dmermaid-"]').forEach((n) => n.remove()); // what a failed render leaves behind
+        }
+      }
+    }
+  }
+  // the html frame says how tall its page is
+  addEventListener('message', (event) => {
+    if (!event.data?.synapseGraphic) return;
+    const frame = [...document.querySelectorAll('iframe.graphic-frame')].find((f) => f.contentWindow === event.source);
+    if (frame) frame.style.height = `${Math.min(1400, Math.max(60, Number(event.data.height) || 0))}px`;
+  });
+
   async function linkFiles(elements, cwd) {
     const nodes = [];
     for (const element of elements) {
       const walk = document.createTreeWalker(element.querySelector('.message-body') || element, NodeFilter.SHOW_TEXT,
-        { acceptNode: (n) => n.parentElement.closest('a, pre, .file-link, .slash-cmd, .mention') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+        { acceptNode: (n) => n.parentElement.closest('a, pre, .file-link, .slash-cmd, .mention, .graphic-view') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
       while (walk.nextNode()) nodes.push(walk.currentNode);
     }
     const hits = nodes.map((n) => filePaths(n.data));
@@ -2369,7 +2454,7 @@ function initialize() {
     }
     desired.push(...folded);
     syncChildren(list, desired);
-    if (fresh.length) linkFiles(fresh, agent.cwd);
+    if (fresh.length) { linkFiles(fresh, agent.cwd); graphicsIn(fresh, agent.cwd); }
     // older entries came in above: keep what you were reading where it was
     const anchorEl = olderAnchor && !reset && Date.now() - olderAnchor.at < 15_000 && records[0]?.key !== olderAnchor.firstKey && list.querySelector(`[data-message-key="${CSS.escape(olderAnchor.key)}"]`);
     if (anchorEl) { scroller.scrollTop = previousTop + anchorEl.getBoundingClientRect().top - olderAnchor.top; olderAnchor = null; }
@@ -4201,6 +4286,13 @@ function initialize() {
     if (button.dataset.friendAccept) return answerFriend(button, 'accept');
     if (button.dataset.friendDeny) return answerFriend(button, 'deny');
     if (button.dataset.friendCancel) return answerFriend(button, 'cancel');
+    if (button.hasAttribute('data-graphic-toggle')) { // a graphic and its source, one at a time
+      const block = button.closest('.code-block'), view = block.querySelector('.graphic-view'), code = !('code' in block.dataset);
+      if (code) block.dataset.code = ''; else delete block.dataset.code;
+      view.hidden = code; block.querySelector('pre').hidden = !code; button.textContent = code ? 'Preview' : 'Code';
+      if (!code && view.dataset.pending !== undefined && block.dataset.graphic === 'html') graphicFrame(view);
+      return;
+    }
     if (button.hasAttribute('data-copy-code')) { if (await copyText(button.closest('.code-block').querySelector('code').textContent)) { button.textContent = 'Copied'; setTimeout(() => { if (button.isConnected) button.textContent = 'Copy code'; }, 2000); } return; }
     if (button.hasAttribute('data-copy-message')) { const message = renderedMessages.get(button.closest('[data-message-key]').dataset.messageKey); if (message && await copyText(message.text)) { button.innerHTML = icon('check'); setTimeout(() => { button.innerHTML = icon('copy'); }, 1200); } return; } // the button itself says it worked
     const action = button.dataset.action;

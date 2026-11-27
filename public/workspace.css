@@ -1409,3 +1409,14 @@ body.sorting .session-row .row-actions { display: none; }
 .orchestrator-pin { position: sticky; top: 0; z-index: 2; margin: 0 0 8px; padding: 2px 0 6px; background: var(--color-sidebar); border-bottom: 1px solid var(--color-border); }
 .orchestrator-heading { display: flex; align-items: center; gap: 6px; margin: 4px 0 2px; padding: 4px 10px; font-size: var(--text-xs); font-weight: 600; color: var(--color-muted); }
 .orchestrator-heading .icon { width: 13px; height: 13px; stroke-width: 1.8; }
+
+/* graphics in the chat: svg, mermaid, html previews and markdown images */
+.code-actions { display: inline-flex; gap: 2px; }
+.code-block.graphic .graphic-view { display: flex; justify-content: center; padding: 14px; overflow-x: auto; background: var(--color-paper); }
+.code-block.graphic .graphic-view[hidden] { display: none; }
+.code-block.graphic .graphic-view > img, .code-block.graphic .graphic-view > svg { max-width: 100%; height: auto; }
+.code-block.graphic[data-graphic='html'] .graphic-view { padding: 0; display: block; }
+.graphic-frame { display: block; width: 100%; height: 160px; border: 0; background: transparent; }
+.graphic-error { margin: 0; padding: 8px 14px; color: var(--color-muted); font: var(--text-xs) var(--font-body); border-top: 1px solid var(--color-border); }
+.md .md-image { display: block; max-width: 100%; max-height: 520px; border-radius: 10px; border: 1px solid var(--color-border); margin: 8px 0; }
+.md .md-image-file { display: block; padding: 0; background: none; border: 0; cursor: zoom-in; }

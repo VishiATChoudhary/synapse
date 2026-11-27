@@ -51,6 +51,7 @@ const STATIC = new Map([
   ['/canvas.html', ['public/index.html', 'text/html']],
   ['/workspace.css', ['public/workspace.css', 'text/css']],
   ['/workspace.mjs', ['public/workspace.mjs', 'text/javascript']],
+  ['/vendor/mermaid.min.js', ['public/vendor/mermaid.min.js', 'text/javascript']], // draws ```mermaid diagrams in the chat
   ['/activity.mjs', ['public/activity.mjs', 'text/javascript']],
   ['/file', ['public/file.html', 'text/html']],
   ['/file.mjs', ['public/file.mjs', 'text/javascript']],
