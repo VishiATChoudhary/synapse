@@ -2332,7 +2332,8 @@ function initialize() {
     // keyed by content, not position: loading older entries (or a new one pushing the window) keeps every element
     const seen = new Map();
     const conversation = (data.messages || []).map((message) => {
-      const base = `transcript-${message.ts}-${hash(message.text)}`, n = seen.get(base) || 0; seen.set(base, n + 1);
+      // a reply streamed into one place (Antigravity's step) keeps its element while it grows, so it doesn't blink
+      const base = message.step != null ? `transcript-step-${message.step}-${message.tool ? 't' : 'm'}` : `transcript-${message.ts}-${hash(message.text)}`, n = seen.get(base) || 0; seen.set(base, n + 1);
       return { ...message, type: 'transcript', time: new Date(message.ts).getTime() || 0, key: n ? `${base}-${n}` : base };
     });
     const messages = (data.chat || []).map((message) => ({ ...message, type: 'shared', time: message.t, key: message.id || `shared-${message.t}-${hash(message.text)}`, human: message.from === 'synapse-user' }));
@@ -2381,7 +2382,7 @@ function initialize() {
     }
     $('message-count').textContent = data.chat?.length || 0;
     $('messages-tab').setAttribute('aria-label', `Messages (${data.chat?.length || 0})`);
-    const signature = JSON.stringify([selectedId, tab, limit, records.map((record) => [record.key, record.delivered]), data.hasMore, agent.name, agent.status, busySince.get(agent.id) || 0, (outgoing.get(agent.id) || []).map((o) => o.key)]); // status: the live line ends when it stops
+    const signature = JSON.stringify([selectedId, tab, limit, records.map((record) => [record.key, record.delivered, record.step != null ? hash(record.text) : 0]), data.hasMore, agent.name, agent.status, busySince.get(agent.id) || 0, (outgoing.get(agent.id) || []).map((o) => o.key)]); // status: the live line ends when it stops
     if (list.dataset.signature === signature && !reset) return;
     const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 90, previousTop = scroller.scrollTop;
     list.dataset.signature = signature;
@@ -2418,7 +2419,7 @@ function initialize() {
     for (const message of records) {
       const user = message.role === 'user' || message.human, tool = message.tool;
       const note = !tool && ((message.type === 'shared' && !message.human) || !!message.teammate); // another agent's note: one line, opens on click
-      const messageSignature = `${message.key}:${message.delivered}:${agent.name}`;
+      const messageSignature = `${message.key}:${message.delivered}:${agent.name}${message.step != null ? `:${hash(message.text)}` : ''}`;
       let element = existing.get(message.key);
       if (!element) {
         element = document.createElement(tool || note ? 'details' : 'article'); element.dataset.messageKey = message.key;
