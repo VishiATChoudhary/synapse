@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
-import { FILES, readJSON, gitLocate, listAgents, readAgentMessages, projectOf, projectOfAgent, transcriptFile, colorOf, unwrapPaste } from './lib.mjs';
+import { FILES, readJSON, gitLocate, listAgents, readAgentMessages, projectOf, projectOfAgent, transcriptFile, transcriptTouched, colorOf, unwrapPaste } from './lib.mjs';
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
@@ -88,7 +88,7 @@ if (!isMainThread) {
         let preview = '', title = '', model = '';
         try {
           const file = transcriptFile(agent);
-          const mtime = agent.format === 'demo' ? lastActivity : file && fs.statSync(file).mtimeMs;
+          const mtime = agent.format === 'demo' ? lastActivity : file && (transcriptTouched(agent) || fs.statSync(file).mtimeMs); // a SQLite store writes its -wal first
           if (mtime) {
             if (previews.get(agent.id)?.mtime !== mtime) {
               const { messages } = readAgentMessages(agent, null, { tailBytes: 120_000, minMessages: 1 });

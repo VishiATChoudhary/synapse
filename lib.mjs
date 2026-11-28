@@ -307,12 +307,13 @@ function readAntigravity(file, from) {
     let start = from;
     if (start == null) { const r = db.prepare('SELECT idx FROM steps WHERE step_type IN (14, 15) ORDER BY idx DESC LIMIT 1 OFFSET 59').get(); start = r ? r.idx : 0; }
     const messages = [];
-    for (const r of db.prepare('SELECT step_type, metadata, step_payload FROM steps WHERE idx >= ? AND step_type IN (14, 15) ORDER BY idx').all(start)) {
+    for (const r of db.prepare('SELECT idx, step_type, metadata, step_payload FROM steps WHERE idx >= ? AND step_type IN (14, 15) ORDER BY idx').all(start)) {
       const body = Buffer.from(r.step_payload || []), secs = pbAt(Buffer.from(r.metadata || []), 1, 1)[0];
       const ts = typeof secs === 'number' ? new Date(secs * 1000).toISOString() : undefined;
-      if (r.step_type === 14) { const text = pbText(body, 19, 2).trim(); if (text) messages.push({ role: 'user', text, ts }); continue; }
+      // step: the row it came from, which stays the same while agy streams the reply into it
+      if (r.step_type === 14) { const text = pbText(body, 19, 2).trim(); if (text) messages.push({ role: 'user', text, ts, step: r.idx }); continue; }
       const text = pbText(body, 20, 1).trim(), tools = pbAt(body, 20, 7).map(agyTool);
-      if (text || tools.length) messages.push({ role: 'assistant', text: [text, ...tools].filter(Boolean).join('\n'), ts, tool: !text });
+      if (text || tools.length) messages.push({ role: 'assistant', text: [text, ...tools].filter(Boolean).join('\n'), ts, tool: !text, step: r.idx });
     }
     return { messages, end };
   } catch { return { messages: [], end: from }; } finally { try { db.close(); } catch {} }
@@ -763,7 +764,12 @@ export function turnBusy(src) {
     } else if (src.format === 'antigravity') {
       // the newest step: still running, or your prompt waiting for the model
       const db = openDb(file);
-      try { const last = db?.prepare('SELECT step_type, status FROM steps ORDER BY idx DESC LIMIT 1').get(); busy = !last ? null : last.step_type === 14 || last.status !== 3; }
+      // over only once the newest step is the model's finished turn with no tool calls: between steps (a tool's result
+      // written, the model not yet answering) the newest step is finished too, and the turn is still going
+      try {
+        const last = db?.prepare('SELECT step_type, status, step_payload FROM steps ORDER BY idx DESC LIMIT 1').get();
+        busy = !last ? null : !(last.step_type === 15 && last.status === 3 && !pbAt(Buffer.from(last.step_payload || []), 20, 7).length);
+      }
       finally { try { db?.close(); } catch {} }
     } else {
       const last = (readJSON(file, {}).messages || []).at(-1);
