@@ -33,14 +33,25 @@ fs.writeFileSync(path.join(codexDir, `rollout-2026-10-21T09-00-00-${codexId}.jso
   { type: 'event_msg', payload: { type: 'user_message', message: 'Add rate limits to the API' } },
 ].map((e) => JSON.stringify(e)).join('\n') + '\n');
 
+// one Antigravity chat in proj: its conversation store, and agy's index of what each conversation is about
+const agyId = '9a915ae0-a26a-411b-9a7e-6dc53d260283', agyHome = path.join(fixture, '.gemini', 'antigravity-cli');
+fs.mkdirSync(path.join(agyHome, 'conversations'), { recursive: true });
+fs.writeFileSync(path.join(agyHome, 'conversations', `${agyId}.db`), '');
+{
+  const { DatabaseSync } = require('node:sqlite'), db = new DatabaseSync(path.join(agyHome, 'conversation_summaries.db'));
+  db.exec('CREATE TABLE conversation_summaries (conversation_id text, title text, preview text, workspace_uris text, last_user_input_time datetime, last_modified_time datetime)');
+  db.prepare('INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, ?, ?)').run(agyId, 'Check the training runs', 'are the runs done?', JSON.stringify([`file://${proj}`]), '2026-10-19 08:00:00+00:00', '2026-10-19 08:05:00+00:00');
+  db.close();
+}
+
 // stand-in CLIs, found first through the test's own zsh startup file
-for (const cli of ['claude', 'codex']) fs.writeFileSync(path.join(fixture, 'bin', cli), `#!/bin/sh\necho "RESUMED ${cli} $* IN $(pwd)"\nexec sleep 600\n`, { mode: 0o755 });
+for (const cli of ['claude', 'codex', 'agy']) fs.writeFileSync(path.join(fixture, 'bin', cli), `#!/bin/sh\necho "RESUMED ${cli} $* IN $(pwd)"\nexec sleep 600\n`, { mode: 0o755 });
 fs.writeFileSync(path.join(fixture, 'zdot', '.zshenv'), `export PATH="${path.join(fixture, 'bin')}:$PATH"\n`);
 fs.writeFileSync(path.join(fixture, 'zdot', '.zprofile'), `export PATH="${path.join(fixture, 'bin')}:$PATH"\n`);
 
 fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [], skipLogin: true }));
 Object.assign(process.env, {
-  SYNAPSE_HOME: state, SYNAPSE_CLOUD: 'http://127.0.0.1:9', SYNAPSE_DESKTOP_VIEW: 'terminal', SYNAPSE_ONBOARDING: '1', SHELL: '/bin/zsh',
+  HOME: fixture, SYNAPSE_HOME: state, SYNAPSE_CLOUD: 'http://127.0.0.1:9', SYNAPSE_DESKTOP_VIEW: 'terminal', SYNAPSE_ONBOARDING: '1', SHELL: '/bin/zsh',
   SYNAPSE_CLAUDE_HOME: path.join(fixture, 'claude'), CODEX_HOME: path.join(fixture, 'codex'), ZDOTDIR: path.join(fixture, 'zdot'),
 });
 for (const key of Object.keys(process.env)) if (key.startsWith('SYNAPSE_SHOT') || key === 'SYNAPSE_DEBUG' || key === 'SYNAPSE_DEMO' || key === 'SYNAPSE_FAKE_REQUESTS') delete process.env[key];
@@ -72,7 +83,8 @@ const clickText = (sel, text) => js(`[...document.querySelectorAll(${JSON.string
   const rows = await js(`[...document.querySelectorAll('#onboard .import')].map((r) => r.textContent)`);
   assert.ok(rows.some((r) => /Claude Code.*1 chat/.test(r)), rows.join(' | '));
   assert.ok(rows.some((r) => /Codex.*1 chat/.test(r)), rows.join(' | '));
-  assert.ok(rows.some((r) => /Antigravity.*coming soon/.test(r)), rows.join(' | '));
+  assert.ok(rows.some((r) => /Antigravity.*1 chat/.test(r)), rows.join(' | '));
+  assert.ok(rows.some((r) => /OpenCode.*coming soon/.test(r)), rows.join(' | '));
   await sleep(700); await shot('tour-import');
 
   // importing links the CLIs' own folders into ~/.synapse/history
@@ -81,15 +93,18 @@ const clickText = (sel, text) => js(`[...document.querySelectorAll(${JSON.string
   await until(() => js(`[...document.querySelectorAll('#onboard .import')].find((r) => r.textContent.includes('Codex'))?.querySelector('button.sig') != null`), 'codex row');
   await js(`[...document.querySelectorAll('#onboard .import')].find((r) => r.textContent.includes('Codex')).querySelector('button').click()`);
   await until(() => fs.existsSync(path.join(state, 'history', 'codex')), 'the codex link');
+  await until(() => js(`[...document.querySelectorAll('#onboard .import')].find((r) => r.textContent.includes('Antigravity'))?.querySelector('button.sig') != null`), 'antigravity row');
+  await js(`[...document.querySelectorAll('#onboard .import')].find((r) => r.textContent.includes('Antigravity')).querySelector('button').click()`);
+  await until(() => fs.existsSync(path.join(state, 'history', 'antigravity')), 'the antigravity link');
   assert.equal(fs.realpathSync(path.join(state, 'history', 'claude')), path.join(fixture, 'claude', 'projects'));
   assert.equal(fs.realpathSync(path.join(state, 'history', 'codex')), path.join(fixture, 'codex', 'sessions'));
 
   // the list shows both, named by what was asked (not the /clear or the AGENTS.md preamble)
   await until(() => js(`[...document.querySelectorAll('#onboard .imports > .btn')].some((b) => b.textContent === 'see my chats')`), 'see my chats');
   await clickText('#onboard .imports > .btn', 'see my chats');
-  await until(() => js(`document.querySelectorAll('.past-list .opt').length === 2`), 'two past chats');
+  await until(() => js(`document.querySelectorAll('.past-list .opt').length === 3`), 'three past chats');
   const titles = await js(`[...document.querySelectorAll('.past-list .opt .k')].map((k) => k.textContent)`);
-  assert.deepEqual(titles, ['Add rate limits to the API', 'Fix the flaky login test']);
+  assert.deepEqual(titles, ['Check the training runs', 'Add rate limits to the API', 'Fix the flaky login test']);
   await sleep(700); await shot('past-chats');
 
   // picking the Claude chat resumes it in its folder (here inside the test's workspace), as a tab named after it
@@ -99,13 +114,19 @@ const clickText = (sel, text) => js(`[...document.querySelectorAll(${JSON.string
 
   // ⇧⌘H opens the list again; searching and Enter resumes the Codex one
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'H', modifiers: [process.platform === 'darwin' ? 'meta' : 'control', 'shift'] });
-  await until(() => js(`document.querySelectorAll('.past-list .opt').length === 2`), 'the list by shortcut');
+  await until(() => js(`document.querySelectorAll('.past-list .opt').length === 3`), 'the list by shortcut');
   await js(`const i = document.querySelector('.modal input[type=search]'); i.value = 'rate'; i.dispatchEvent(new Event('input'))`);
   await until(() => js(`document.querySelectorAll('.past-list .opt').length === 1`), 'search narrows');
   await js(`document.querySelector('.modal input[type=search]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
-  await until(async () => (await screen()).replace(/\n/g, '').includes(`RESUMED codex resume ${codexId} IN ${api}`), 'codex resumed in api', 20000);
+  await until(async () => (await screen()).replace(/\n/g, '').match(new RegExp(`RESUMED codex .*resume ${codexId} IN ${api}`)), 'codex resumed in api', 20000);
   await until(() => js(`[...document.querySelectorAll('.wt-name')].some((n) => n.title.startsWith(${JSON.stringify(api)}))`), 'its folder added as a workspace');
   await shot('resumed');
+
+  // and the Antigravity one comes back as agy on that conversation
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'H', modifiers: [process.platform === 'darwin' ? 'meta' : 'control', 'shift'] });
+  await until(() => js(`document.querySelectorAll('.past-list .opt').length === 3`), 'the list again');
+  await js(`[...document.querySelectorAll('.past-list .opt')].find((o) => o.textContent.includes('training runs')).click()`);
+  await until(async () => (await screen()).replace(/\n/g, '').includes(`RESUMED agy --conversation ${agyId} IN ${proj}`), 'agy resumed in proj', 20000);
 
   assert.deepEqual(errors, []);
   console.log('past chats: ok');

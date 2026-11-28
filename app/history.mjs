@@ -1,4 +1,4 @@
-// Chats people already had before Synapse: their Claude Code and Codex sessions, brought in so they can pick one up
+// Chats people already had before Synapse: their Claude Code, Codex and Antigravity sessions, brought in so they can pick one up
 // where they left it. Importing links each CLI's own session folder into ~/.synapse/history (nothing is copied or
 // moved, and the CLIs keep writing there); the past-chats list reads through those links, and resuming one starts
 // the CLI on it in its own folder (`claude --resume <id>`, `codex resume <id>`).
@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CLAUDE, DATA, WIN, readJSON, writeJSON, claudeMessage, codexMessage } from '../lib.mjs';
+import { CLAUDE, DATA, WIN, AGY_HOME, readJSON, writeJSON, claudeMessage, codexMessage } from '../lib.mjs';
 
 const HISTORY = path.join(DATA, 'history');
 const INDEX = path.join(HISTORY, 'index.json');
@@ -18,8 +18,9 @@ const CODEX = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 export const SOURCES = [
   { kind: 'claude', label: 'Claude Code', dir: () => path.join(CLAUDE, 'projects') },
   { kind: 'codex', label: 'Codex', dir: () => path.join(CODEX, 'sessions') },
+  { kind: 'antigravity', label: 'Antigravity', dir: () => path.join(AGY_HOME, 'conversations') },
 ];
-export const SOON = [{ kind: 'antigravity', label: 'Antigravity' }, { kind: 'opencode', label: 'OpenCode' }, { kind: 'cursor-agent', label: 'Cursor' }, { kind: 'copilot', label: 'Copilot' }];
+export const SOON = [{ kind: 'opencode', label: 'OpenCode' }, { kind: 'cursor-agent', label: 'Cursor' }, { kind: 'copilot', label: 'Copilot' }];
 
 const link = (kind) => path.join(HISTORY, kind);
 const imported = (kind) => { try { return fs.lstatSync(link(kind)).isSymbolicLink() && fs.existsSync(link(kind)); } catch { return false; } };
@@ -33,6 +34,8 @@ function files(kind, root) {
     for (const p of kids(root)) if (p.isDirectory()) for (const f of kids(path.join(root, p.name))) {
       if (f.isFile() && f.name.endsWith('.jsonl') && UUID.test(f.name.slice(0, -6))) out.push(path.join(root, p.name, f.name));
     }
+  } else if (kind === 'antigravity') {
+    for (const f of kids(root)) if (f.isFile() && f.name.endsWith('.db') && UUID.test(f.name.slice(0, -3))) out.push(path.join(root, f.name));
   } else {
     const walk = (d, depth) => { for (const e of kids(d)) { const p = path.join(d, e.name); if (e.isDirectory() && depth < 3) walk(p, depth + 1); else if (e.isFile() && /^rollout-.*\.jsonl$/.test(e.name)) out.push(p); } };
     walk(root, 0);
@@ -113,6 +116,24 @@ function describe(kind, file) {
 
 // what a running agent's chat is about, for the phone: its summary or title, else its first prompt. Read at most
 // once a minute per chat; only Claude and Codex chats are read this way
+// Antigravity keeps what each conversation is about in an index next to them: its title (or first prompt), the
+// folder it ran in and when it was last used
+function agySummaries() {
+  const out = new Map();
+  let db;
+  try {
+    db = new (process.getBuiltinModule('node:sqlite').DatabaseSync)(path.join(AGY_HOME, 'conversation_summaries.db'), { readOnly: true });
+    for (const r of db.prepare('SELECT conversation_id, title, preview, workspace_uris, last_user_input_time, last_modified_time FROM conversation_summaries').all()) {
+      let cwd = null;
+      try { const uri = JSON.parse(r.workspace_uris || '[]').find((u) => String(u).startsWith('file://')); if (uri) cwd = decodeURIComponent(new URL(uri).pathname); } catch {}
+      const title = clip(String(r.title || r.preview || ''));
+      const started = Date.parse(r.last_user_input_time) || Date.parse(r.last_modified_time) || null;
+      if (cwd && title) out.set(r.conversation_id, { id: r.conversation_id, cwd, title, started: started ? new Date(started).toISOString() : null });
+    }
+  } catch {} finally { try { db?.close(); } catch {} }
+  return out;
+}
+
 const abouts = new Map();
 export function aboutOf(a) {
   if (!a.transcript || !['claude', 'codex'].includes(a.kind)) return null;
@@ -133,12 +154,13 @@ async function scan({ limit = 2000 } = {}) {
   const out = [];
   for (const s of SOURCES) {
     if (!imported(s.kind)) continue;
+    const agy = s.kind === 'antigravity' ? agySummaries() : null;
     for (const [i, file] of files(s.kind, link(s.kind)).entries()) {
       if (i % 40 === 39) await new Promise((ok) => setImmediate(ok));
       let st; try { st = fs.statSync(file); } catch { continue; }
       const real = path.join(s.dir(), path.relative(link(s.kind), file)); // what the CLI itself calls the file
       const known = index[real];
-      const d = known && known.mtime === st.mtimeMs ? known.d : describe(s.kind, file);
+      const d = agy ? agy.get(path.basename(file, '.db')) || null : known && known.mtime === st.mtimeMs ? known.d : describe(s.kind, file);
       next[real] = { mtime: st.mtimeMs, d };
       if (d) out.push({ kind: s.kind, ...d, transcript: real, updatedAt: st.mtimeMs, missing: !fs.existsSync(d.cwd) });
     }

@@ -1906,7 +1906,7 @@ async function promptProject(mode) {
 }
 
 // ---------------------------------------------------------------- past chats
-// Claude Code and Codex chats from before Synapse. Importing links each CLI's session folder into ~/.synapse/history
+// Claude Code, Codex and Antigravity chats from before Synapse. Importing links each CLI's session folder into ~/.synapse/history
 // (app/history.mjs); the list reads them through it, and a pick resumes the chat in its own folder.
 function importRows({ browse = false, remove = false } = {}) {
   const box = el('div', 'imports');
@@ -2364,7 +2364,7 @@ async function openSettings(start) {
         row('Opening a worktree starts', 'What you get when you open a worktree (new or existing) or add a workspace: the New session screen to pick an agent and write the first prompt, a shell, or an agent right away.', opener),
         row('Link workspaces', 'Symlink workspaces added from elsewhere into ~/.synapse/workspaces, so the library can bring them back.', toggle(!!s.autoSymlink, async (on) => { await synapse.settings.set({ autoSymlink: on }); toast(on ? 'New workspaces get linked into ~/.synapse/workspaces' : 'Workspaces are no longer linked. Existing links stay.'); })),
         row('Safe worktree deletion', 'Deleting a worktree first commits its uncommitted changes (untracked files too) to its branch, so nothing is lost. Ignored files go with the folder.', toggle(s.safeWorktreeDelete !== false, async (on) => { M.safeDelete = (await synapse.settings.set({ safeWorktreeDelete: on })).safeWorktreeDelete; toast(on ? 'Deleting a worktree saves its changes to the branch first' : 'Worktrees with uncommitted changes ask before they are deleted'); }))),
-      group('Past chats', card(row('Chats from before Synapse', 'Import your Claude Code and Codex chats and pick them up here. ⇧⌘H', button('Browse', () => { close(); openPastChats(); })), importRows({ remove: true }))));
+      group('Past chats', card(row('Chats from before Synapse', 'Import your Claude Code, Codex and Antigravity chats and pick them up here. ⇧⌘H', button('Browse', () => { close(); openPastChats(); })), importRows({ remove: true }))));
 
     // ---- Cleanup: what happens to agents and worktrees you stop using. Agents are tidied by the GUI (its sidebar),
     // worktrees by the app (worktree-gc.mjs): closed, their work committed and pushed, the folder removed.

@@ -12,8 +12,10 @@ if (typeof electron === 'string') {
   const opencode = path.join(fixture, 'opencode.sh');
   fs.writeFileSync(opencode, '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$SYNAPSE_RESTORE_OPENCODE_ARGS"\nexec cat\n');
   fs.writeFileSync(path.join(fixture, 'opencode.db'), 'fixture');
+  fs.writeFileSync(path.join(fixture, '9a915ae0-a26a-411b-9a7e-6dc53d260283.db'), 'fixture'); // an Antigravity conversation store
   fs.writeFileSync(path.join(state, 'app.json'), JSON.stringify({ workspaces: [fixture], autoSymlink: false, skipLogin: true, profiles: {
     shell: { command: 'cat', label: 'Shell' }, opencode: { command: `/bin/sh ${opencode} --log-level error`, label: 'OpenCode' },
+    antigravity: { command: `/bin/sh ${opencode} --dangerously-skip-permissions`, label: 'Antigravity' },
   } }));
   fs.writeFileSync(path.join(state, 'sessions.json'), JSON.stringify({ version: 1, slots: [
     { worktree: fixture, top: 0, focused: false, sessions: [{ key: 'other', kind: 'shell', title: 'Other', parent: null }] },
@@ -60,6 +62,20 @@ const ui = (s) => frame.executeJavaScript(s, true);
       await win.webContents.executeJavaScript(`synapse.pty.kill(${JSON.stringify(made.id)})`, true);
     }
     console.log('PASS OpenCode restores its original session, preserves profile flags, and starts fresh for unavailable transcripts');
+    const agy = '9a915ae0-a26a-411b-9a7e-6dc53d260283';
+    for (const [transcript, expected] of [
+      [path.join(fixture, `${agy}.db`), ['--dangerously-skip-permissions', '--conversation', agy]],
+      [path.join(fixture, '11111111-2222-4333-8444-555555555555.db'), ['--dangerously-skip-permissions']],
+      [null, ['--dangerously-skip-permissions']],
+    ]) {
+      fs.rmSync(process.env.SYNAPSE_RESTORE_OPENCODE_ARGS, { force: true });
+      const args = { cwd: fixture, kind: 'antigravity', resume: { synapseId: 'antigravity-1', transcript } };
+      const made = await win.webContents.executeJavaScript(`synapse.pty.restore(${JSON.stringify(args)})`, true);
+      await until(() => fs.existsSync(process.env.SYNAPSE_RESTORE_OPENCODE_ARGS), 'agy launched');
+      assert.deepEqual(fs.readFileSync(process.env.SYNAPSE_RESTORE_OPENCODE_ARGS, 'utf8').trim().split('\n'), expected);
+      await win.webContents.executeJavaScript(`synapse.pty.kill(${JSON.stringify(made.id)})`, true);
+    }
+    console.log('PASS Antigravity restores its conversation with --conversation, and starts fresh without its store');
     await ui(`document.querySelector('[data-agent="desktop-child"]').click(); document.querySelector('#message-input').value = 'Draft across a restart'; document.querySelector('#message-input').dispatchEvent(new Event('input', { bubbles: true }));`);
     await until(() => JSON.parse(fs.readFileSync(path.join(fixture, 'state', 'sessions.json'))).slots[1].top === 1, 'selected fork saved');
     await ui(`document.querySelector('[data-agent="desktop-other"]').click(); document.querySelector('#session-menu').click(); document.querySelector('[data-session-action="close"]').click();`);
