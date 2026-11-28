@@ -473,7 +473,7 @@ function requestCloseSession(s, id) {
   const x = sess(s, id);
   if (!x) return;
   // closing the orchestrator by hand turns it off (it would come back at the next launch otherwise)
-  if (x.orchestrator) return confirm('Turn the orchestrator off? Settings > Agents turns it back on.', () => setOrchestrator({ on: false }).catch((e) => toast(e.message, true)), { danger: 'Turn off' });
+  if (x.orchestrator) return confirm('Turn the Brain off? Settings > Agents turns it back on.', () => setOrchestrator({ on: false }).catch((e) => toast(e.message, true)), { danger: 'Turn off' });
   const branch = sessionBranch(s, id);
   const working = branch.some((sid) => statusOf(sess(s, sid)) === 'working');
   if (branch.length > 1 || working) {
@@ -542,8 +542,8 @@ function syncOrchestrator({ restart = false } = {}) {
     if (have || !want || !M.profiles?.[kind]) return;
     const dir = await synapse.orchestrator.folder();
     const saved = orchSaved?.kind === kind ? orchSaved : null; orchSaved = null;
-    let s = saved?.resume ? await newSlot(dir, kind, null, null, { resume: saved.resume, title: 'Orchestrator', quiet: true }) : null;
-    s ||= await newSlot(dir, kind, null, null, { title: 'Orchestrator', quiet: true });
+    let s = saved?.resume ? await newSlot(dir, kind, null, null, { resume: saved.resume, title: 'Brain', quiet: true }) : null;
+    s ||= await newSlot(dir, kind, null, null, { title: 'Brain', quiet: true });
     const x = s?.sessions[0];
     if (!x) return;
     x.orchestrator = true;
@@ -578,7 +578,7 @@ function orchFind(query) {
   const hit = all.find(({ x, a }) => `desktop-${x.key}` === query || x.key === query || a?.synapseId === query)
     || all.find((h) => name(h) === q) || all.filter((h) => name(h).startsWith(q)).sort((h, k) => (h.x.exited - k.x.exited))[0];
   if (!hit) throw new Error(`No session matches "${query}". synapse_orch_sessions lists them.`);
-  if (hit.x.orchestrator) throw new Error('That is you, the orchestrator.');
+  if (hit.x.orchestrator) throw new Error('That is you, the Brain.');
   return hit;
 }
 function orchPlace({ project, worktree, cwd } = {}) {
@@ -664,7 +664,7 @@ async function orchAct(action, args) {
 synapse.orchestrator.onCall(async ({ id, agent, action, args }) => {
   try {
     const o = orchSession();
-    if (!o || o.x.exited || M.agents[o.x.pty]?.synapseId !== agent) throw new Error('Only the Synapse orchestrator can use this tool.');
+    if (!o || o.x.exited || M.agents[o.x.pty]?.synapseId !== agent) throw new Error('Only the Synapse Brain can use this tool.');
     const value = await orchAct(String(action), args || {});
     await synapse.orchestrator.reply({ id, value: value ?? null });
   } catch (e) { synapse.orchestrator.reply({ id, error: e.message }).catch(() => {}); }
@@ -740,7 +740,7 @@ async function restoreSessions(saved) {
 // ---------------------------------------------------------------- render
 
 // Agent logos live in renderer/logos/<profile>.svg. Colour ones are images, monochrome ones a mask so they follow the theme.
-const LOGOS = { claude: 'color', codex: 'mono', gemini: 'color', opencode: 'mono', 'cursor-agent': 'mono', copilot: 'mono', amp: 'color', shell: 'mono' };
+const LOGOS = { claude: 'color', codex: 'mono', gemini: 'color', antigravity: 'color', opencode: 'mono', 'cursor-agent': 'mono', copilot: 'mono', amp: 'color', shell: 'mono' };
 function logo(kind) {
   const how = LOGOS[kind];
   if (!how) return el('span', 'logo none', (kind || '?')[0].toUpperCase());
@@ -2338,12 +2338,12 @@ async function openSettings(start) {
     const actions = el('div', 'set-actions'); actions.append(saveCommands); commands.append(actions);
     const orchKind = el('select', 'set-input');
     for (const k of profileOrder().filter((k) => k !== 'shell')) { const o = el('option', '', M.profiles[k].label || k); o.value = k; orchKind.appendChild(o); }
-    orchKind.value = s.orchestrator?.kind || 'claude'; orchKind.setAttribute('aria-label', 'Orchestrator agent');
+    orchKind.value = s.orchestrator?.kind || 'claude'; orchKind.setAttribute('aria-label', 'Brain agent');
     orchKind.onchange = async () => { try { orchKind.value = (await setOrchestrator({ kind: orchKind.value })).kind; } catch (e) { toast(e.message, true); } };
     pane('agents', null,
-      group('Orchestrator',
-        row('Orchestrator', 'An agent pinned at the top of your sessions. It sees every session and can answer questions about them, start sessions, send them prompts, and open or close worktrees.', toggle(!!s.orchestrator?.on, async (on) => { await setOrchestrator({ on }); toast(on ? 'The orchestrator is pinned at the top of your sessions' : 'The orchestrator is off'); })),
-        row('Runs on', 'Which agent the orchestrator is. Changing it starts a new orchestrator.', orchKind)),
+      group('Brain',
+        row('Brain', 'An agent pinned at the top of your sessions. It sees every session and can answer questions about them, start sessions, send them prompts, and open or close worktrees.', toggle(!!s.orchestrator?.on, async (on) => { await setOrchestrator({ on }); toast(on ? 'The orchestrator is pinned at the top of your sessions' : 'The orchestrator is off'); })),
+        row('Runs on', 'Which agent the Brain runs on. Changing it starts a new Brain.', orchKind)),
       group('Integrations', card(row('Agent integrations', 'Add Synapse tools and prompt hooks to your agents’ settings. Existing files are backed up.', setupButton), setupReport)),
       group('Commands', el('p', 'set-desc set-pad', 'The command each agent starts with. New sessions use these; running ones keep theirs.'), commands),
       group('Forks', row('Send forks right away', 'Send a fork’s question at once, instead of leaving it in the child’s prompt for you to send.', toggle(!!s.autoSendFork, async (on) => { M.autoSendFork = (await synapse.settings.set({ autoSendFork: on })).autoSendFork; toast(on ? 'Forks send their question right away' : 'A fork’s question waits in its prompt for you'); }))));
@@ -3817,8 +3817,8 @@ let loginState = { mode: 'signin', startup: false, device: null };
 const chip = (kind, name) => { const c = el('span', 'ob-chip'); c.append(el('b', '', kind), el('span', '', name)); return c; };
 const wire = (label = '') => el('span', 'ob-wire', label);
 const TOUR = [
-  { title: 'Your agents, connected', body: 'Synapse runs Claude, Codex, Gemini and the rest side by side, and lets them read each other and pass messages. Here is how, in six quick steps.',
-    art: () => [chip('claude', 'api'), wire(), chip('codex', 'web'), wire(), chip('gemini', 'tests')] },
+  { title: 'Your agents, connected', body: 'Synapse runs Claude, Codex, Antigravity and the rest side by side, and lets them read each other and pass messages. Here is how, in six quick steps.',
+    art: () => [chip('claude', 'api'), wire(), chip('codex', 'web'), wire(), chip('antigravity', 'tests')] },
   { title: 'Bring your chats', body: 'Already chatting with Claude Code or Codex? Import those chats and pick any of them up right here, in its own folder, where it left off. Nothing is copied or moved: Synapse links to them.',
     imports: true },
   { title: 'Start an agent', body: 'Add a workspace (a folder or a repo), then start agents in it. Each gets its own terminal tab, and you can split them side by side.',
@@ -4281,7 +4281,7 @@ function workspaceState() {
       pane: `pane-${root(s).key}`,
       name: M.agents[x.pty]?.name || x.title, kind: x.kind, cwd: s.worktree,
       projectKey: x.orchestrator ? 'synapse:orchestrator' : worktreeOf(s.worktree)?.project.key || s.worktree,
-      project: x.orchestrator ? 'Orchestrator' : worktreeOf(s.worktree)?.project.label || s.worktree.split('/').pop(),
+      project: x.orchestrator ? 'Brain' : worktreeOf(s.worktree)?.project.label || s.worktree.split('/').pop(),
       orchestrator: !!x.orchestrator,
       status: x.exited ? 'exited' : statusOf(x) === 'working' ? 'busy' : statusOf(x),
       lastActivity: x.updatedAt, parent: x.parent == null ? null : `desktop-${sess(s, x.parent)?.key}`,

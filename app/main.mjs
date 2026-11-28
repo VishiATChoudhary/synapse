@@ -50,7 +50,6 @@ const DEFAULT_PROFILES = {
   shell: { command: '', label: 'shell' },
   claude: { command: 'claude', label: 'Claude Code' },
   codex: { command: 'codex', label: 'Codex' },
-  gemini: { command: 'gemini', label: 'Gemini CLI' },
   antigravity: { command: 'agy', label: 'Antigravity' },
   opencode: { command: 'opencode', label: 'OpenCode' },
   'cursor-agent': { command: 'cursor-agent', label: 'Cursor Agent' },
@@ -64,6 +63,8 @@ function config() {
   if (!c.profiles) { c.profiles = DEFAULT_PROFILES; dirty = true; }
   // agents added after a profile list was saved: offered once, editable like the rest
   for (const k of ['antigravity']) if (c.profiles && !c.profiles[k]) { c.profiles[k] = DEFAULT_PROFILES[k]; dirty = true; }
+  // Gemini CLI was replaced by Antigravity: the stock Gemini profile goes (one you changed stays)
+  if (c.profiles?.gemini?.command === 'gemini' && !c.geminiRetired) { delete c.profiles.gemini; if (c.orchestrator?.kind === 'gemini') c.orchestrator.kind = 'antigravity'; c.geminiRetired = true; dirty = true; }
   if (!c.workspaces) { c.workspaces = []; dirty = true; }
   if (c.autoSymlink === undefined) { c.autoSymlink = true; dirty = true; }
   if (c.autoSendFork === undefined) { c.autoSendFork = false; dirty = true; }

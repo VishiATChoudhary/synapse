@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Synapse: Brain mockups</title>
+<style>
+  :root {
+    --paper: oklch(14.2% 0 0); --side: oklch(16.6% 0 0); --panel: oklch(19.5% 0 0); --hover: oklch(22.5% 0 0); --sel: oklch(25.5% 0 0);
+    --ink: oklch(96% 0.004 265); --ink-2: oklch(80% 0.004 265); --muted: oklch(66% 0.004 265); --faint: oklch(48% 0.004 265);
+    --line: oklch(24.5% 0 0); --line-2: oklch(36% 0 0);
+    --accent: oklch(72% 0.16 42); --accent-text: oklch(77% 0.13 42); --accent-soft: oklch(27% 0.03 42);
+    --ok: oklch(74% 0.1 153); --ok-soft: oklch(26% 0.025 153); --warn: oklch(80% 0.12 85); --warn-soft: oklch(27% 0.03 85);
+    --err: oklch(76% 0.13 26); --err-soft: oklch(26% 0.035 26);
+    --orch: oklch(74% 0.12 285); --orch-soft: oklch(25% 0.04 285); --orch-line: oklch(38% 0.07 285);
+    --font: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; --mono: 'Fragment Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: oklch(10% 0 0); color: var(--ink); font: 14px/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+  .page { max-width: 1380px; margin: 0 auto; padding: 40px 32px 96px; }
+  h1 { font-size: 26px; font-weight: 600; letter-spacing: -.01em; margin: 0 0 6px; }
+  .lede { color: var(--muted); margin: 0 0 8px; max-width: 820px; }
+  .section { margin-top: 56px; }
+  .section > h2 { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; display: flex; gap: 10px; align-items: baseline; }
+  .section > h2 b { color: var(--orch); }
+  .section > p { color: var(--faint); margin: 0 0 18px; max-width: 900px; font-size: 13px; }
+  .row { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+  .caption { width: 268px; }
+  .caption h3 { margin: 12px 2px 4px; font-size: 14px; font-weight: 600; }
+  .caption p { margin: 0 2px; color: var(--muted); font-size: 12.5px; }
+
+  /* the orchestrator's mark: a small hub with spokes */
+  .orb { --s: 26px; width: var(--s); height: var(--s); border-radius: 50%; flex: none; display: grid; place-items: center; color: var(--orch);
+    background: radial-gradient(circle at 35% 30%, oklch(36% 0.09 285), var(--orch-soft) 70%); box-shadow: inset 0 0 0 1px var(--orch-line); }
+  .orb svg { width: 60%; height: 60%; }
+  .orb.live { box-shadow: inset 0 0 0 1px var(--orch-line), 0 0 0 3px oklch(74% 0.12 285 / .12); animation: breathe 2.6s ease-in-out infinite; }
+  @keyframes breathe { 50% { box-shadow: inset 0 0 0 1px var(--orch-line), 0 0 0 5px oklch(74% 0.12 285 / .05); } }
+
+  /* sidebar shell, as in the app */
+  .side { width: 268px; height: 600px; background: var(--side); border-radius: 14px; box-shadow: 0 0 0 1px var(--line); padding: 14px 10px; display: flex; flex-direction: column; overflow: hidden; }
+  .brand { display: flex; align-items: center; gap: 8px; justify-content: center; font-weight: 600; font-size: 15px; padding: 2px 0 12px; }
+  .brand i { width: 16px; height: 16px; border-radius: 4px; background: linear-gradient(135deg, var(--accent), oklch(60% 0.18 30)); display: block; }
+  .search { display: flex; align-items: center; gap: 8px; color: var(--muted); padding: 6px 8px; font-size: 13px; }
+  .search kbd { margin-left: auto; font: 11px var(--font); color: var(--faint); }
+  .proj { display: flex; align-items: center; gap: 8px; padding: 8px 8px 4px; font-weight: 600; font-size: 13.5px; }
+  .proj .badge { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; font-size: 9px; font-weight: 700; background: var(--ok-soft); color: var(--ok); }
+  .proj .n { margin-left: auto; color: var(--faint); font-weight: 400; font-size: 12px; }
+  .srow { display: flex; align-items: center; gap: 9px; padding: 6px 10px; border-radius: 10px; color: var(--ink-2); font-size: 13px; }
+  .srow .t { margin-left: auto; color: var(--faint); font-size: 11.5px; }
+  .srow.sel { background: var(--sel); color: var(--ink); }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--faint); }
+  .dot.work { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .dot.wait { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+  .dot.ok { background: var(--ok); }
+  .fade { margin-top: auto; height: 1px; }
+
+  /* A: command card */
+  .card-a { margin: 2px 2px 12px; padding: 12px; border-radius: 14px; background: linear-gradient(180deg, oklch(20% 0.02 285), oklch(17.5% 0.01 285)); box-shadow: inset 0 0 0 1px var(--orch-line), 0 8px 24px oklch(5% 0 0 / .35); }
+  .card-a .top { display: flex; align-items: center; gap: 10px; }
+  .card-a .name { font-weight: 600; font-size: 13.5px; }
+  .card-a .sub { color: var(--muted); font-size: 11.5px; }
+  .stack { margin-left: auto; display: flex; }
+  .stack span { width: 18px; height: 18px; border-radius: 50%; margin-left: -5px; box-shadow: 0 0 0 2px oklch(19% 0.015 285); display: grid; place-items: center; font-size: 8px; font-weight: 700; color: oklch(15% 0 0); }
+  .k-claude { background: oklch(72% 0.14 45); } .k-codex { background: oklch(85% 0 0); } .k-gemini { background: oklch(72% 0.12 250); } .k-open { background: oklch(76% 0.1 160); }
+  .card-a .ask { margin-top: 10px; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 9px; background: oklch(13% 0.01 285); color: var(--faint); font-size: 12.5px; box-shadow: inset 0 0 0 1px var(--line); }
+  .card-a .ask kbd { margin-left: auto; font: 10.5px var(--font); color: var(--faint); padding: 1px 5px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--line-2); }
+  .card-a .pills { display: flex; gap: 6px; margin-top: 10px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 999px; font-size: 11.5px; color: var(--ink-2); background: oklch(22% 0.01 285); }
+  .pill .dot { width: 6px; height: 6px; box-shadow: none; }
+
+  /* B: status strip */
+  .strip { margin: 0 2px 10px; padding: 9px 10px 10px; border-radius: 12px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+  .strip .top { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 13px; }
+  .strip .top .t { margin-left: auto; font-weight: 400; color: var(--faint); font-size: 11.5px; }
+  .meter { display: flex; height: 4px; border-radius: 99px; overflow: hidden; margin: 10px 0 7px; gap: 2px; }
+  .meter i { display: block; border-radius: 99px; }
+  .legend { display: flex; gap: 12px; font-size: 11.5px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .dot { width: 6px; height: 6px; box-shadow: none; }
+  .strip .last { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); display: flex; gap: 6px; }
+  .strip .last em { font-style: normal; color: var(--orch); }
+
+  /* C: merged with search */
+  .omni { margin: 0 2px 12px; border-radius: 12px; padding: 2px; background: linear-gradient(120deg, var(--orch-line), oklch(30% 0.05 42), var(--orch-line)); }
+  .omni .in { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 10px; background: var(--side); font-size: 13px; color: var(--muted); }
+  .omni .in kbd { margin-left: auto; font: 11px var(--font); color: var(--faint); }
+  .omni-sub { display: flex; align-items: center; gap: 7px; margin: -4px 6px 12px; font-size: 11.5px; color: var(--muted); }
+  .omni-sub b { color: var(--warn); font-weight: 500; }
+
+  /* the main window */
+  .win { width: 100%; height: 1010px; display: grid; grid-template-columns: 268px 1fr; background: var(--paper); border-radius: 16px; overflow: hidden; box-shadow: 0 0 0 1px var(--line), 0 30px 80px oklch(5% 0 0 / .5); }
+  .win .side { height: auto; border-radius: 0; box-shadow: inset -1px 0 0 var(--line); }
+  .main { display: flex; flex-direction: column; min-width: 0; }
+  .bar { height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 20px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .bar .crumb { color: var(--muted); }
+  .bar .runs { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink-2); font-size: 12px; }
+  .board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 16px 24px 14px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, oklch(15.5% 0.008 285), var(--paper)); }
+  .tile { padding: 10px 12px; border-radius: 12px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); min-width: 0; }
+  .tile .h { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
+  .tile .h .k { margin-left: auto; color: var(--faint); font-weight: 400; font-size: 11px; }
+  .tile .line { color: var(--muted); font-size: 12px; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile.wait { box-shadow: inset 0 0 0 1px oklch(40% 0.06 85); }
+  .thread { flex: 1; overflow: hidden; padding: 22px 0 0; }
+  .col { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+  .you { margin: 0 0 18px auto; width: fit-content; max-width: 80%; padding: 9px 14px; border-radius: 16px 16px 4px 16px; background: var(--sel); color: var(--ink); font-size: 14px; }
+  .say { color: var(--ink-2); margin: 0 0 12px; font-size: 14px; }
+  .say b { color: var(--ink); font-weight: 600; }
+  .act { margin: 0 0 18px; border-radius: 14px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); overflow: hidden; }
+  .act .hd { display: flex; align-items: center; gap: 10px; padding: 10px 14px; font-size: 13px; }
+  .act .hd .ic { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok); flex: none; }
+  .act .hd .ic svg { width: 14px; height: 14px; }
+  .act .hd .meta { color: var(--faint); margin-left: auto; font-size: 12px; }
+  .act .bd { padding: 0 14px 12px 48px; color: var(--muted); font-size: 12.5px; }
+  .act .bd code { font: 12px var(--mono); color: var(--ink-2); background: var(--hover); padding: 1px 6px; border-radius: 5px; }
+  .act .ft { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); background: oklch(18% 0 0); }
+  .btn { padding: 5px 12px; border-radius: 8px; font: 500 12.5px var(--font); color: var(--ink-2); background: var(--hover); border: 0; }
+  .btn.primary { background: var(--ink); color: oklch(15% 0 0); }
+  .btn.danger { background: var(--err-soft); color: var(--err); }
+  .act.confirm { box-shadow: inset 0 0 0 1px oklch(42% 0.07 26); }
+  .act.confirm .hd .ic { background: var(--err-soft); color: var(--err); }
+  .tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .tbl td { padding: 8px 14px; border-top: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; }
+  .tbl td:first-child { width: 1%; padding-right: 0; }
+  .tbl td.muted { color: var(--muted); white-space: normal; }
+  .tbl td.r { text-align: right; color: var(--faint); }
+  .composer { margin: 0 auto 18px; max-width: 760px; width: calc(100% - 48px); border-radius: 18px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); padding: 12px 14px; }
+  .composer .ph { color: var(--faint); font-size: 14px; padding: 2px 2px 12px; }
+  .composer .bottom { display: flex; align-items: center; gap: 8px; }
+  .sugg { display: flex; gap: 6px; flex-wrap: wrap; }
+  .sugg span { padding: 4px 10px; border-radius: 999px; font-size: 12px; color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--line-2); }
+  .send { margin-left: auto; width: 30px; height: 30px; border-radius: 50%; background: var(--ink); display: grid; place-items: center; color: oklch(15% 0 0); }
+
+  /* settings + off state */
+  .settings { width: 560px; border-radius: 16px; background: var(--paper); box-shadow: 0 0 0 1px var(--line); padding: 20px; }
+  .settings h4 { margin: 0 0 12px; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .group { border-radius: 14px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+  .item { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+  .item + .item { border-top: 1px solid var(--line); }
+  .item .txt { flex: 1; }
+  .item .txt b { display: block; font-weight: 500; font-size: 14px; }
+  .item .txt span { color: var(--muted); font-size: 12.5px; }
+  .switch { width: 36px; height: 22px; border-radius: 99px; background: var(--orch); position: relative; flex: none; }
+  .switch::after { content: ''; position: absolute; top: 3px; right: 3px; width: 16px; height: 16px; border-radius: 50%; background: white; }
+  .agents { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 16px 16px; }
+  .agent { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px; box-shadow: inset 0 0 0 1px var(--line-2); font-size: 13px; color: var(--ink-2); }
+  .agent i { width: 16px; height: 16px; border-radius: 50%; display: block; }
+  .agent.on { box-shadow: inset 0 0 0 1.5px var(--orch); color: var(--ink); background: var(--orch-soft); }
+  .can { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; padding: 0 16px 16px; color: var(--muted); font-size: 12.5px; }
+  .can span::before { content: '✓  '; color: var(--ok); }
+  .off { margin: 0 2px 12px; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line); border: 1px dashed transparent; color: var(--muted); font-size: 13px; }
+  .off .orb { filter: grayscale(1) brightness(.85); }
+  .off .go { margin-left: auto; color: var(--orch); font-size: 12px; font-weight: 500; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="hub" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><circle cx="4.5" cy="6" r="1.8"/><circle cx="19.5" cy="6" r="1.8"/><circle cx="12" cy="20.5" r="1.8"/><path d="M9.4 10.3 6 7.3M14.6 10.3 18 7.3M12 15.2v3.5"/></symbol>
+  <symbol id="branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-12 7"/></symbol>
+  <symbol id="trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+  <symbol id="send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4-4"/></symbol>
+</svg>
+<div class="page">
+  <h1>Brain</h1>
+  <p class="lede">Today it is a plain heading and a session row stuck above the projects: it reads like any other chat. These make it its own thing: one place that sees every session, says what needs you, and acts, with what it did shown as cards instead of tool lines.</p>
+
+  <div class="section">
+    <h2><b>01</b> Pinned in the sidebar, three directions</h2>
+    <p>Same sidebar, same sessions (3 working, 1 waiting on you, 2 idle). Each keeps the Brain first and pinned; they differ in how much it shows before you open it.</p>
+    <div class="row">
+      <div>
+        <div class="side">
+          <div class="brand"><i></i>Synapse</div>
+          <div class="card-a">
+            <div class="top"><div class="orb live"><svg><use href="#hub"/></svg></div><div><div class="name">Brain</div><div class="sub">Watching 6 sessions</div></div>
+              <div class="stack"><span class="k-claude">C</span><span class="k-codex">X</span><span class="k-gemini">G</span></div></div>
+            <div class="pills"><span class="pill"><i class="dot work"></i>3 working</span><span class="pill"><i class="dot wait"></i>1 needs you</span></div>
+            <div class="ask">Ask or tell it anything<kbd>⌘J</kbd></div>
+          </div>
+          <div class="search"><svg width="15" height="15"><use href="#search"/></svg>Search<kbd>⌘K</kbd></div>
+          <div class="proj"><span class="badge">SY</span>synapse<span class="n">3</span></div>
+          <div class="srow"><i class="dot work"></i>Chat graphics<span class="t">now</span></div>
+          <div class="srow"><i class="dot wait"></i>Phone relay fix<span class="t">2m</span></div>
+          <div class="srow"><i class="dot"></i>Release 0.6.63<span class="t">1h</span></div>
+          <div class="proj"><span class="badge" style="background:var(--accent-soft);color:var(--accent-text)">VJ</span>VisJev<span class="n">2</span></div>
+          <div class="srow"><i class="dot work"></i>Resume parser<span class="t">now</span></div>
+          <div class="srow"><i class="dot"></i>opencode-system<span class="t">45m</span></div>
+          <div class="proj"><span class="badge" style="background:var(--orch-soft);color:var(--orch)">GF</span>GTM-FS<span class="n">1</span></div>
+          <div class="srow"><i class="dot work"></i>Lead scoring<span class="t">now</span></div>
+        </div>
+        <div class="caption"><h3>A. Command card</h3><p>A card of its own: live counts, the agents it watches, and an ask field, so a quick "what's stuck?" never leaves the session you are in.</p></div>
+      </div>
+      <div>
+        <div class="side">
+          <div class="brand"><i></i>Synapse</div>
+          <div class="search"><svg width="15" height="15"><use href="#search"/></svg>Search<kbd>⌘K</kbd></div>
+          <div class="strip">
+            <div class="top"><div class="orb" style="--s:22px"><svg><use href="#hub"/></svg></div>Brain<span class="t">Claude</span></div>
+            <div class="meter"><i style="flex:3;background:var(--accent)"></i><i style="flex:1;background:var(--warn)"></i><i style="flex:2;background:var(--line-2)"></i></div>
+            <div class="legend"><span><i class="dot work"></i>3 working</span><span><i class="dot wait"></i>1 waiting</span><span><i class="dot"></i>2 idle</span></div>
+            <div class="last"><em>●</em>Started Codex on fix-auth</div>
+          </div>
+          <div class="proj"><span class="badge">SY</span>synapse<span class="n">3</span></div>
+          <div class="srow"><i class="dot work"></i>Chat graphics<span class="t">now</span></div>
+          <div class="srow"><i class="dot wait"></i>Phone relay fix<span class="t">2m</span></div>
+          <div class="srow"><i class="dot"></i>Release 0.6.63<span class="t">1h</span></div>
+          <div class="proj"><span class="badge" style="background:var(--accent-soft);color:var(--accent-text)">VJ</span>VisJev<span class="n">2</span></div>
+          <div class="srow"><i class="dot work"></i>Resume parser<span class="t">now</span></div>
+          <div class="srow"><i class="dot"></i>opencode-system<span class="t">45m</span></div>
+          <div class="proj"><span class="badge" style="background:var(--orch-soft);color:var(--orch)">GF</span>GTM-FS<span class="n">1</span></div>
+          <div class="srow"><i class="dot work"></i>Lead scoring<span class="t">now</span></div>
+        </div>
+        <div class="caption"><h3>B. Status strip</h3><p>Quieter: one panel with a bar of how your work splits, and the last thing it did. Click to open its chat.</p></div>
+      </div>
+      <div>
+        <div class="side">
+          <div class="brand"><i></i>Synapse</div>
+          <div class="omni"><div class="in"><div class="orb live" style="--s:20px"><svg><use href="#hub"/></svg></div>Ask the Brain or search<kbd>⌘K</kbd></div></div>
+          <div class="omni-sub"><i class="dot wait" style="width:6px;height:6px;box-shadow:none"></i><b>Phone relay fix</b> needs you</div>
+          <div class="proj"><span class="badge">SY</span>synapse<span class="n">3</span></div>
+          <div class="srow"><i class="dot work"></i>Chat graphics<span class="t">now</span></div>
+          <div class="srow sel"><i class="dot wait"></i>Phone relay fix<span class="t">2m</span></div>
+          <div class="srow"><i class="dot"></i>Release 0.6.63<span class="t">1h</span></div>
+          <div class="proj"><span class="badge" style="background:var(--accent-soft);color:var(--accent-text)">VJ</span>VisJev<span class="n">2</span></div>
+          <div class="srow"><i class="dot work"></i>Resume parser<span class="t">now</span></div>
+          <div class="srow"><i class="dot"></i>opencode-system<span class="t">45m</span></div>
+          <div class="proj"><span class="badge" style="background:var(--orch-soft);color:var(--orch)">GF</span>GTM-FS<span class="n">1</span></div>
+          <div class="srow"><i class="dot work"></i>Lead scoring<span class="t">now</span></div>
+        </div>
+        <div class="caption"><h3>C. Merged with search</h3><p>No extra row at all: the search box becomes the Brain. Type a name to jump, or a sentence to ask. Takes the least room.</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2><b>02</b> Its own view</h2>
+    <p>Opening it shows a live board of every project on top, then the chat. What it does lands as cards with buttons, not raw tool lines; anything that deletes asks first, right there.</p>
+    <div class="win">
+      <div class="side">
+        <div class="brand"><i></i>Synapse</div>
+        <div class="card-a" style="box-shadow: inset 0 0 0 1.5px var(--orch), 0 8px 24px oklch(5% 0 0 / .35)">
+          <div class="top"><div class="orb live"><svg><use href="#hub"/></svg></div><div><div class="name">Brain</div><div class="sub">Watching 6 sessions</div></div></div>
+          <div class="pills"><span class="pill"><i class="dot work"></i>3 working</span><span class="pill"><i class="dot wait"></i>1 needs you</span></div>
+        </div>
+        <div class="search"><svg width="15" height="15"><use href="#search"/></svg>Search<kbd>⌘K</kbd></div>
+        <div class="proj"><span class="badge">SY</span>synapse<span class="n">4</span></div>
+        <div class="srow"><i class="dot work"></i>Chat graphics<span class="t">now</span></div>
+        <div class="srow"><i class="dot wait"></i>Phone relay fix<span class="t">2m</span></div>
+        <div class="srow"><i class="dot work"></i>fix-auth · Codex<span class="t">now</span></div>
+        <div class="srow"><i class="dot"></i>Release 0.6.63<span class="t">1h</span></div>
+        <div class="proj"><span class="badge" style="background:var(--accent-soft);color:var(--accent-text)">VJ</span>VisJev<span class="n">2</span></div>
+        <div class="srow"><i class="dot work"></i>Resume parser<span class="t">now</span></div>
+        <div class="srow"><i class="dot"></i>opencode-system<span class="t">45m</span></div>
+      </div>
+      <div class="main">
+        <div class="bar"><div class="orb" style="--s:22px"><svg><use href="#hub"/></svg></div><b>Brain</b><span class="crumb">· all projects</span>
+          <div class="runs">Runs on <span class="chip"><i class="dot" style="background:oklch(72% 0.14 45);box-shadow:none"></i>Claude Code</span></div></div>
+        <div class="board">
+          <div class="tile"><div class="h"><i class="dot work"></i>Chat graphics<span class="k">synapse</span></div><div class="line">Writing tests for mermaid render</div></div>
+          <div class="tile wait"><div class="h"><i class="dot wait"></i>Phone relay fix<span class="k">synapse</span></div><div class="line">Asks: "OK to bump the relay timeout?"</div></div>
+          <div class="tile"><div class="h"><i class="dot work"></i>Resume parser<span class="k">VisJev</span></div><div class="line">Parsing 14 of 40 PDFs</div></div>
+          <div class="tile"><div class="h"><i class="dot work"></i>Lead scoring<span class="k">GTM-FS</span></div><div class="line">Running the eval set</div></div>
+        </div>
+        <div class="thread"><div class="col">
+          <div class="you">what's everyone doing? anything stuck?</div>
+          <p class="say">Three are working and one is <b>waiting on you</b>:</p>
+          <div class="act">
+            <table class="tbl">
+              <tr><td><i class="dot wait"></i></td><td><b>Phone relay fix</b></td><td class="muted">Wants your OK to raise the relay timeout from 10s to 30s.</td><td class="r">2m</td></tr>
+              <tr><td><i class="dot work"></i></td><td>Chat graphics</td><td class="muted">Mermaid tests pass, now on the html sandbox.</td><td class="r">now</td></tr>
+              <tr><td><i class="dot work"></i></td><td>Resume parser</td><td class="muted">14 of 40 PDFs, no errors.</td><td class="r">now</td></tr>
+              <tr><td><i class="dot"></i></td><td>Release 0.6.63</td><td class="muted">Done: published, notarized.</td><td class="r">1h</td></tr>
+            </table>
+            <div class="ft"><button class="btn primary">Open Phone relay fix</button><button class="btn">Tell it yes</button></div>
+          </div>
+          <div class="you">spin up codex on a new worktree to fix the login redirect</div>
+          <div class="act">
+            <div class="hd"><span class="ic"><svg><use href="#branch"/></svg></span><b>Opened worktree <code style="font:12px var(--mono)">fix-auth</code> in synapse</b><span class="meta">from main</span></div>
+            <div class="bd">Started <b style="color:var(--ink-2)">Codex</b> there with: <code>Fix the login redirect loop after OAuth</code></div>
+            <div class="ft"><button class="btn primary">Open session</button><button class="btn">Show worktree</button></div>
+          </div>
+          <div class="act confirm">
+            <div class="hd"><span class="ic"><svg><use href="#trash"/></svg></span><b>Delete worktree feat-x?</b><span class="meta">2 sessions, 3 changed files</span></div>
+            <div class="bd">Its 3 changes are committed to <code>feat-x</code> first, its 2 sessions close, then the folder goes.</div>
+            <div class="ft"><button class="btn danger">Delete</button><button class="btn">Keep it</button></div>
+          </div>
+        </div></div>
+        <div class="composer"><div class="ph">Ask about your sessions, or tell it what to start</div>
+          <div class="bottom"><div class="sugg"><span>What needs me?</span><span>Summarize today</span><span>New worktree…</span></div><span class="send"><svg width="14" height="14"><use href="#send"/></svg></span></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2><b>03</b> Turning it on, and off</h2>
+    <p>Settings shows what it can do and lets you pick the agent as tiles, not a dropdown. Off, the sidebar keeps one quiet row that turns it on.</p>
+    <div class="row">
+      <div class="settings">
+        <h4>Brain</h4>
+        <div class="group">
+          <div class="item"><div class="orb live"><svg><use href="#hub"/></svg></div><div class="txt"><b>Brain</b><span>One agent pinned at the top that sees every session and acts on them.</span></div><div class="switch"></div></div>
+          <div class="item" style="padding-bottom:10px"><div class="txt"><b>Runs on</b><span>Any agent you have. It keeps its chat when you switch.</span></div></div>
+          <div class="agents"><span class="agent on"><i class="k-claude"></i>Claude Code</span><span class="agent"><i class="k-codex"></i>Codex</span><span class="agent"><i class="k-gemini"></i>Gemini</span><span class="agent"><i class="k-open"></i>OpenCode</span></div>
+          <div class="item" style="padding-bottom:10px"><div class="txt"><b>It can</b></div></div>
+          <div class="can"><span>See and read every session</span><span>Start sessions with a prompt</span><span>Message a running session</span><span>Open and delete worktrees</span><span>Close sessions</span><span>Ask before it deletes</span></div>
+        </div>
+      </div>
+      <div>
+        <div class="side" style="height:300px">
+          <div class="brand"><i></i>Synapse</div>
+          <div class="off"><div class="orb" style="--s:22px"><svg><use href="#hub"/></svg></div>Brain<span class="go">Turn on</span></div>
+          <div class="search"><svg width="15" height="15"><use href="#search"/></svg>Search<kbd>⌘K</kbd></div>
+          <div class="proj"><span class="badge">SY</span>synapse<span class="n">3</span></div>
+          <div class="srow"><i class="dot work"></i>Chat graphics<span class="t">now</span></div>
+          <div class="srow"><i class="dot wait"></i>Phone relay fix<span class="t">2m</span></div>
+          <div class="srow"><i class="dot"></i>Release 0.6.63<span class="t">1h</span></div>
+        </div>
+        <div class="caption"><h3>Off</h3><p>One row, greyed, with Turn on. Hidden for good from its menu.</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

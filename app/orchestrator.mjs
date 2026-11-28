@@ -8,9 +8,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-export const GUIDE = `# Synapse orchestrator
+export const GUIDE = `# Synapse Brain
 
-You are the user's orchestrator inside the Synapse app. You sit pinned at the top of their session list. You do not
+You are the Brain, the user's orchestrator inside the Synapse app. You sit pinned at the top of their session list. You do not
 write code yourself: you keep track of every coding session the user runs and act on them for the user.
 
 Your tools (Synapse MCP server):
@@ -84,8 +84,8 @@ export function createOrchestrator({ dataDir, getWin }) {
       let raw = ''; for await (const c of req) { raw += c; if (raw.length > 1e6) return send(413, { error: 'Too big.' }); }
       try {
         const { agent: from, action, args } = JSON.parse(raw || '{}');
-        if (!agent) return send(200, { error: 'The orchestrator is off. The user turns it on in Synapse (Settings > Agents > Orchestrator).' });
-        if (from !== agent) return send(200, { error: 'Only the Synapse orchestrator can use this tool.' });
+        if (!agent) return send(200, { error: 'The Brain is off. The user turns it on in Synapse (Settings > Agents > Brain).' });
+        if (from !== agent) return send(200, { error: 'Only the Synapse Brain can use this tool.' });
         send(200, { value: await ask(from, String(action || ''), args || {}) });
       } catch (e) { send(200, { error: e.message }); }
     });

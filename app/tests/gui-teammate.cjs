@@ -75,6 +75,12 @@ const set = (slot, status) => fs.writeFileSync(path.join(ctl, `state-${slot}`), 
   assert.equal(note.summary, 'Start-failure fallback added; Agent37 live smoke passed');
   assert.match(note.body, /Both follow-ups are done/);
   assert.equal(await ui(`document.getElementById('thread-view').textContent.includes('teammate-message')`), false, 'no raw tags');
+  // folded to one line with its gist; a click opens the whole note
+  assert.equal(await ui(`document.querySelector('.message.peer').open`), false, 'a note starts folded');
+  assert.equal(await ui(`document.querySelector('.message.peer .peer-gist').textContent`), 'Start-failure fallback added; Agent37 live smoke passed');
+  assert.ok(await ui(`document.querySelector('.message.peer').getBoundingClientRect().height < 44`), 'one line');
+  await ui(`document.querySelector('.message.peer > summary').click()`);
+  assert.equal(await ui(`document.querySelector('.message.peer').open && document.querySelector('.message.peer .message-body').getBoundingClientRect().height > 0`), true, 'it opens');
   assert.equal(await ui(`document.querySelectorAll('.message.user').length`), 1, 'only your own prompt is yours');
   if (process.env.TEAMMATE_SHOT) { await sleep(500); fs.writeFileSync(process.env.TEAMMATE_SHOT, (await win.webContents.capturePage()).toPNG()); }
   assert.deepEqual(errors.filter((e) => !/Autofill|favicon/i.test(e)), []);

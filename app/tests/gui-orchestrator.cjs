@@ -58,7 +58,7 @@ function mcpTools(cwd) {
   console.log('PASS its folder tells any agent the job (AGENTS.md, CLAUDE.md, GEMINI.md)');
 
   await until(() => orchFile().agent, 'the app knows which agent the orchestrator is', 40000);
-  await assert.rejects(act('sessions', {}, 'someone-else'), /Only the Synapse orchestrator/);
+  await assert.rejects(act('sessions', {}, 'someone-else'), /Only the Synapse Brain/);
   console.log('PASS another agent cannot use the orchestrator tools');
 
   const inOrch = await mcpTools(path.join(state, 'orchestrator')), elsewhere = await mcpTools(repo);
@@ -106,7 +106,7 @@ function mcpTools(cwd) {
   await win.webContents.executeJavaScript(`synapse.state()`); // the next state push carries it
   await until(() => ui(`!document.querySelector('.orchestrator-pin .session-row')`), 'the orchestrator is gone when turned off', 30000);
   await until(() => orchFile().agent === null, 'its tools stop working');
-  await assert.rejects(act('sessions', {}, 'x'), /orchestrator is off/);
+  await assert.rejects(act('sessions', {}, 'x'), /Brain is off/);
   console.log('PASS turning it off removes it and its tools');
   app.exit(0);
 })().catch((e) => { console.error(e); app.exit(1); });

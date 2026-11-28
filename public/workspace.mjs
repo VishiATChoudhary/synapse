@@ -314,6 +314,7 @@ const ICONS = {
   shield: '<path d="M12 3.5 5 6v5.5c0 4.3 3 7.6 7 9 4-1.4 7-4.7 7-9V6z"/>',
   search: '<circle cx="10.7" cy="10.7" r="6.7"/><path d="m16 16 4.5 4.5"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  brain: '<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M12 18V5"/>',
   network: '<rect x="9" y="2" width="6" height="6" rx="1.5"/><rect x="2" y="16" width="6" height="6" rx="1.5"/><rect x="16" y="16" width="6" height="6" rx="1.5"/><path d="M12 8v4M5 16v-4h14v4"/>',
   canvas: '<circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="5" r="2.5"/><circle cx="13" cy="19" r="2.5"/><path d="m7.5 6 9-1M6.5 8l5 8.5M18 7.5l-4 9"/>',
   folder: '<path d="M3 7V5a2 2 0 0 1 2-2h4l3 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',
@@ -373,7 +374,7 @@ const KIND_NAMES = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI'
 const KIND_INITIALS = { claude: 'Cl', codex: 'Cx', gemini: 'G', antigravity: 'Ag', opencode: 'Oc', 'cursor-agent': 'Cu', amp: 'A', copilot: 'Co', superset: 'S', shell: '>_' };
 const kindName = (agent) => KIND_NAMES[agent.kind] || agent.kind;
 // real logos where we have them (app/renderer/logos), initials otherwise
-const LOGOS = new Set(['amp', 'claude', 'codex', 'copilot', 'cursor-agent', 'gemini', 'opencode', 'shell']);
+const LOGOS = new Set(['amp', 'antigravity', 'claude', 'codex', 'copilot', 'cursor-agent', 'gemini', 'opencode', 'shell']);
 const initials = (agent) => (LOGOS.has(agent.kind) ? '' : KIND_INITIALS[agent.kind] || agent.kind?.slice(0, 2) || 'A');
 const avatar = (agent) => `<span class="agent-avatar" data-logo="${LOGOS.has(agent.kind) ? escapeHtml(agent.kind) : ''}" title="${escapeHtml(kindName(agent))}" aria-hidden="true">${escapeHtml(initials(agent))}</span>`;
 // a project's badge, like T3's: two letters on a tint of its colour
@@ -815,7 +816,7 @@ function initialize() {
   // what a session is about: its transcript title (Claude's own, or your first prompt), unless you named it
   const titleOf = (agent) => (agent.autoName || !agent.title ? agent.name : agent.title);
   let sidebarQuery = '', groupBy = ['project', 'status', 'recent'].includes(getStorage('synapse-group')) ? getStorage('synapse-group') : 'project';
-  const GENERATED = /^(claude|codex|gemini|opencode|cursor-agent|cursor|amp|copilot|shell|agent|pi|kiro)(-\d+)?$/i;
+  const GENERATED = /^(claude|codex|gemini|antigravity|opencode|cursor-agent|cursor|amp|copilot|shell|agent|pi|kiro)(-\d+)?$/i;
   const readJSON = (key, fallback) => { try { return JSON.parse(getStorage(key, '')) ?? fallback; } catch { return fallback; } };
   // Every agent has a state, like a thread in T3: it needs you, it is working, it finished while you were away
   // (done, until you open it), or it rests. Snoozed agents step aside until their time or until they need you.
@@ -1325,7 +1326,7 @@ function initialize() {
     if (orchestrator && (!hits || hits.has(orchestrator.id))) {
       if (!orchestratorPin) {
         orchestratorPin = document.createElement('section'); orchestratorPin.className = 'orchestrator-pin';
-        orchestratorPin.innerHTML = `<h3 class="orchestrator-heading">${icon('network')}<span>Orchestrator</span></h3><div class="orchestrator-list"></div>`;
+        orchestratorPin.innerHTML = `<h3 class="orchestrator-heading">${icon('brain')}<span>Brain</span></h3><div class="orchestrator-list"></div>`;
       }
       const node = sessionNode({ agent: orchestrator, children: [] }, 0, '');
       node.querySelector('.row-actions').hidden = true;
@@ -2416,10 +2417,11 @@ function initialize() {
     const fresh = [], items = [];
     for (const message of records) {
       const user = message.role === 'user' || message.human, tool = message.tool;
+      const note = !tool && ((message.type === 'shared' && !message.human) || !!message.teammate); // another agent's note: one line, opens on click
       const messageSignature = `${message.key}:${message.delivered}:${agent.name}`;
       let element = existing.get(message.key);
       if (!element) {
-        element = document.createElement(tool ? 'details' : 'article'); element.dataset.messageKey = message.key;
+        element = document.createElement(tool || note ? 'details' : 'article'); element.dataset.messageKey = message.key;
         if (!reset) element.dataset.enter = '1'; // new while you watch: it eases in
       }
       if (element.dataset.signature !== messageSignature) {
@@ -2440,7 +2442,9 @@ function initialize() {
           // images you attached show as thumbnails, not as their paths
           const pics = user && !message.teammate ? sentImages(message.text) : { text: message.text, images: [], files: [] };
           const thumbs = pics.images.length ? `<div class="message-images">${pics.images.map((p) => `<button type="button" data-file="${escapeHtml(p)}" title="${escapeHtml(p)}"><img alt="${escapeHtml(p.split(/[\\/]/).pop())}" loading="lazy" src="/api/file/raw?${new URLSearchParams({ path: p })}"></button>`).join('')}</div>` : '';
-          element.innerHTML = `${peer ? `<header class="message-head">${avatar(sender)}<span>${escapeHtml(message.fromName)}</span>${icon('arrow-right')}<span>${escapeHtml(message.teammate ? agent.name : message.toName)}</span>${time ? `<time>${time}</time>` : ''}</header>${message.summary ? `<p class="message-summary">${escapeHtml(message.summary)}</p>` : ''}` : ''}${thumbs}${fileChips(pics.files)}${pics.text.trim() ? `<div class="message-body md">${messageBody(pics.text, user, message.type === 'transcript')}</div>` : ''}<footer class="message-foot">${delivery}${!peer && time ? `<time>${time}</time>` : ''}<button class="icon-button" data-copy-message aria-label="Copy message" title="Copy message">${icon('copy')}</button></footer>`;
+          // a note between agents folds to one line (who, to whom, its gist); opening it shows the whole note
+          const gist = peer ? (message.summary || String(pics.text).split('\n').map((l) => l.replace(/^[\s#>*-]+|[*_`]/g, '').trim()).find(Boolean) || '') : '';
+          element.innerHTML = `${peer ? `<summary class="message-head">${avatar(sender)}<span class="peer-names">${escapeHtml(message.fromName)}${icon('arrow-right')}${escapeHtml(message.teammate ? agent.name : message.toName)}</span><span class="peer-gist">${escapeHtml(gist.slice(0, 200))}</span>${time ? `<time>${time}</time>` : ''}${icon('chevron-right')}</summary>${message.summary ? `<p class="message-summary">${escapeHtml(message.summary)}</p>` : ''}` : ''}${thumbs}${fileChips(pics.files)}${pics.text.trim() ? `<div class="message-body md">${messageBody(pics.text, user, message.type === 'transcript')}</div>` : ''}<footer class="message-foot">${delivery}${!peer && time ? `<time>${time}</time>` : ''}<button class="icon-button" data-copy-message aria-label="Copy message" title="Copy message">${icon('copy')}</button></footer>`;
         }
       }
       items.push({ message, element });
@@ -3291,7 +3295,7 @@ function initialize() {
       if (Object.hasOwn(desktop.profiles, 'codex')) $('agent-kind').value = 'codex';
       return;
     }
-    openModal('Connect an agent', `<p class="dialog-copy">Start a coding agent in your project. Synapse discovers running sessions on this machine automatically.</p><label class="field-label" for="agent-kind">Agent</label><select class="field" id="agent-kind"><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="gemini">Gemini CLI</option><option value="opencode">OpenCode</option><option value="amp">Amp</option><option value="copilot">Copilot CLI</option></select><div class="command-preview"><code id="launch-command">codex</code><button class="button secondary" type="button" id="copy-launch">Copy</button></div><p class="field-hint">Run this command in your project’s terminal. To enable messaging and shared context, run <code>node install.mjs</code> in your Synapse folder, then restart the agent.</p>`, 'Done');
+    openModal('Connect an agent', `<p class="dialog-copy">Start a coding agent in your project. Synapse discovers running sessions on this machine automatically.</p><label class="field-label" for="agent-kind">Agent</label><select class="field" id="agent-kind"><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="agy">Antigravity</option><option value="opencode">OpenCode</option><option value="amp">Amp</option><option value="copilot">Copilot CLI</option></select><div class="command-preview"><code id="launch-command">codex</code><button class="button secondary" type="button" id="copy-launch">Copy</button></div><p class="field-hint">Run this command in your project’s terminal. To enable messaging and shared context, run <code>node install.mjs</code> in your Synapse folder, then restart the agent.</p>`, 'Done');
     $('agent-kind').onchange = () => { $('launch-command').textContent = $('agent-kind').value; $('copy-launch').textContent = 'Copy'; };
     $('copy-launch').onclick = async () => { if (await copyText($('launch-command').textContent)) $('copy-launch').textContent = 'Copied'; };
   }
@@ -3425,7 +3429,7 @@ function initialize() {
       add(`New worktree in ${p.label}`, 'branch', () => runDesktop('worktree', { key: p.key }));
     }
     if (embedded) add('Add project', 'folder-plus', () => addProject());
-    if (embedded) add(desktop?.orchestrator?.on ? 'Turn the orchestrator off' : 'Turn the orchestrator on', 'network', () => runDesktop('orchestrator', { on: !desktop?.orchestrator?.on }));
+    if (embedded) add(desktop?.orchestrator?.on ? 'Turn the Brain off' : 'Turn the Brain on', 'brain', () => runDesktop('orchestrator', { on: !desktop?.orchestrator?.on }));
     if (agent) {
       add(`Rename "${titleOf(agent)}"`, 'edit', renameAgent);
       if (agent.owned) {

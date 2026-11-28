@@ -270,6 +270,66 @@ function openDb(file) {
   } catch { return null; }
 }
 
+// Antigravity (Google's agy CLI) keeps each conversation as SQLite of protobuf steps:
+// ~/.gemini/antigravity-cli/conversations/<id>.db. A running agy holds presence/<id>.lock for its conversation.
+// Steps used: 14 is your prompt (text at 19.2), 15 the model's turn (reply at 20.1, tool calls at 20.7: name 2,
+// JSON arguments 3); a step's metadata has its time at 1.1 (seconds) and status 3 once it finished.
+export const AGY_HOME = path.join(HOME, '.gemini', 'antigravity-cli');
+function pbFields(buf) { // the fields of one protobuf message: [field, value] with value a Buffer (length-delimited) or a number
+  const out = []; let i = 0;
+  const varint = () => { let r = 0, m = 1; for (;;) { const b = buf[i++]; if (b === undefined) throw new Error('pb'); r += (b & 0x7f) * m; m *= 128; if (!(b & 0x80)) return r; } };
+  try {
+    while (i < buf.length) {
+      const key = varint(), f = Math.floor(key / 8), wt = key & 7;
+      if (wt === 0) out.push([f, varint()]);
+      else if (wt === 2) { const n = varint(); out.push([f, buf.subarray(i, i + n)]); i += n; }
+      else if (wt === 1) i += 8; else if (wt === 5) i += 4; else break;
+    }
+  } catch {}
+  return out;
+}
+const pbAt = (buf, ...fields) => { // every value at a field path
+  let level = [buf];
+  for (const f of fields) level = level.flatMap((b) => (Buffer.isBuffer(b) ? pbFields(b).filter(([n]) => n === f).map(([, v]) => v) : []));
+  return level;
+};
+const pbText = (buf, ...fields) => { const v = pbAt(buf, ...fields)[0]; return Buffer.isBuffer(v) ? v.toString('utf8') : ''; };
+function agyTool(call) {
+  const name = pbText(call, 2) || 'tool';
+  let a = {}; try { a = JSON.parse(pbText(call, 3) || '{}'); } catch {}
+  return toolLine(name, { command: a.CommandLine, file_path: a.AbsolutePath || a.TargetFile || a.File, url: a.Url, pattern: a.Query || a.Pattern, description: a.toolSummary, prompt: a.Prompt });
+}
+function readAntigravity(file, from) {
+  const db = openDb(file);
+  if (!db) return { messages: [], end: from };
+  try {
+    const end = (db.prepare('SELECT MAX(idx) AS m FROM steps').get()?.m ?? -1) + 1;
+    let start = from;
+    if (start == null) { const r = db.prepare('SELECT idx FROM steps WHERE step_type IN (14, 15) ORDER BY idx DESC LIMIT 1 OFFSET 59').get(); start = r ? r.idx : 0; }
+    const messages = [];
+    for (const r of db.prepare('SELECT step_type, metadata, step_payload FROM steps WHERE idx >= ? AND step_type IN (14, 15) ORDER BY idx').all(start)) {
+      const body = Buffer.from(r.step_payload || []), secs = pbAt(Buffer.from(r.metadata || []), 1, 1)[0];
+      const ts = typeof secs === 'number' ? new Date(secs * 1000).toISOString() : undefined;
+      if (r.step_type === 14) { const text = pbText(body, 19, 2).trim(); if (text) messages.push({ role: 'user', text, ts }); continue; }
+      const text = pbText(body, 20, 1).trim(), tools = pbAt(body, 20, 7).map(agyTool);
+      if (text || tools.length) messages.push({ role: 'assistant', text: [text, ...tools].filter(Boolean).join('\n'), ts, tool: !text });
+    }
+    return { messages, end };
+  } catch { return { messages: [], end: from }; } finally { try { db.close(); } catch {} }
+}
+// which conversation each running agy holds (its presence lock), from one lsof over all of them
+function agyConversations(pids) {
+  const out = new Map();
+  if (!pids.length || WIN) return out;
+  let pid = null;
+  for (const l of sh('lsof', ['-p', pids.join(','), '-Fpn']).split('\n')) {
+    if (l[0] === 'p') pid = +l.slice(1);
+    const m = l[0] === 'n' && /antigravity-cli\/presence\/([\w-]+)\.lock$/.exec(l);
+    if (m && pid) out.set(pid, path.join(AGY_HOME, 'conversations', `${m[1]}.db`));
+  }
+  return out;
+}
+
 function windowFrom(all, from) {
   const start = from == null ? Math.max(0, all.length - 60) : Math.min(from, all.length);
   return { messages: all.slice(start), end: all.length };
@@ -368,6 +428,7 @@ export function readAgentMessages(src, cursor = null, opts = {}) {
   if (src.format === 'opencode') return readOpenCode(src.transcript, cursor);
   if (src.format === 'cursor-agent') return readCursor(src.transcript, cursor);
   if (src.format === 'gemini') return readGemini(src.transcript, cursor);
+  if (src.format === 'antigravity') return readAntigravity(src.transcript, cursor);
   const parse = PARSERS[src.format] || claudeMessage;
   const media = opts.media && ['claude', 'codex'].includes(src.format || 'claude');
   return readJsonl(src.transcript, cursor, media ? withMedia(parse, src.format || 'claude') : parse, opts.tailBytes, opts.minMessages);
@@ -427,7 +488,8 @@ function claudeAgents() {
   return out;
 }
 
-export const KINDS = ['claude', 'codex', 'amp', 'opencode', 'copilot', 'gemini', 'cursor-agent', 'superset'];
+export const KINDS = ['claude', 'codex', 'amp', 'opencode', 'copilot', 'gemini', 'antigravity', 'cursor-agent', 'superset'];
+const KIND_ALIASES = { agy: 'antigravity' }; // the program's name when it differs from the kind
 const RUNTIMES = new Set(['node', 'bun', 'deno', 'bash', 'sh', 'zsh', 'python', 'python3']);
 const SKIP_SUBCOMMANDS = new Set(['mcp', 'mcp-server', 'app-server', 'login', 'logout', 'daemon', 'host', 'serve', 'proto', '--version', '-v', 'update', 'completion']);
 
@@ -472,6 +534,7 @@ function kindOf(cmd) {
   let base = exeName(argv[0]);
   if (RUNTIMES.has(base) || /^python3?\.\d+$/.test(base)) { i = 1; while (argv[i]?.startsWith('-')) i++; base = exeName(argv[i] || ''); }
   base = base.replace(/\.(m?js|cjs|ts)$/, '');
+  base = KIND_ALIASES[base] || base;
   if (!KINDS.includes(base) || base === 'claude') return null;
   if (SKIP_SUBCOMMANDS.has(argv[i + 1])) return null;
   return base;
@@ -666,12 +729,12 @@ export function transcriptTouched(src) {
   const file = transcriptFile(src);
   if (!file) return 0;
   let m = 0;
-  for (const f of src.format === 'opencode' || src.format === 'cursor-agent' ? [file, `${file}-wal`] : [file]) { try { m = Math.max(m, fs.statSync(f).mtimeMs); } catch {} }
+  for (const f of ['opencode', 'cursor-agent', 'antigravity'].includes(src.format) ? [file, `${file}-wal`] : [file]) { try { m = Math.max(m, fs.statSync(f).mtimeMs); } catch {} }
   return m;
 }
 
 export function turnBusy(src) {
-  if (!['codex', 'opencode', 'gemini'].includes(src?.format)) return null;
+  if (!['codex', 'opencode', 'gemini', 'antigravity'].includes(src?.format)) return null;
   const file = transcriptFile(src);
   let size = 0;
   try { size = fs.statSync(file).size; } catch { return null; }
@@ -697,6 +760,11 @@ export function turnBusy(src) {
         const role = v2 ? row?.type : d?.role;
         busy = !d ? null : role === 'user' || (role === 'assistant' && (!d.time?.completed || d.finish === 'tool-calls'));
       } finally { try { db?.close(); } catch {} }
+    } else if (src.format === 'antigravity') {
+      // the newest step: still running, or your prompt waiting for the model
+      const db = openDb(file);
+      try { const last = db?.prepare('SELECT step_type, status FROM steps ORDER BY idx DESC LIMIT 1').get(); busy = !last ? null : last.step_type === 14 || last.status !== 3; }
+      finally { try { db?.close(); } catch {} }
     } else {
       const last = (readJSON(file, {}).messages || []).at(-1);
       busy = !last ? null : last.type === 'user' || (last.type === 'gemini' && !!last.toolCalls?.length);
@@ -731,13 +799,15 @@ function processAgents() {
   };
   const roots = hits.filter((h) => rootOf(h) === h);
   const dirs = cwds(roots.map((r) => r.pid));
+  const agy = agyConversations(roots.filter((r) => r.kind === 'antigravity').map((r) => r.pid));
   return roots.filter((r) => dirs.get(r.pid)).map((r) => {
     const cwd = dirs.get(r.pid), id = `${r.kind}-${r.pid}`;
     const transcript = r.kind === 'codex' ? codexTranscript(id, cwd, r.start, r.cmd)
       : r.kind === 'gemini' ? geminiTranscript(cwd, r.start)
       : r.kind === 'opencode' ? opencodeTranscript(cwd, r.start, undefined, r.cmd)
-      : r.kind === 'cursor-agent' ? cursorTranscript(cwd, r.start) : null;
-    const format = ['codex', 'gemini', 'opencode', 'cursor-agent'].includes(r.kind) ? r.kind : null;
+      : r.kind === 'cursor-agent' ? cursorTranscript(cwd, r.start)
+      : r.kind === 'antigravity' ? agy.get(r.pid) || null : null;
+    const format = ['codex', 'gemini', 'opencode', 'cursor-agent', 'antigravity'].includes(r.kind) ? r.kind : null;
     const src = { transcript, format }, cpu = treeCpu(r.pid), touched = transcriptTouched(src);
     const turn = turnBusy(src);
     // no transcript to go by: busy while it burns CPU or keeps writing

@@ -19,7 +19,7 @@ export const SOURCES = [
   { kind: 'claude', label: 'Claude Code', dir: () => path.join(CLAUDE, 'projects') },
   { kind: 'codex', label: 'Codex', dir: () => path.join(CODEX, 'sessions') },
 ];
-export const SOON = [{ kind: 'gemini', label: 'Gemini CLI' }, { kind: 'opencode', label: 'OpenCode' }, { kind: 'cursor-agent', label: 'Cursor' }, { kind: 'copilot', label: 'Copilot' }];
+export const SOON = [{ kind: 'antigravity', label: 'Antigravity' }, { kind: 'opencode', label: 'OpenCode' }, { kind: 'cursor-agent', label: 'Cursor' }, { kind: 'copilot', label: 'Copilot' }];
 
 const link = (kind) => path.join(HISTORY, kind);
 const imported = (kind) => { try { return fs.lstatSync(link(kind)).isSymbolicLink() && fs.existsSync(link(kind)); } catch { return false; } };

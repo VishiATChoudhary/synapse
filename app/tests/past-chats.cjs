@@ -72,7 +72,7 @@ const clickText = (sel, text) => js(`[...document.querySelectorAll(${JSON.string
   const rows = await js(`[...document.querySelectorAll('#onboard .import')].map((r) => r.textContent)`);
   assert.ok(rows.some((r) => /Claude Code.*1 chat/.test(r)), rows.join(' | '));
   assert.ok(rows.some((r) => /Codex.*1 chat/.test(r)), rows.join(' | '));
-  assert.ok(rows.some((r) => /Gemini CLI.*coming soon/.test(r)), rows.join(' | '));
+  assert.ok(rows.some((r) => /Antigravity.*coming soon/.test(r)), rows.join(' | '));
   await sleep(700); await shot('tour-import');
 
   // importing links the CLIs' own folders into ~/.synapse/history

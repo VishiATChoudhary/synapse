@@ -11,7 +11,7 @@ import http from 'node:http';
 import path from 'node:path';
 
 const PARTITION = 'persist:synapse-browser';
-const TOOLBAR = 44; // the popped window's own bar above the page
+const TOOLBAR = 78; // the popped window's own bar (44) and its tab strip (34) above the page
 const ASK_FOR = 120_000; // how long an agent waits for you to allow a site
 
 export function createAgentBrowser({ dataDir, getWin, agentName, root, vault = null, packaged = true, onAgentOpened = () => {}, askSites = () => true }) {
